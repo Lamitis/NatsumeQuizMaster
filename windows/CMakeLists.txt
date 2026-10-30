@@ -73,16 +73,18 @@ include(flutter/generated_plugins.cmake)
 # 其余插件仍用上面的 C++20。
 #
 # 注意目标名是 share_plus 插件 CMakeLists 里的 PLUGIN_NAME，即
-# share_plus_plugin（不是包名 share_plus），写错名字时 if(TARGET ...) 不成立、
-# 也不会有任何提示。
+# share_plus_plugin（不是包名 share_plus），写错名字时 if(TARGET ...) 不成立。
+#
+# v1.34 导出改「另存为」后 share_plus 已从依赖里移除，这个目标自然不存在——
+# 此处**静默跳过**即可（原来在 else 分支里 message(WARNING) 会让每次 Windows
+# 构建都刷一条「未找到目标 share_plus_plugin」，是纯粹的历史噪声）。
+# 将来若重新引入 share_plus，这个 if(TARGET ...) 会自动继续生效。
 foreach(_cxx17_target share_plus_plugin)
   if(TARGET ${_cxx17_target})
     set_target_properties(${_cxx17_target} PROPERTIES
       CXX_STANDARD 17
       CXX_STANDARD_REQUIRED ON)
     message(STATUS "share_plus: 使用 C++17 编译（规避旧版 C++/WinRT vector.h）")
-  else()
-    message(WARNING "未找到目标 ${_cxx17_target}，share_plus 可能仍然用 C++20 编译")
   endif()
 endforeach()
 

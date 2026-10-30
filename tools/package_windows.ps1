@@ -58,10 +58,16 @@ if ($staleDlls.Count -gt 0) {
 
 # 剔除非必要文件（二）：调试符号与链接中间产物不随包分发
 # （Release 正常没有，历史 Debug 产物残留时兜底）。
-$junk = @(Get-ChildItem -LiteralPath $pkgDir -Recurse -File -Include '*.pdb', '*.ilk', '*.exp', '*.lib')
+# 注意：这里**不能**用 Get-ChildItem -Include '*.pdb','*.ilk' —— PowerShell 5.1 在
+# 「目录路径 + -Recurse + -Include」这个组合下会退化成「匹配目录下所有文件」，
+# 把 dll / exe / assets 一起删掉（实测会把整个包删空）。按扩展名逐项过滤才可靠。
+$junkExt = @('.pdb', '.ilk', '.exp', '.lib')
+$junk = @(Get-ChildItem -LiteralPath $pkgDir -Recurse -File |
+    Where-Object { $junkExt -contains $_.Extension.ToLowerInvariant() })
 if ($junk.Count -gt 0) {
+    $junkNames = @($junk | ForEach-Object { $_.Name })
     $junk | Remove-Item -Force
-    Write-Host "  剔除非分发文件：$((@($junk | ForEach-Object { $_.Name })) -join ', ')" -ForegroundColor Yellow
+    Write-Host "  剔除非分发文件：$($junkNames -join ', ')" -ForegroundColor Yellow
 }
 
 # 额外生成中文名启动器（同目录依赖不受影响）
