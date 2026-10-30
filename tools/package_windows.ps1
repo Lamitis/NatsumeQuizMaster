@@ -24,8 +24,12 @@ $distRoot = Join-Path $root 'dist'
 $stamp = Get-Date -Format 'yyyyMMdd'
 $pkgName = "NatsumeQuizMaster-Windows-$stamp"
 $pkgDir = if ($PkgDir) { $PkgDir } else { Join-Path $distRoot $pkgName }
-if (Test-Path $pkgDir) { Remove-Item $pkgDir -Recurse -Force }
-New-Item -ItemType Directory -Path $pkgDir | Out-Null
+# 旧目录可能被杀软 / 资源管理器 / 上一次未退出的进程占着句柄：删不干净不该让打包失败，
+# 下面 Copy-Item 会覆盖同名文件。删不掉的残留由「产物校验」兜底（只看 zip 是否真的生成）。
+if (Test-Path $pkgDir) {
+    Remove-Item $pkgDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+New-Item -ItemType Directory -Path $pkgDir -Force | Out-Null
 
 Copy-Item "$buildDir\*" $pkgDir -Recurse
 
@@ -48,8 +52,9 @@ foreach ($dll in @(Get-ChildItem -LiteralPath $pkgDir -Filter '*_plugin.dll' -Fi
         $lockText -match ('(?m)^  ' + [regex]::Escape($_) + ':\s*$')
     }).Count -gt 0
     if (-not $stillUsed) {
-        Remove-Item -LiteralPath $dll.FullName -Force
-        $staleDlls += $dll.Name
+        # 删不掉（被占用）就让它留着：多一个旧 DLL 不该让发版失败
+        Remove-Item -LiteralPath $dll.FullName -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $dll.FullName)) { $staleDlls += $dll.Name }
     }
 }
 if ($staleDlls.Count -gt 0) {
@@ -66,7 +71,7 @@ $junk = @(Get-ChildItem -LiteralPath $pkgDir -Recurse -File |
     Where-Object { $junkExt -contains $_.Extension.ToLowerInvariant() })
 if ($junk.Count -gt 0) {
     $junkNames = @($junk | ForEach-Object { $_.Name })
-    $junk | Remove-Item -Force
+    $junk | Remove-Item -Force -ErrorAction SilentlyContinue
     Write-Host "  剔除非分发文件：$($junkNames -join ', ')" -ForegroundColor Yellow
 }
 
@@ -93,9 +98,43 @@ NatsumeQuizMaster · Windows 桌面版
 '@ | Out-File "$pkgDir\使用说明.txt" -Encoding UTF8
 
 $zipPath = Join-Path $distRoot "$(Split-Path $pkgDir -Leaf).zip"
-if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-Compress-Archive -Path "$pkgDir\*" -DestinationPath $zipPath -CompressionLevel Optimal
+if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
+
+# Compress-Archive 在 Windows PowerShell 5.1 上偶尔会因为杀软 / 索引器临时占用目标文件
+# 而抛「另一个程序正在使用此文件」，这不是致命的：删掉半成品重试即可。
+$zipped = $false
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    try {
+        Compress-Archive -Path "$pkgDir\*" -DestinationPath $zipPath `
+            -CompressionLevel Optimal -ErrorAction Stop
+        $zipped = $true
+        break
+    } catch {
+        Write-Host "  压缩第 $attempt 次失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force -ErrorAction SilentlyContinue }
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $zipped) {
+    Write-Host '压缩连续失败三次，放弃' -ForegroundColor Red
+}
+
+# ── 成功判据只看产物 ────────────────────────────────────────────────
+# 调用方（CI / 本地发布脚本）通常写成 `& package_windows.ps1 ...` 再用 $LASTEXITCODE
+# 判断成败，但 **$LASTEXITCODE 只反映原生 exe 的退出码**，调用 .ps1 不会更新它——
+# 曾因此在 zip 已经生成的情况下误报失败。所以这里显式 exit 0/1，并且「成功」的
+# 定义就是「zip 真的存在且非空」，而不是某条命令有没有吐过警告。
+if (-not (Test-Path -LiteralPath $zipPath)) {
+    Write-Host "打包失败：没有生成 $zipPath" -ForegroundColor Red
+    exit 1
+}
+$zipLen = (Get-Item -LiteralPath $zipPath).Length
+if ($zipLen -le 0) {
+    Write-Host "打包失败：$zipPath 是空文件" -ForegroundColor Red
+    exit 1
+}
 
 Write-Output "打包完成："
 Write-Output "  目录：$pkgDir"
-Write-Output "  压缩：$zipPath ($([math]::Round((Get-Item $zipPath).Length/1MB,1)) MB)"
+Write-Output "  压缩：$zipPath ($([math]::Round($zipLen/1MB,1)) MB)"
+exit 0

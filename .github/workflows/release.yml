@@ -220,9 +220,17 @@ jobs:
           $pkgDir = Join-Path "$PWD\dist" "NatsumeQuizMaster-Windows-$stamp"
 
           # 便携版：复用本地同款脚本（会顺带附上 LICENSE.txt）
+          # 判据是「产物是否存在」，**不要**用 $LASTEXITCODE 判脚本成败：
+          # 它只反映原生 exe 的退出码，`& script.ps1` 调用不会更新它。这一步在调用脚本
+          # 之前没有任何原生命令，值是 $null，而 PowerShell 里 `$null -ne 0` 恒为真 ——
+          # 于是 zip 明明生成好了（日志里都有 MB 数）却必然 throw 一次假失败。
+          # package_windows.ps1 内部已按 exit 0/1 汇报，这里按产物兜底。
           & "$PWD\tools\package_windows.ps1" -PkgDir $pkgDir
-          if ($LASTEXITCODE -ne 0) { throw "package_windows.ps1 failed" }
-          Copy-Item "$pkgDir.zip" "$env:APP_NAME-v$V-windows-portable.zip"
+          $portable = "$pkgDir.zip"
+          if (-not (Test-Path -LiteralPath $portable)) {
+            throw "package_windows.ps1 failed: 未生成 $portable"
+          }
+          Copy-Item $portable "$env:APP_NAME-v$V-windows-portable.zip"
 
           # 安装版：版本号与源目录都由 /D 传入（.iss 里不再写死绝对路径）
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'

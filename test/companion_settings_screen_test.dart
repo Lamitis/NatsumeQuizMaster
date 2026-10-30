@@ -63,6 +63,35 @@ void main() {
     }
   }
 
+  /// 等一个**异步副作用**真正落地（落库 → setState → 弹提示）。
+  ///
+  /// 为什么不直接用固定帧数或 `pumpAndSettle()`：
+  /// - sqflite 的读写跑在独立 isolate 上，只有 `runAsync` 给的真实时间才会推进，
+  ///   `settleFrames` 那点固定帧数在慢速 runner（CI）上可能不够——本用例就曾
+  ///   因此在「有提示」断言上偶发失败；
+  /// - `pumpAndSettle()` 按 100ms 步进推进**假时钟**，会把 SnackBar 的 4s 自动
+  ///   关闭一起推掉，反而让 `findsOneWidget` 失败。
+  ///
+  /// 这里用「真实时间轮询 + 小步假时钟」：真实异步（sqflite 的 isolate）能推进，
+  /// 由 `Future.delayed` / 防抖这类**假定时器**实现的异步也能推进；每轮只走 10ms，
+  /// 远小于 SnackBar 的 4s 自动关闭，弹出来的提示不会被时钟推走。
+  Future<void> waitUntil(
+    WidgetTester tester,
+    bool Function() done, {
+    Duration timeout = const Duration(seconds: 20),
+    String? reason,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!done()) {
+      if (DateTime.now().isAfter(deadline)) {
+        fail('等待超时（${timeout.inSeconds}s）：${reason ?? '目标状态未出现'}');
+      }
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+  }
+
   Future<void> teardownTree(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     for (var i = 0; i < 3; i++) {
@@ -158,7 +187,18 @@ void main() {
     final save = find.text('保存设置');
     await scrollTo(tester, save);
     await tester.tap(save);
-    await settleFrames(tester, rounds: 3);
+
+    // 「保存设置」是异步链：await 落库（sqflite，独立 isolate）→ setState → 弹提示。
+    // 注意**不能**拿 appState 里的内存值当完成信号：updateCompanionSettings 是先
+    // 改内存再 await 落库，内存值在点下去的瞬间就有了，用它判断等于没等。
+    // 所以等到「助教设置已保存」这条提示真的出现（真实时间轮询，最多 20s）。
+    await waitUntil(
+      tester,
+      () => find.text('助教设置已保存').evaluate().isNotEmpty,
+      reason: '点「保存设置」后没有出现「助教设置已保存」提示（落库未完成或抛异常）',
+    );
+    // 提示已挂上树，再走完入场动画（350ms 远小于 4s 自动关闭，不会把提示推走）
+    await tester.pump(const Duration(milliseconds: 350));
 
     expect(appState.companionSettings.displayName, '溟月');
     expect(find.text('助教设置已保存'), findsOneWidget);
