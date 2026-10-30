@@ -102,6 +102,14 @@
   父目录可能还不存在（`/tmp/xxx/…`），直接 `openDatabase` 会抛「unable to open database
   file」。现在 `_initDatabase` 对 override 路径也 `create(recursive: true)` 建好父目录，
   与正式库路径同一口径
+- **Windows 打包会连早该删的东西一起带走**：Flutter 不清理上一次构建留在
+  `build\windows\x64\runner\Release` 里的旧 DLL——v1.34 移除 `share_plus` 后，它的
+  `share_plus_plugin.dll` 仍会被打进绿色版与安装包（白占体积，还让人以为功能还在）。
+  `tools\package_windows.ps1` 现在按 `pubspec.lock` 反查：DLL 名去掉 `_plugin` /
+  `_windows_plugin` 后缀后在 lock 里找不到同名包即视为陈旧并剔除（`pdfium.dll` /
+  `flutter_windows.dll` 这类不带 `_plugin` 后缀的一律不动，删了应用就起不来），
+  同时清掉 pdb / ilk / exp / lib 等调试与中间产物；`windows/CMakeLists.txt` 里
+  `share_plus` 的 C++17 补丁也不再在目标缺失时刷 `message(WARNING)`（v1.34 起它只是历史噪声）
 
 ### 升级说明
 - **数据库迁移到 schema v15**：新增 `bank_categories` 表 + `question_banks.category_id`
