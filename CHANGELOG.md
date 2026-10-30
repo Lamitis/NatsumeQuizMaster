@@ -98,6 +98,17 @@
   内存，以及纯 Dart 的 WebP 编码与解码都跑在 UI 线程上（大图动辄几百毫秒到几秒）。
   现在选图后只取路径，解码与转码交给 `QuestionImageService.fromFileAsync` 在 isolate 里做；
   启动时的存量图片归一化同样改成 `fromEncodedAsync`，主线程只负责把结果贴到界面
+- **CI（Linux）上的「假红」：Dart 编译器被 OOM 杀掉，一批用例报 `loading … [E]`**：
+  原来一个 `flutter test` 跑完 60+ 个测试文件，而它用**一个常驻前端编译器**
+  （frontend_server）按序编译所有套件；套件多到一定程度后编译器在 4 核 / 16G 的
+  ubuntu-latest 上被杀，日志里写的是 `Error: The Dart compiler exited unexpectedly.`，
+  之后所有还没编译完的套件一律记成 `loading /home/runner/…/xxx_test.dart [E]`，
+  看上去像「随手挑了一批文件挂掉」（`+170 -16`，更早的 main 上是 462 通过 / 41 个
+  loading 失败），其实与被测代码无关——同一条命令在本地一次全绿。现在 CI 把全量
+  测试拆成 **3 个分片**（`--total-shards 3 --shard-index N`，各自独立进程与编译器）
+  且每分片 `--concurrency=1`，编译器内存从「60 个套件累积」降到「20 个」；
+  失败日志逐条带 `[E]` 后 8 行上下文、命中编译器崩溃时单独标 `[cause]`，
+  并以 artifact 形式上传 `test_output.log`（Actions 原始日志要管理员权限，403）
 - **CI（Linux）上数据库打不开 / 用例整批失败**：`DatabaseService.overrideDbPath` 指向的
   父目录可能还不存在（`/tmp/xxx/…`），直接 `openDatabase` 会抛「unable to open database
   file」。现在 `_initDatabase` 对 override 路径也 `create(recursive: true)` 建好父目录，

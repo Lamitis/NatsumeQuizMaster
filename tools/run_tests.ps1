@@ -15,10 +15,15 @@
 #   powershell -ExecutionPolicy Bypass -File tools\run_tests.ps1
 #   ... -AnalyzeOnly    # 只跑分析
 #   ... -Keep           # 保留本次临时目录（排查用）
+#   ... -TotalShards 3 -ShardIndex 0   # 只跑 CI 的第 0/3 片（复现 CI 红用）
+#   （CI 把全量测试拆成 3 片 + 每片 --concurrency=1：Linux runner 上用单个常驻
+#     编译器编译 60+ 个套件会被 OOM 杀掉，见 .github/workflows/ci.yml 顶部注释）
 
 param(
     [switch]$AnalyzeOnly,
-    [switch]$Keep
+    [switch]$Keep,
+    [int]$TotalShards = 0,
+    [int]$ShardIndex = 0
 )
 
 # 原生命令的 stderr（flutter 的横幅提示）在 EAP=Stop 下会被当终止错误，
@@ -42,8 +47,15 @@ try {
 
     if (-not $AnalyzeOnly) {
         Write-Host ''
-        Write-Host '=== flutter test ===' -ForegroundColor Cyan
-        & flutter test
+        $testArgs = @()
+        if ($TotalShards -gt 1) {
+            # 与 CI 同口径：分片 + 单并发，方便本地复现「CI 第 N 片红」
+            $testArgs = @('--total-shards', $TotalShards, '--shard-index', $ShardIndex, '--concurrency=1')
+            Write-Host ("=== flutter test (shard {0}/{1}) ===" -f $ShardIndex, $TotalShards) -ForegroundColor Cyan
+        } else {
+            Write-Host '=== flutter test ===' -ForegroundColor Cyan
+        }
+        & flutter test @testArgs
         if ($LASTEXITCODE -ne 0) { $failed += ('test exit ' + $LASTEXITCODE) }
     }
 } finally {
