@@ -2,9 +2,9 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../services/database_service.dart';
+import '../services/export_storage.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
@@ -68,12 +68,18 @@ class _BackupScreenState extends State<BackupScreen> {
     setState(() => _status = choice == _ExportMode.withApiKey
         ? '已导出（含 API Key，口令加密）。请牢记口令，丢失无法恢复。'
         : '已导出（不含 API Key）。');
+    // v1.34：导出后不再走系统分享面板，直接弹「另存为」让用户自己挑位置
     try {
-      await Share.shareXFiles([XFile(path)], subject: 'NatsumeQuizMaster数据库备份');
-    } catch (e) {
-      // 分享失败不再静默
+      final saved =
+          await ExportStorage.saveFileAs(path, dialogTitle: '保存数据库备份');
       if (!mounted) return;
-      setState(() => _status = '分享失败: $e');
+      setState(() => _status = saved.saved
+          ? '已保存到 ${ExportStorage.folderOf(saved.path!)}'
+          : '已生成备份文件，未另存（可重新导出再选位置）');
+    } catch (e) {
+      // 另存为失败不算导出失败：文件仍在导出目录里，说清楚路径即可
+      if (!mounted) return;
+      setState(() => _status = '另存为失败：$e');
     }
   }
 

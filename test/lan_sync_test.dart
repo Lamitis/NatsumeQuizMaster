@@ -170,9 +170,9 @@ void main() {
       DeviceService.instance.overrideDeviceId('local-device');
       final migrated = await DatabaseService.instance.database;
 
-      // 版本升到当前 schema（v14 双链笔记；v13 是知识库 + 插件/世界）
+      // 版本升到当前 schema（v16 日程待办；v15 分类树；v14 双链笔记）
       final version = await migrated.rawQuery('PRAGMA user_version');
-      expect(version.first.values.first, 14);
+      expect(version.first.values.first, DatabaseService.schemaVersion);
 
       // uid 全部回填且非空
       final banks =

@@ -50,6 +50,14 @@ class ResponsivePage extends StatelessWidget {
   }
 }
 
+/// 对话框内容宽度（v1.34 手机适配）。
+///
+/// [AlertDialog] 的 content 若写死 `width: 420`，在 360dp 手机竖屏上会超出
+/// 可用宽度（左右各有默认内边距），表现为横向溢出条纹。这里按屏幕宽度收缩，
+/// 宽屏仍取 [max]，窄屏取「屏宽 - 边距」，并给一个下限防止极端窄屏算出负数。
+double dialogContentWidth(BuildContext context, {double max = 420}) =>
+    (MediaQuery.sizeOf(context).width - 104).clamp(200.0, max);
+
 /// v1.0.3 窗口自适应：两个区块在可用宽度足够（默认 ≥900）时左右并排，
 /// 不足时上下堆叠；拖动窗口尺寸时基于 LayoutBuilder 自动重排。
 class AdaptivePair extends StatelessWidget {

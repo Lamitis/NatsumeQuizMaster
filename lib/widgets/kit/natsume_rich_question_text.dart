@@ -4,6 +4,7 @@ import '../../models/question_image.dart';
 import '../../services/theme_service.dart';
 import '../../utils/design_tokens.dart';
 import '../../utils/question_image_tokens.dart';
+import '../question_image_viewer.dart';
 
 /// 题目图文混排文本：把含 `{{img:N}}` 占位符的题目文本渲染为
 /// 「文字段 ↔ 图片」交替的内容流。
@@ -93,24 +94,7 @@ class _QuestionImageBlock extends StatelessWidget {
     if (img == null || img.content.isEmpty) return _missing(ac);
 
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(PageRouteBuilder<void>(
-        // 查看页：fade 先落位压住旧内容，Hero 图同步从缩略位飞入全屏；
-        // 进 NatsumeMotion.slow / 出 NatsumeMotion.exit，曲线统一 standard
-        transitionDuration: NatsumeMotion.effective(context, NatsumeMotion.slow),
-        reverseTransitionDuration: NatsumeMotion.effective(context, NatsumeMotion.exit),
-        transitionsBuilder: (context, animation, secondary, child) =>
-            FadeTransition(
-          // fade 在窗口前段落定（先稳住黑场），Hero 飞行走满窗口
-          opacity: CurvedAnimation(
-            parent: animation,
-            curve: const Interval(0, 0.6, curve: NatsumeMotion.standard),
-            reverseCurve: NatsumeMotion.standard,
-          ),
-          child: child,
-        ),
-        pageBuilder: (_, __, ___) =>
-            _ImageViewerPage(image: img!, heroTag: _tag),
-      )),
+      onTap: () => openQuestionImageViewer(context, image: img!, heroTag: _tag),
       child: Hero(
         tag: _tag,
         child: ClipRRect(
@@ -144,37 +128,6 @@ class _QuestionImageBlock extends StatelessWidget {
           Text('图片缺失',
               style: NatsumeType.captionStyle.copyWith(color: ac.textTertiary)),
         ],
-      ),
-    );
-  }
-}
-
-/// 配图全屏查看（双指缩放，点击任意处退出）
-class _ImageViewerPage extends StatelessWidget {
-  const _ImageViewerPage({required this.image, required this.heroTag});
-
-  final QuestionImage image;
-
-  /// 与缩略块配对的 Hero tag（同题内稳定）
-  final String heroTag;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      // 全屏看图需要中性纯黑压场，让图不受任何主题底色干扰——
-      // 这是刻意脱离主题色板的媒体查看器惯例
-      backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: () => Navigator.of(context).pop(),
-        child: Center(
-          child: InteractiveViewer(
-            maxScale: 6,
-            child: Hero(
-              tag: heroTag,
-              child: Image.memory(image.content, fit: BoxFit.contain),
-            ),
-          ),
-        ),
       ),
     );
   }

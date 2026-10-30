@@ -16,6 +16,8 @@ class PracticeEntryScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
+    // 卡片宽度随屏宽收缩：写死 300 加上两侧 24 内边距，在 320dp 手机上会横向溢出
+    final cardW = (MediaQuery.sizeOf(context).width - 48).clamp(200.0, 300.0);
     return Scaffold(
       appBar: AppBar(title: const Text('选择练习模式')),
       body: Center(
@@ -29,7 +31,7 @@ class PracticeEntryScreen extends StatelessWidget {
                     fontSize: NatsumeType.display, fontWeight: FontWeight.bold)),
             const SizedBox(height: 32),
             SizedBox(
-                width: 300,
+                width: cardW,
                 child: _card(
                     context,
                     ac,
@@ -40,7 +42,7 @@ class PracticeEntryScreen extends StatelessWidget {
                     () => _start(context, PracticeTiming.untimed, 0))),
             const SizedBox(height: 16),
             SizedBox(
-                width: 300,
+                width: cardW,
                 child: _card(context, ac, Icons.timer, '限时练习', '倒计时自动交卷',
                     '模拟考试压力，设定时长', () => _pickMinutes(context))),
           ]),

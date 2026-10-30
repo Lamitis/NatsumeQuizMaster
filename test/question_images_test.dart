@@ -132,12 +132,11 @@ void main() {
       expect(await db.exportBackup(dest), isNull);
       expect(await db.validateBackupFile(dest), isNull);
 
-      // 伪造「未来 schema」备份（user_version = 15，比当前 v14 更高）：
-      // 必须拒绝而不是导入后踩坑
+      // 伪造「未来 schema」备份（比当前版本更高）：必须拒绝而不是导入后踩坑
       final futurePath = '${tmp.path}/future.db';
       File(dest).copySync(futurePath);
       final raw = await databaseFactory.openDatabase(futurePath);
-      await raw.execute('PRAGMA user_version = 15');
+      await raw.execute('PRAGMA user_version = ${DatabaseService.schemaVersion + 1}');
       await raw.close();
       expect(await db.validateBackupFile(futurePath), isNotNull);
     });

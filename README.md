@@ -235,7 +235,7 @@ Get-FileHash .\Natsume-v1.29.0-windows-setup.exe -Algorithm SHA256
 
 - **完整的自动化测试套件**，覆盖判题、复习算法、数据层、导入解析（含 PDF 图文抽取与配图归属）、同步、布局自适应等
   （每次 push 由 [GitHub Actions](https://github.com/Lamitis/NatsumeQuizMaster/actions) 自动执行，见上方 CI 徽章）
-- 数据库 schema v12，外键级联、索引优化、事务一致性
+- 数据库 schema v15，外键级联、索引优化、事务一致性（v15＝题库分类树，v12＝题目配图）
 - 每次发版依次执行：静态分析（0 error / 0 warning）→ 全量测试 → 混淆构建 → **组件 / 权限 / 文案 / 资源四维基线对照校验** → 签名校验
 
 发布历程：2026 年 6 月 15 日立项 → 8 月完成 42 项修复与 AES 加密 →
@@ -412,6 +412,10 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -PortableO
 # 本机没装 Inno Setup 6 时自动装（先试 winget；再下 GitHub release 的官方安装包，
 # 用 /CURRENTUSER 装到 %LOCALAPPDATA%\Programs\Inno Setup 6 —— 不需要管理员权限）
 powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -InstallInnoSetup
+
+# Inno Setup 装在自定义目录（如 D:\Tools\Inno Setup 6）时，直接指定 ISCC 位置
+# （也可以 setx ISCC "D:\Tools\Inno Setup 6\ISCC.exe" 设一次环境变量）
+powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -IsccPath "D:\Tools\Inno Setup 6\ISCC.exe"
 ```
 
 版本号与 `--dart-define` 由脚本从 `pubspec.yaml` 自动推导（与 CI 一致）；

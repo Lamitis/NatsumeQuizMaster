@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../models/kb_document.dart';
 import '../models/knowledge_base.dart';
@@ -399,14 +398,22 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     final dest =
         '${dir.path}${Platform.pathSeparator}${kb.name}_知识库.json';
     final path = await KbFileService.exportKnowledgeBase(kb.id!, dest);
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
     if (path == null) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('该知识库没有可导出的文档')));
-      }
+      messenger.showSnackBar(const SnackBar(content: Text('该知识库没有可导出的文档')));
       return;
     }
-    await Share.shareXFiles([XFile(path)], subject: 'NatsumeQuizMaster知识库导出');
+    // v1.34：导出后直接「另存为」，不再弹系统分享面板
+    final saved =
+        await ExportStorage.saveFileAs(path, dialogTitle: '保存知识库导出文件');
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(
+      content: Text(saved.saved
+          ? '已导出到 ${saved.path}'
+          : '已取消保存。文件仍可在此找到：${ExportStorage.folderOf(path)}'),
+      duration: const Duration(seconds: 5),
+    ));
   }
 
   Future<void> _importKb() async {

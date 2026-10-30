@@ -294,10 +294,15 @@ class _CompanionScreenState extends State<CompanionScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Text(
-                                    botName,
-                                    style: NatsumeType.h2Style
-                                        .copyWith(color: ac.textPrimary),
+                                  // 名字过长时省略，别把「无法同步」标签挤出屏幕
+                                  Flexible(
+                                    child: Text(
+                                      botName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: NatsumeType.h2Style
+                                          .copyWith(color: ac.textPrimary),
+                                    ),
                                   ),
                                   const SizedBox(width: NatsumeSpace.xs),
                                   // 插件数据不进同步清单：页内也要写明

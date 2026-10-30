@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../services/app_state.dart';
 import '../services/theme_service.dart';
+import '../services/update_service.dart';
 import '../utils/app_constants.dart';
 import '../utils/design_tokens.dart';
 import '../utils/format_utils.dart';
@@ -16,6 +17,7 @@ import 'developer_options_screen.dart';
 import 'knowledge_base_screen.dart';
 import 'notes_screen.dart';
 import 'question_generator_screen.dart';
+import 'schedule_screen.dart';
 import 'settings_hub_screen.dart';
 import 'world_overview_screen.dart';
 
@@ -139,6 +141,14 @@ class _ProfileTabState extends State<ProfileTab> {
               title: '使用引导',
               onTap: () => GuideScope.maybeOf(context)?.start(),
             ),
+            const SizedBox(height: NatsumeSpace.xs),
+            // 第 5 项：检查更新（清华镜像优先，失败回落 GitHub Releases）
+            _EntryTile(
+              icon: Icons.system_update_alt,
+              title: '检查更新',
+              subtitle: '当前版本 $kAppVersion · 镜像优先，失败回落实时仓库',
+              onTap: () => _showUpdateDialog(context),
+            ),
             const SizedBox(height: NatsumeSpace.lg),
             // ── 学习工具（v13：知识库 / 自动出题 / 世界总览）──
             const NatsumeSectionHeader(
@@ -203,6 +213,19 @@ class _ProfileTabState extends State<ProfileTab> {
                 ),
               ),
             ],
+            // v1.34 日程待办插件：停用后整条收起（与笔记/陪伴同一规则）
+            if (context.watch<AppState>().schedulePluginEnabled) ...[
+              const SizedBox(height: NatsumeSpace.xs),
+              _EntryTile(
+                icon: Icons.event_note_outlined,
+                title: '日程待办',
+                subtitle: '复习计划拆成待办 · 按日排期与勾选 · 本机保存（无法同步）',
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ScheduleScreen()),
+                ),
+              ),
+            ],
             const SizedBox(height: NatsumeSpace.lg),
             // ── 产品定位卡（消除下半屏空白） ──
             NatsumeSurface(
@@ -234,6 +257,14 @@ class _ProfileTabState extends State<ProfileTab> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 检查更新：镜像 / GitHub 都失败也给可读原因，不弹红屏
+  void _showUpdateDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const _UpdateDialog(),
     );
   }
 
@@ -368,3 +399,174 @@ class _EntryTile extends StatelessWidget {
     );
   }
 }
+
+/// 「检查更新」对话框（v1.34）。
+///
+/// 打开即查一次；三种结果各给一句话 + 下一步动作：
+///   有新版本 → 显示当前/最新版本与说明，主按钮「前往下载」（外部浏览器）
+///   已最新   → 显示当前版本，无主按钮
+///   失败     → 显示两路失败原因，「重试」原地再查（不用关掉重进）
+///
+/// 下载一律走外部浏览器：应用商店/安装包渠道随平台不同，App 内自更新
+/// 在 Android 上还会触发未知来源安装权限，属于另一个量级的功能。
+class _UpdateDialog extends StatefulWidget {
+  const _UpdateDialog();
+
+  @override
+  State<_UpdateDialog> createState() => _UpdateDialogState();
+}
+
+class _UpdateDialogState extends State<_UpdateDialog> {
+  bool _loading = true;
+  bool _opening = false;
+  UpdateCheckResult? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    _run();
+  }
+
+  Future<void> _run() async {
+    setState(() => _loading = true);
+    final result = await UpdateService.check();
+    if (!mounted) return;
+    setState(() {
+      _result = result;
+      _loading = false;
+    });
+  }
+
+  Future<void> _openDownload(String url) async {
+    setState(() => _opening = true);
+    final ok = await UpdateService.openDownload(url);
+    if (!mounted) return;
+    setState(() => _opening = false);
+    if (!ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('无法打开链接，请手动访问：$url')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    final result = _result;
+    final hasUpdate = result?.hasUpdate ?? false;
+    final downloadUrl = result?.downloadUrl;
+
+    return AlertDialog(
+      title: const Text('检查更新'),
+      content: SizedBox(
+        width: dialogContentWidth(context),
+        child: _loading
+            ? Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: NatsumeSpace.sm),
+                  Expanded(
+                    child: Text('正在连接更新服务器…',
+                        style: NatsumeType.captionStyle
+                            .copyWith(color: ac.textSecondary)),
+                  ),
+                ],
+              )
+            : SingleChildScrollView(child: _buildBody(context, result)),
+      ),
+      actions: [
+        if (!_loading && result != null && result.failed)
+          TextButton(onPressed: _run, child: const Text('重试')),
+        if (hasUpdate && downloadUrl != null)
+          FilledButton(
+            onPressed: _opening ? null : () => _openDownload(downloadUrl),
+            child: Text(_opening ? '正在打开…' : '前往下载'),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text(hasUpdate ? '稍后' : '好的'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBody(BuildContext context, UpdateCheckResult? result) {
+    final ac = AppThemeColors.of(context);
+    if (result == null) return const SizedBox.shrink();
+
+    if (result.status == UpdateStatus.failed) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('暂时查不到新版本',
+              style:
+                  NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
+          const SizedBox(height: NatsumeSpace.xs),
+          Text(
+            result.error ?? '未知原因',
+            style: NatsumeType.captionStyle
+                .copyWith(color: ac.textSecondary, height: 1.6),
+          ),
+          const SizedBox(height: NatsumeSpace.sm),
+          Text(
+            '提示：网络受限时可稍后重试，或手动前往 GitHub Releases 查看。',
+            style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+          ),
+        ],
+      );
+    }
+
+    if (!result.hasUpdate) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('已是最新版本',
+              style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
+          const SizedBox(height: NatsumeSpace.xs),
+          Text('当前版本 ${result.currentVersion}',
+              style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+          if (result.source != null) ...[
+            const SizedBox(height: 2),
+            Text('检查来源：${result.source}',
+                style:
+                    NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+          ],
+        ],
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('发现新版本 ${result.latestVersion ?? ''}',
+            style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
+        const SizedBox(height: NatsumeSpace.xs),
+        Text('当前版本 ${result.currentVersion}',
+            style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+        if (result.source != null) ...[
+          const SizedBox(height: 2),
+          Text('检查来源：${result.source}',
+              style: NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+        ],
+        if ((result.notes ?? '').isNotEmpty) ...[
+          const SizedBox(height: NatsumeSpace.sm),
+          Text('更新说明',
+              style: NatsumeType.captionStyle.copyWith(
+                  fontWeight: FontWeight.w600, color: ac.textPrimary)),
+          const SizedBox(height: NatsumeSpace.xxs),
+          Text(result.notes!,
+              style: NatsumeType.captionStyle
+                  .copyWith(color: ac.textSecondary, height: 1.6)),
+        ],
+      ],
+    );
+  }
+}
+

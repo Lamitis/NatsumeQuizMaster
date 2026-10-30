@@ -144,6 +144,9 @@ void main() async {
     runApp(_DbErrorApp(error: '$e'));
     return;
   }
+  // v1.34 配图格式统一：老库里残留的 JPEG/PNG 配图在后台分批转 WebP。
+  // 不 await：只影响体积与格式一致性，绝不阻塞进入主界面。
+  appState.normalizeLegacyQuestionImages();
   final themeService = ThemeService();
   await themeService.init(); // v1.0.2 修复：恢复上次选择的主题
 

@@ -7,6 +7,7 @@ import '../models/question.dart';
 import '../models/question_edit.dart';
 import '../models/question_image.dart';
 import '../models/question_bank.dart';
+import '../models/bank_category.dart';
 import '../models/quiz_session.dart';
 import '../models/answer_record.dart';
 import '../models/follow_up_message.dart';
@@ -15,6 +16,7 @@ import 'database_service.dart';
 import 'device_service.dart';
 import '../utils/question_image_tokens.dart';
 import 'doc_parser_service.dart';
+import 'question_image_service.dart';
 import 'ocr_service.dart';
 import 'mineru_service.dart';
 import 'pdf_import_service.dart';
@@ -56,6 +58,10 @@ class AppState extends ChangeNotifier {
   // 题库
   List<QuestionBank> _banks = [];
   List<QuestionBank> get banks => _banks;
+
+  // 题库分类树（v15）：扁平列表 + parentId 还原层级，渲染层按需拼树
+  List<BankCategory> _categories = [];
+  List<BankCategory> get categories => _categories;
 
   // 选中用于刷题的题库
   Set<int> _selectedBankIds = {};
@@ -550,6 +556,43 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// 预览里缺答案的题数（导入页据此决定是否显示「AI 补答案」）
+  int get previewMissingAnswerCount =>
+      _previewQuestions.where((q) => q.correctAnswer.trim().isEmpty).length;
+
+  /// 交给 AI 批量补全预览里缺答案的题，写回预览并返回补齐的题数。
+  ///
+  /// 只补**答案**：题干、选项、类型一律不动（AI 改题干比缺答案更危险）。
+  /// 未配置 API Key 或没有可补的题时直接返回 0，不发起请求。
+  Future<int> fillMissingPreviewAnswers(
+      {void Function(int done, int total)? onProgress}) async {
+    final ai = _aiService;
+    if (ai == null || !_settings.isConfigured) return 0;
+    final targets = <int>[];
+    for (var i = 0; i < _previewQuestions.length; i++) {
+      if (_previewQuestions[i].correctAnswer.trim().isEmpty) targets.add(i);
+    }
+    if (targets.isEmpty) return 0;
+
+    final answers = await ai.inferMissingAnswers(
+      [for (final i in targets) _previewQuestions[i]],
+      onProgress: onProgress,
+    );
+    var filled = 0;
+    for (var k = 0; k < targets.length; k++) {
+      final answer = answers[k]?.trim() ?? '';
+      // 补答案期间用户可能删了题（下标越界）或已手动填了答案：都不覆盖
+      final idx = targets[k];
+      if (answer.isEmpty || idx >= _previewQuestions.length) continue;
+      if (_previewQuestions[idx].correctAnswer.trim().isNotEmpty) continue;
+      _previewQuestions[idx] =
+          _previewQuestions[idx].copyWith(correctAnswer: answer);
+      filled++;
+    }
+    if (filled > 0) notifyListeners();
+    return filled;
+  }
+
   /// 清空预览
   void clearPreview() {
     _previewQuestions = [];
@@ -595,10 +638,13 @@ class AppState extends ChangeNotifier {
           await BuiltinPlugins.isEnabled(BuiltinPlugins.notesId);
       _companionPluginEnabled =
           await BuiltinPlugins.isEnabled(BuiltinPlugins.companionId);
+      _schedulePluginEnabled =
+          await BuiltinPlugins.isEnabled(BuiltinPlugins.scheduleId);
     } catch (e) {
       DebugLogService.instance.log('PLUGIN', '内置插件登记失败: $e');
       _notesPluginEnabled = true;
       _companionPluginEnabled = true;
+      _schedulePluginEnabled = true;
     }
 
     // v1.33：悬浮小鲸的设置（人格 / 接口 / 气泡 / 知识库）。与上面同理，
@@ -642,6 +688,20 @@ class AppState extends ChangeNotifier {
     _companionPluginEnabled = enabled;
     notifyListeners();
     await BuiltinPlugins.setEnabled(BuiltinPlugins.companionId, enabled);
+  }
+
+  // ======================== 内置插件：日程待办（v1.34） ========================
+  //
+  // 同一条边界：待办存本地表，不在同步导出清单里，因此这里同样只管入口显隐。
+
+  bool _schedulePluginEnabled = true;
+  bool get schedulePluginEnabled => _schedulePluginEnabled;
+
+  /// 启停日程插件（世界总览页的开关也走这里，入口立刻跟着变）
+  Future<void> setSchedulePluginEnabled(bool enabled) async {
+    _schedulePluginEnabled = enabled;
+    notifyListeners();
+    await BuiltinPlugins.setEnabled(BuiltinPlugins.scheduleId, enabled);
   }
 
   // ======================== 悬浮小鲸设置（v1.33） ========================
@@ -942,7 +1002,109 @@ class AppState extends ChangeNotifier {
 
   Future<void> _loadBanks() async {
     _banks = await _db.getAllBanks();
+    _categories = await _db.getAllBankCategories();
     notifyListeners();
+  }
+
+  // ======================== 题库分类树（v15）========================
+
+  /// 新建分类（[parentId] 为空 = 建在根上），返回新分类 id。
+  Future<int> createBankCategory(String name, {int? parentId}) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return -1;
+    final id = await _db.insertBankCategory(name: trimmed, parentId: parentId);
+    await _loadBanks();
+    return id;
+  }
+
+  Future<void> renameBankCategory(int id, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    await _db.renameBankCategory(id, trimmed);
+    await _loadBanks();
+  }
+
+  /// 分类挪位 / 换父级；返回 false 表示这次移动会成环（调用方需要提示）
+  Future<bool> moveBankCategory(int id, int? newParentId) async {
+    final ok = await _db.moveBankCategory(id, newParentId);
+    if (ok) await _loadBanks();
+    return ok;
+  }
+
+  /// 删分类：子分类与题库上移一级（不删题库）
+  Future<void> deleteBankCategory(int id) async {
+    await _db.deleteBankCategory(id);
+    await _loadBanks();
+  }
+
+  /// 题库挂到分类下（`null` = 取消分类 / 回到未分类）
+  Future<void> setBankCategory(int bankId, int? categoryId) async {
+    await _db.setBankCategory(bankId, categoryId);
+    await _loadBanks();
+  }
+
+  /// 分类自身 + 所有后代的 id（「整支」口径：点父分类的题也刷得到子分类）
+  Set<int> categoryWithDescendants(int categoryId) {
+    final out = <int>{categoryId};
+    var added = true;
+    while (added) {
+      added = false;
+      for (final c in _categories) {
+        final pid = c.parentId;
+        if (pid != null && out.contains(pid) && out.add(c.id!)) added = true;
+      }
+    }
+    return out;
+  }
+
+  /// 某分类（含子分类）下的题库
+  List<QuestionBank> banksInCategory(int categoryId) {
+    final ids = categoryWithDescendants(categoryId);
+    return _banks.where((b) => ids.contains(b.categoryId)).toList();
+  }
+
+  /// 未分类的题库
+  List<QuestionBank> get uncategorizedBanks =>
+      _banks.where((b) => b.categoryId == null).toList();
+
+  /// 分类（含子分类）下的题库 id —— 供「按分类刷题」直接用
+  Set<int> bankIdsInCategory(int categoryId) =>
+      banksInCategory(categoryId).map((b) => b.id!).toSet();
+
+  /// 存量配图统一转码为 WebP（v1.34）。
+  ///
+  /// 分批处理并给单次启动设上限（[maxPerRun]）：老库里可能躺着几百张 JPEG，
+  /// 一口气转完会让启动卡住几十秒；每次启动转一批，几次启动就清干净。
+  /// 失败（脏数据/无法解码）就跳过——旧图仍能正常显示，不因为一张坏图
+  /// 把整批卡死（本批全是坏图时直接收工，避免死循环）。
+  Future<void> normalizeLegacyQuestionImages({
+    int batch = 6,
+    int maxPerRun = 60,
+  }) async {
+    try {
+      var processed = 0;
+      while (processed < maxPerRun) {
+        final rows = await _db.getImagesNeedingWebp(limit: batch);
+        if (rows.isEmpty) break;
+        var convertedAny = false;
+        for (final row in rows) {
+          final id = row.id;
+          if (id == null) continue;
+          final converted = QuestionImageService.fromEncoded(
+            row.content,
+            position: row.position,
+            anchor: row.anchor,
+          );
+          if (converted == null) continue;
+          await _db.updateQuestionImageContent(id, converted);
+          convertedAny = true;
+          processed++;
+        }
+        if (!convertedAny) break;
+      }
+    } catch (e) {
+      DebugLogService.instance.log('IMG', '存量配图 WebP 转码失败: $e');
+    }
   }
 
   /// 题库列表强制重新加载。

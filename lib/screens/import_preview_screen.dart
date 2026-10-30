@@ -1,14 +1,17 @@
 import '../utils/design_tokens.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/question.dart';
 import '../models/question_image.dart';
 import '../services/app_state.dart';
+import '../services/question_image_service.dart';
 import '../services/theme_service.dart';
 import '../utils/responsive.dart';
 import '../utils/question_image_tokens.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../widgets/kit/natsume_rich_question_text.dart';
+import '../widgets/question_image_viewer.dart';
 
 class ImportPreviewScreen extends StatefulWidget {
   const ImportPreviewScreen({super.key});
@@ -24,6 +27,14 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
   // v1.27：顶部统计徽章可点击，点击后列表只展示对应校验分类的题目，
   // 再次点击同一徽章取消筛选。
   _PreviewFilter _filter = _PreviewFilter.all;
+
+  /// 正在把新选的图转 WebP（编码耗几百毫秒，图标置灰防重复点）
+  bool _addingImage = false;
+
+  /// 正在让 AI 补答案（v1.34）：按钮置灰 + 横幅显示进度，避免重复点
+  bool _fillingAnswers = false;
+  int _fillDone = 0;
+  int _fillTotal = 0;
 
   /// 逐题删除的「墓碑」：删除只记下原始下标，确认时从写入快照中排除。
   /// 为什么这么绕：应用层只有按下标移除的 API，题一旦真删，撤销时无法
@@ -183,6 +194,54 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                             ),
                           ),
 
+                        // v1.34：解析缺答案时的 AI 补答案入口。
+                        // 只补**答案**（题干/选项不动）——AI 改题干比缺答案危险得多。
+                        if (appState.previewMissingAnswerCount > 0)
+                          Container(
+                            width: double.infinity,
+                            margin: const EdgeInsets.fromLTRB(NatsumeSpace.sm,
+                                NatsumeSpace.xs, NatsumeSpace.sm, 0),
+                            padding: const EdgeInsets.all(NatsumeSpace.sm),
+                            decoration: BoxDecoration(
+                              color: ac.surfaceAlt,
+                              borderRadius: NatsumeRadius.smallBorder,
+                              border: Border.all(
+                                  color: ac.border, width: NatsumeLine.width),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(Icons.auto_fix_high_outlined,
+                                    size: 16, color: ac.accent),
+                                const SizedBox(width: NatsumeSpace.xs),
+                                Expanded(
+                                  child: Text(
+                                    _fillingAnswers
+                                        ? 'AI 正在补答案…（$_fillDone/$_fillTotal）'
+                                        : !appState.settings.isConfigured
+                                            ? '${appState.previewMissingAnswerCount} 题未识别到答案；'
+                                                'AI 补答案需先在「设置」里填 API Key'
+                                            : '${appState.previewMissingAnswerCount} 题未识别到答案，'
+                                                '可让 AI 按题干与选项补全（只补答案，不改题干）',
+                                    style: TextStyle(
+                                        fontSize: NatsumeType.caption,
+                                        color: ac.textSecondary),
+                                  ),
+                                ),
+                                const SizedBox(width: NatsumeSpace.xs),
+                                NatsumeButton(
+                                  label: _fillingAnswers ? '补全中…' : 'AI 补答案',
+                                  kind: NatsumeButtonKind.secondary,
+                                  dense: true,
+                                  onPressed: !appState.settings.isConfigured ||
+                                          _fillingAnswers ||
+                                          _confirming
+                                      ? null
+                                      : () => _fillMissingAnswers(appState),
+                                ),
+                              ],
+                            ),
+                          ),
+
                         // v12 配图：待指派图（AI 丢占位符又挂不上题）——显性列出、手动挂题，
                         // 图片必须随题保存，宁可待指派也不静默丢
                         if (appState.previewOrphans.isNotEmpty)
@@ -281,7 +340,13 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                                           fontSize: NatsumeType.body,
                                           color: ac.textSecondary)))
                               : ListView.builder(
-                                  padding: const EdgeInsets.all(NatsumeSpace.sm),
+                                  // 底部多留一屏余量：编辑卡最后一行（保存/取消）要能
+                                  // 滚到底部确认条上方，否则会被浮层按钮压住点不到
+                                  padding: const EdgeInsets.fromLTRB(
+                                      NatsumeSpace.sm,
+                                      NatsumeSpace.sm,
+                                      NatsumeSpace.sm,
+                                      NatsumeSpace.sm + 96),
                                   itemCount: shown.length,
                                   itemBuilder: (context, si) {
                                     final c = shown[si];
@@ -305,6 +370,8 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                                       index: c.originalIndex,
                                       question: c.question,
                                       errors: c.errors,
+                                      onAddImage: () =>
+                                          _addImageToQuestion(c.originalIndex),
                                       onEdit: () => setState(() =>
                                           _editingIndex = c.originalIndex),
                                       onDelete: () =>
@@ -353,6 +420,46 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
         );
       },
     );
+  }
+
+  /// AI 补答案（v1.34）：把预览里缺答案的题交给 AI 批量补，写回预览。
+  ///
+  /// 补完**不自动导入**：用户仍要自己核一遍再点确认（AI 认错选项的概率不低，
+  /// 而这份答案会进 FSRS 影响后续复习）。补不出来也不报错，只说还剩几题。
+  Future<void> _fillMissingAnswers(AppState appState) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() {
+      _fillingAnswers = true;
+      _fillDone = 0;
+      _fillTotal = appState.previewMissingAnswerCount;
+    });
+    try {
+      final filled = await appState.fillMissingPreviewAnswers(
+        onProgress: (done, total) {
+          if (!mounted) return;
+          setState(() {
+            _fillDone = done;
+            _fillTotal = total;
+          });
+        },
+      );
+      if (!mounted) return;
+      final rest = appState.previewMissingAnswerCount;
+      setState(() => _fillingAnswers = false);
+      messenger.showSnackBar(SnackBar(
+        content: Text(filled == 0
+            ? 'AI 没能补出答案，请手动编辑（仍有 $rest 题缺答案）'
+            : rest == 0
+                ? 'AI 已补全 $filled 题，请核对后再导入'
+                : 'AI 补了 $filled 题，仍有 $rest 题缺答案'),
+        duration: const Duration(seconds: 4),
+      ));
+    } catch (e) {
+      // 网络/接口失败不能让用户卡在「补全中」状态
+      if (!mounted) return;
+      setState(() => _fillingAnswers = false);
+      messenger.showSnackBar(SnackBar(content: Text('补答案失败：$e')));
+    }
   }
 
   Future<void> _confirmImport(AppState appState) async {
@@ -428,7 +535,72 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
     );
   }
 
-  /// 逐题删除：即删 + SnackBar 撤销（5 秒可恢复）。
+  /// 导入预览里给某道题加图（v1.34）。
+  ///
+  /// 图片入口放在题目卡的图标行（而不是编辑卡里）：编辑卡已经很长，
+  /// 多一行按钮会把底部「保存」顶到可视区外。这里选完图直接落到题目上：
+  /// 任意格式 → [QuestionImageService] 统一转 WebP（长边 ≤1280、≤512KB），
+  /// 并把 `{{img:N}}` 追加到题干末尾（用户可在编辑卡里改文本挪位置）。
+  Future<void> _addImageToQuestion(int index) async {
+    if (_addingImage) return;
+    final appState = context.read<AppState>();
+    final questions = appState.previewQuestions;
+    if (index < 0 || index >= questions.length) return;
+
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: true,
+        withData: true,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('打开文件选择器失败：$e')));
+      return;
+    }
+    if (picked == null || picked.files.isEmpty) return;
+    setState(() => _addingImage = true);
+
+    final question = questions[index];
+    final added = <QuestionImage>[];
+    var slot = -1;
+    for (final image in question.images) {
+      if (image.position > slot) slot = image.position;
+    }
+    slot++;
+    var title = question.title;
+    for (final file in picked.files) {
+      QuestionImage? image;
+      final bytes = file.bytes;
+      if (bytes != null) {
+        image = QuestionImageService.fromEncoded(bytes, position: slot);
+      } else if (file.path != null) {
+        image =
+            await QuestionImageService.fromFile(file.path!, position: slot);
+      }
+      if (image == null) continue;
+      added.add(image);
+      title = title.isEmpty ? '{{img:$slot}}' : '$title\n{{img:$slot}}';
+      slot++;
+    }
+
+    if (!mounted) return;
+    if (added.isNotEmpty) {
+      appState.updatePreviewQuestion(
+        index,
+        question.copyWith(title: title, images: [...question.images, ...added]),
+      );
+    }
+    setState(() => _addingImage = false);
+    if (added.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('这些图片无法解析（支持 PNG / JPEG / WebP / GIF / BMP）')));
+    }
+  }
+
+
   /// 删除用墓碑记录（见 [_pendingDeletes]），撤销只是反悔一次，
   /// 原始题号永不错位；只有导入成功才统一清空预览。
   void _deleteQuestion(int index) {
@@ -491,12 +663,16 @@ class _QuestionCard extends StatelessWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
 
+  /// v1.34：导入时给这道题加图（任意格式 → 统一 WebP）
+  final VoidCallback onAddImage;
+
   const _QuestionCard({
     required this.index,
     required this.question,
     required this.errors,
     required this.onEdit,
     required this.onDelete,
+    required this.onAddImage,
   });
 
   @override
@@ -543,6 +719,14 @@ class _QuestionCard extends StatelessWidget {
                 if (question.questionType == 'true_false')
                   _Tag('判断', ac.success),
                 const Spacer(),
+                IconButton(
+                    tooltip: '添加图片',
+                    icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 40, minHeight: 40),
+                    onPressed: onAddImage),
+                const SizedBox(width: 8),
                 IconButton(
                     icon: const Icon(Icons.edit_outlined, size: 18),
                     padding: EdgeInsets.zero,
@@ -799,9 +983,10 @@ class _EditCardState extends State<_EditCard> {
           ),
           const SizedBox(height: 10),
 
-          // v12 配图：图片是题目的一部分（{{img:N}} 位置可在文本里挪，缩略图可删）
+          // v12 配图：图片是题目的一部分（{{img:N}} 位置可在文本里挪，缩略图可删、
+          // 点击可看大图）。加图入口在题目卡的「添加图片」图标上。
           if (_images.isNotEmpty) ...[
-            const Text('题目配图',
+            const Text('题目配图 · 点击缩略图看大图',
                 style: TextStyle(
                     fontSize: NatsumeType.body, fontWeight: FontWeight.w500)),
             const SizedBox(height: 4),
@@ -816,9 +1001,21 @@ class _EditCardState extends State<_EditCard> {
                     child: Stack(
                       children: [
                         Positioned.fill(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(NatsumeRadius.chip),
-                            child: Image.memory(img.content, fit: BoxFit.cover),
+                          child: GestureDetector(
+                            onTap: () => openQuestionImageViewer(
+                              context,
+                              image: img,
+                              heroTag: 'qpreview-${img.position}',
+                            ),
+                            child: Hero(
+                              tag: 'qpreview-${img.position}',
+                              child: ClipRRect(
+                                borderRadius:
+                                    BorderRadius.circular(NatsumeRadius.chip),
+                                child: Image.memory(img.content,
+                                    fit: BoxFit.cover, gaplessPlayback: true),
+                              ),
+                            ),
                           ),
                         ),
                         Positioned(

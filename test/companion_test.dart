@@ -221,12 +221,18 @@ void main() {
 
     test('插件清单：随 App 出厂、声明不可同步、注明取形来源', () {
       expect(BuiltinPlugins.companionId, 'natsume.companion');
-      expect(BuiltinPlugins.all.length, 2);
+      // 出厂三件套：双链笔记 / 小鲸助教 / 日程待办（v1.34）
+      expect(BuiltinPlugins.all.length, 3);
       expect(BuiltinPlugins.companion.syncable, isFalse);
       expect(BuiltinPlugins.companion.manifestMap['syncable'], isFalse);
       expect(BuiltinPlugins.companion.license, 'AGPL-3.0');
       expect(BuiltinPlugins.companion.upstream, contains('Coopanion'));
       expect(CompanionService.syncable, isFalse);
+      // 日程插件同样只在本地（schedule_items 表），清单也得写清楚
+      expect(BuiltinPlugins.scheduleId, 'natsume.schedule');
+      expect(BuiltinPlugins.schedule.syncable, isFalse);
+      expect(BuiltinPlugins.schedule.manifestMap['syncable'], isFalse);
+      expect(BuiltinPlugins.byId(BuiltinPlugins.scheduleId), isNotNull);
       // 素材边界：上游鲸鱼娘贴图不在 AGPL 范围内，本工程不得携带其图像
       expect(Directory('assets/companion').existsSync(), isFalse,
           reason: '陪伴插件只允许自绘头像，不得打包上游 web/whale 贴图');

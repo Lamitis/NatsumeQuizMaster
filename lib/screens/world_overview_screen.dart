@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/plugin.dart';
@@ -164,15 +163,24 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
                           children: [
                             Row(
                               children: [
-                                Text(p.name,
-                                    style: NatsumeType.h3Style.copyWith(
-                                        fontWeight: FontWeight.w600,
-                                        color: ac.textPrimary)),
+                                // 插件名/作者可能很长：省略号收口，别把开关挤出去
+                                Flexible(
+                                  child: Text(p.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: NatsumeType.h3Style.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                          color: ac.textPrimary)),
+                                ),
                                 const SizedBox(width: NatsumeSpace.xs),
                                 if (p.author != null)
-                                  Text('by ${p.author}',
-                                      style: NatsumeType.microStyle.copyWith(
-                                          color: ac.textTertiary)),
+                                  Flexible(
+                                    child: Text('by ${p.author}',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: NatsumeType.microStyle.copyWith(
+                                            color: ac.textTertiary)),
+                                  ),
                                 // v1.31：插件数据不进同步导出清单，必须显式说明
                                 if (!BuiltinPlugins.isSyncable(p)) ...[
                                   const SizedBox(width: NatsumeSpace.xxs),
@@ -222,11 +230,13 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
 
   Future<void> _togglePlugin(PluginInfo p, bool enabled) async {
     await _db.setPluginEnabled(p.id, enabled);
-    // 内置插件（双链笔记 / 小鲸助教）要立刻反映到「我的 → 学习工具」入口
+    // 内置插件（双链笔记 / 小鲸助教 / 日程待办）要立刻反映到「我的 → 学习工具」入口
     if (p.id == BuiltinPlugins.notesId && mounted) {
       await context.read<AppState>().setNotesPluginEnabled(enabled);
     } else if (p.id == BuiltinPlugins.companionId && mounted) {
       await context.read<AppState>().setCompanionPluginEnabled(enabled);
+    } else if (p.id == BuiltinPlugins.scheduleId && mounted) {
+      await context.read<AppState>().setSchedulePluginEnabled(enabled);
     }
     _reload();
   }
@@ -347,7 +357,17 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
       destPath: dest,
     );
     if (path != null) {
-      await Share.shareXFiles([XFile(path)], subject: 'NatsumeQuizMaster世界导出');
+      // v1.34：导出后直接「另存为」，由用户挑落盘位置
+      if (!mounted) return;
+      final result =
+          await ExportStorage.saveFileAs(path, dialogTitle: '保存世界导出文件');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result.saved
+            ? '已导出世界到 ${result.path}'
+            : '已取消保存。文件仍可在此找到：${ExportStorage.folderOf(path)}'),
+        duration: const Duration(seconds: 5),
+      ));
     }
   }
 

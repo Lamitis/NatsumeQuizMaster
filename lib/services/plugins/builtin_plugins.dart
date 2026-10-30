@@ -98,7 +98,24 @@ class BuiltinPlugins {
     upstream: 'Coopanion（AGPL-3.0-or-later）好感度 / 情绪气泡 · Cortico（MIT）框架思路',
   );
 
-  static const List<BuiltinPlugin> all = [notes, companion];
+  /// 日程插件 id（库表主键，勿改：改了会变成"新插件"，用户启停状态丢失）
+  static const String scheduleId = 'natsume.schedule';
+
+  /// 日程待办插件（v1.34）。
+  ///
+  /// 复习计划落地成待办：按到期日排期、勾选完成、逾期标红。数据在本地
+  /// `schedule_items` 表（schema v16），不在同步导出清单里 —— 与笔记同一条
+  /// 边界，界面必须写明「无法同步」。
+  static const BuiltinPlugin schedule = BuiltinPlugin(
+    id: scheduleId,
+    name: '日程待办',
+    version: '1.0.0',
+    description: '把复习计划拆成待办：按日排期、勾选完成、逾期提醒（本机保存）',
+    capabilities: ['schedule', 'todo'],
+    syncable: false,
+  );
+
+  static const List<BuiltinPlugin> all = [notes, companion, schedule];
 
 
   /// 启动登记（幂等）

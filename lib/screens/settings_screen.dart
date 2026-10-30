@@ -5,11 +5,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../models/question.dart';
 import '../services/ai_service.dart';
 import '../services/app_state.dart';
 import '../services/debug_log_service.dart';
+import '../services/export_storage.dart';
 import '../services/keepalive_service.dart';
 import '../services/mineru_service.dart';
 import '../services/reminder_service.dart';
@@ -2054,8 +2054,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                           ),
                           const SizedBox(width: 10),
                           OutlinedButton.icon(
-                            icon: const Icon(Icons.share, size: 16),
-                            label: const Text('分享',
+                            icon: const Icon(Icons.save_alt, size: 16),
+                            label: const Text('另存为',
                                 style: TextStyle(fontSize: NatsumeType.body)),
                             style: OutlinedButton.styleFrom(
                                 foregroundColor: ac.accent),
@@ -2068,17 +2068,26 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 }
                                 final file = await DebugLogService.instance
                                     .exportToFile();
-                                if (mounted) {
-                                  await Share.shareXFiles(
-                                    [XFile(file.path)],
-                                    subject: 'NatsumeQuizMaster调试日志',
-                                  );
-                                }
+                                // v1.34：用「另存为」取代系统分享面板
+                                final saved = await ExportStorage.saveFileAs(
+                                  file.path,
+                                  dialogTitle: '保存调试日志',
+                                );
+                                if (!mounted) return;
+                                messenger.showSnackBar(
+                                  SnackBar(
+                                    content: Text(saved.saved
+                                        ? '已另存为: ${saved.path}'
+                                        : '已取消保存（日志仍在: ${file.path}）'),
+                                    backgroundColor: ac.accent,
+                                    duration: const Duration(seconds: 4),
+                                  ),
+                                );
                               } catch (e) {
                                 if (mounted) {
                                   messenger.showSnackBar(
                                     SnackBar(
-                                        content: Text('分享失败: $e'),
+                                        content: Text('另存为失败: $e'),
                                         backgroundColor: ac.danger),
                                   );
                                 }
@@ -2600,7 +2609,8 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                 ? '打标签已暂停，可随时继续'
                 : '正在翻阅脑海中的知识库：已打 $_done/${widget.questions.length} 道题目'),
         content: SizedBox(
-          width: 340,
+          // 写死 340 在 360dp 手机上会溢出（对话框内边距另算）
+          width: dialogContentWidth(context, max: 340),
           height: 340,
           child: _finished
               ? ListView.builder(

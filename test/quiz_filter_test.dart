@@ -219,7 +219,9 @@ void main() {
       tester.view.resetDevicePixelRatio();
     });
 
-    final (a, _) = await seed();
+    // 库操作必须走真实事件循环：testWidgets 用假时钟，sqflite FFI 的 Future
+    // 不会自己完成（假时钟下整条用例会一直挂着），所以 seed 包一层 runAsync
+    final (a, _) = (await tester.runAsync(() => seed()))!;
     final app = AppState();
     await tester.runAsync(() => app.init());
     app.toggleBankSelection(a); // 面板默认范围 = 开始页已勾选的库

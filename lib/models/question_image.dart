@@ -19,14 +19,14 @@ class QuestionImage {
   /// 原始归属线索（如 `2:312.5` = 第 2 页 y 中心），仅供排错/二次归属，渲染不用
   final String? anchor;
 
-  /// 压缩后的图片字节（JPEG，长边 ≤1280、单张 ≤512KB）
+  /// 压缩后的图片字节（WebP，长边 ≤1280、单张 ≤512KB）
   final Uint8List content;
 
   const QuestionImage({
     this.id,
     this.questionId,
     required this.position,
-    this.mime = 'image/jpeg',
+    this.mime = 'image/webp',
     required this.width,
     required this.height,
     this.anchor,
@@ -52,7 +52,7 @@ class QuestionImage {
       id: map['id'] as int?,
       questionId: map['question_id'] as int?,
       position: map['position'] as int? ?? 0,
-      mime: map['mime'] as String? ?? 'image/jpeg',
+      mime: map['mime'] as String? ?? 'image/webp',
       width: map['width'] as int? ?? 0,
       height: map['height'] as int? ?? 0,
       anchor: map['anchor'] as String?,

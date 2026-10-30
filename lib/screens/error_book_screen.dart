@@ -1,9 +1,8 @@
-import '../utils/app_constants.dart';
+﻿import '../utils/app_constants.dart';
 import '../utils/design_tokens.dart';
 import '../services/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../models/question.dart';
 import '../services/app_state.dart';
 import '../services/docx_export_service.dart';
@@ -706,7 +705,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
       messenger.showSnackBar(const SnackBar(content: Text('当前范围下暂无错题')));
       return;
     }
-    await _share(messenger, path, '已导出 $count 题', 'NatsumeQuizMaster错题导出');
+    await _saveAs(messenger, path, '已导出 $count 题', '保存错题导出文件');
   }
 
   /// 导出为 .docx 打印稿（纸质题目）。
@@ -739,39 +738,53 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     }
     final where =
         placement == DocxAnswerPlacement.underQuestion ? '答案在题目下方' : '答案在最后一页';
-    await _share(messenger, path, '已导出 $count 题（$where）', 'NatsumeQuizMaster错题练习');
+    await _saveAs(messenger, path, '已导出 $count 题（$where）', '保存错题练习文档');
   }
 
-  /// 把产物交给系统分享，并告诉用户文件保存到了哪个文件夹。
+  /// 「另存为」把产物交给用户自己挑位置，并告诉用户文件存在了哪里。
   ///
-  /// 提示放在分享**之后**：系统分享面板是全屏的，先弹的 SnackBar 会在用户从
-  /// 面板返回之前就超时消失，等于白提示。有了文件夹，用户即使没分享、也没记住
-  /// 文件名，也能自己按目录翻出来（打印、发同学、存档）。
-  Future<void> _share(ScaffoldMessengerState messenger, String path,
-      String okText, String subject) async {
-    var shared = true;
-    try {
-      await Share.shareXFiles([XFile(path)], subject: subject);
-    } catch (e) {
-      // v1.0.2 设计审查修复：分享失败不再静默
-      shared = false;
-      if (mounted) {
-        messenger.showSnackBar(SnackBar(
-          content: Text('分享失败：$e\n文件已保存：${ExportStorage.fileNameOf(path)}'),
-          duration: const Duration(seconds: 6),
-        ));
-      }
-    }
+  /// v1.34 起取代系统分享面板：分享面板还要用户再选一次「保存到文件」，
+  /// 多一步；用户要的是「我自己挑个文件夹存下来」。
+  ///
+  /// 提示放在对话框**之后**：另存为对话框是模态的，先弹的 SnackBar 会在用户
+  /// 关掉对话框之前就超时消失，等于白提示。用户取消 ⇒ 不报成功，只说明文件
+  /// 还在导出目录里（能自己按目录翻出来：打印、发同学、存档）。
+  Future<void> _saveAs(ScaffoldMessengerState messenger, String sourcePath,
+      String okText, String dialogTitle) async {
+    final result = await ExportStorage.saveFileAs(
+      sourcePath,
+      dialogTitle: dialogTitle,
+    );
     if (!mounted) return;
+    if (!result.saved) {
+      messenger.showSnackBar(SnackBar(
+        duration: const Duration(seconds: 8),
+        content: Text('已取消保存。文件仍可在此找到：${ExportStorage.folderOf(sourcePath)}',
+            maxLines: 2, overflow: TextOverflow.ellipsis),
+        action: SnackBarAction(
+          label: '复制路径',
+          onPressed: () {
+            Clipboard.setData(ClipboardData(text: sourcePath));
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(const SnackBar(
+              content: Text('已复制文件完整路径'),
+              duration: Duration(seconds: 2),
+            ));
+          },
+        ),
+      ));
+      return;
+    }
+    final savedPath = result.path!;
     messenger.showSnackBar(SnackBar(
       duration: const Duration(seconds: 8),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(shared ? okText : '$okText（已保存，未分享）'),
+          Text(okText),
           const SizedBox(height: 3),
-          Text('保存位置：${ExportStorage.folderOf(path)}',
+          Text('保存位置：${ExportStorage.folderOf(savedPath)}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: NatsumeType.microStyle
@@ -782,7 +795,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         label: '复制路径',
         onPressed: () {
           // 连文件名一起复制：目录里可能有多份导出，只有目录分不出哪份是这次的
-          Clipboard.setData(ClipboardData(text: path));
+          Clipboard.setData(ClipboardData(text: savedPath));
           messenger.hideCurrentSnackBar();
           messenger.showSnackBar(const SnackBar(
             content: Text('已复制文件完整路径'),

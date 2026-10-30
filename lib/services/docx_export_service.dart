@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
+import 'package:image/image.dart' as img;
 import 'package:xml/xml.dart';
 
 import '../models/question.dart';
@@ -32,10 +34,13 @@ enum DocxAnswerPlacement {
 ///   · `w:pPr` 必须是 `w:p` 的**第一个**子元素，顺序错了 Word 同样报损坏。
 /// 嵌入图登记（媒体部件名 + document.xml 关系 id）
 class _MediaRef {
-  _MediaRef(this.image, this.relId, this.fileName);
+  _MediaRef(this.image, this.relId, this.fileName, this.bytes);
   final QuestionImage image;
   final String relId;
   final String fileName;
+
+  /// 真正写进 zip 的字节（题库内统一存 WebP，导出时按需转码）
+  final Uint8List bytes;
 }
 
 class DocxExportService {
@@ -190,13 +195,27 @@ class DocxExportService {
           continue;
         }
         final index = media.length + 1;
-        final ext = img.mime == 'image/png' ? 'png' : 'jpeg';
-        final ref = _MediaRef(img, 'rIdImg$index', 'image$index.$ext');
+        // 题库内统一存 WebP，但 Word 对 WebP 支持参差（旧版直接显示空白）：
+        // 导出件转成 PNG（无损、任何版本都能显示）。
+        final exported = _toPng(img);
+        final ref = _MediaRef(img, 'rIdImg$index', 'image$index.png', exported);
         media.add(ref);
         out.add(_imagePara(ref));
       }
     }
     return out;
+  }
+
+  /// 配图 → PNG 字节（导出用）。解码失败时原样带回，至少不丢图。
+  static Uint8List _toPng(QuestionImage image) {
+    if (image.mime == 'image/png') return image.content;
+    try {
+      final decoded = img.decodeImage(image.content);
+      if (decoded == null) return image.content;
+      return Uint8List.fromList(img.encodePng(decoded));
+    } catch (_) {
+      return image.content;
+    }
   }
 
   /// 图片段落：内嵌绘图对象（w:drawing）。按 96dpi 折算 EMU，显示宽上限 480px。
@@ -304,7 +323,7 @@ class DocxExportService {
           '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">');
       for (final ref in media) {
         archive.addFile(
-            ArchiveFile('word/media/${ref.fileName}', ref.image.content.length, ref.image.content));
+            ArchiveFile('word/media/${ref.fileName}', ref.bytes.length, ref.bytes));
         docRels.write('<Relationship Id="${ref.relId}" '
             'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
             'Target="media/${ref.fileName}"/>');

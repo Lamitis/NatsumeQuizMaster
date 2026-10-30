@@ -97,7 +97,7 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen> {
         builder: (ctx, setDialogState) => AlertDialog(
           title: const Text('模拟长期使用'),
           content: SizedBox(
-            width: 320,
+            width: dialogContentWidth(ctx, max: 320),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,

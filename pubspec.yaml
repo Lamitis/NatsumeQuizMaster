@@ -33,10 +33,12 @@ dependencies:
   shimmer: ^3.0.0
   flutter_markdown: ^0.7.1
   audioplayers: ^6.1.0
-  share_plus: ^10.1.4
+  # share_plus 已移除（v1.34：导出改用 ExportStorage 的「另存为」，不再走系统分享面板）
   
   # 工具
   intl: ^0.18.1
+  # 打开外部链接（v1.34 检查更新：跳转发布页下载）
+  url_launcher: ^6.3.0
   shared_preferences: 2.5.3
   uuid: ^4.2.1
   path_provider: 2.1.5

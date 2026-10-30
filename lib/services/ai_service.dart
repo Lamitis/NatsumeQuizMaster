@@ -639,7 +639,150 @@ $chunk
     return (opts is List && opts.isNotEmpty) ? 'single_choice' : 'fill_blank';
   }
 
-  /// 获取题目解析（优先使用缓存）。
+  /// 批量推断缺失的答案（导入预览「AI 补答案」，v1.34）。
+  ///
+  /// 为什么单独一趟请求而不是丢回解析：解析阶段模型已经把题读进来了，但答案
+  /// 缺失往往是**原件就没有答案**（老师发的练习、扫描件）。这时让模型根据题干
+  /// 与选项自己判一次，比让用户手填整卷快得多。
+  ///
+  /// 返回「入参下标 → 答案文本」，无法推断的题不出现在结果里（调用方保持原样）。
+  /// 与解析同一条红线：**只产出答案**，不改题干与选项。
+  static const int inferAnswerBatch = 8;
+
+  Future<Map<int, String>> inferMissingAnswers(
+    List<Question> questions, {
+    void Function(int done, int total)? onProgress,
+  }) async {
+    final results = <int, String>{};
+    if (questions.isEmpty) return results;
+    for (var start = 0; start < questions.length; start += inferAnswerBatch) {
+      final end = min(start + inferAnswerBatch, questions.length);
+      final batch = questions.sublist(start, end);
+      final raw = await _callAI(inferAnswersPrompt(batch));
+      final parsed = parseInferredAnswers(raw, batch.length);
+      for (var i = 0; i < batch.length; i++) {
+        final answer = normalizeInferredAnswer(batch[i], parsed[i] ?? '');
+        if (answer.isEmpty) continue;
+        results[start + i] = answer;
+      }
+      onProgress?.call(end, questions.length);
+    }
+    return results;
+  }
+
+  /// 补答案的提示词。只给模型题干/选项/类型，且明确要求「拿不准就别给」，
+  /// 宁可留空让用户手填，也不要编一个看起来很像的答案。
+  @visibleForTesting
+  static String inferAnswersPrompt(List<Question> batch) {
+    final b = StringBuffer()
+      ..writeln('你是医学考试命题与阅卷助手。下面每道题**缺少标准答案**，'
+          '请依据题干与选项推断出最可能的正确答案。')
+      ..writeln('只输出 JSON，不要任何解释或 Markdown 围栏：')
+      ..writeln('{"answers":[{"i":0,"a":"A"},{"i":1,"a":"对"},{"i":2,"a":"文本答案"}]}')
+      ..writeln('规则：')
+      ..writeln('- i 是题目编号（方括号里的数字）')
+      ..writeln('- 单选题：a 只写一个选项字母；多选题：多个字母用英文逗号分隔，如 "A,C"')
+      ..writeln('- 判断题：a 写「对」或「错」')
+      ..writeln('- 填空/名词解释/简答：a 写简洁答案文本（不超过 80 字）')
+      ..writeln('- **拿不准的题不要出现在 answers 里**（宁缺毋滥，不要编答案）')
+      ..writeln()
+      ..writeln('题目：');
+    for (var i = 0; i < batch.length; i++) {
+      final q = batch[i];
+      b.writeln('[$i] (${q.questionType.isEmpty ? 'unknown' : q.questionType}) '
+          '${q.title.trim()}');
+      if (q.options.isNotEmpty) {
+        final letters = <String>[];
+        for (var k = 0; k < q.options.length && k < 26; k++) {
+          letters.add('${String.fromCharCode(65 + k)}. ${q.options[k]}');
+        }
+        b.writeln('    选项：${letters.join('  ')}');
+      }
+    }
+    return b.toString();
+  }
+
+  /// 解析补答案响应：`{"answers":[{"i":0,"a":"A"}]}`。
+  /// 模型偶尔会漏围栏/漏外层字段，[repairTruncatedJson] 兜一次截断。
+  @visibleForTesting
+  static Map<int, String> parseInferredAnswers(String raw, int count) {
+    final out = <int, String>{};
+    if (raw.trim().isEmpty) return out;
+    Map<String, dynamic>? data;
+    try {
+      data = _extractJson(raw);
+    } catch (_) {
+      data = repairTruncatedJson(raw);
+    }
+    if (data == null) return out;
+    final list = data['answers'];
+    if (list is! List) return out;
+    for (final e in list) {
+      if (e is! Map) continue;
+      final i = int.tryParse((e['i'] ?? '').toString().trim());
+      final a = (e['a'] ?? '').toString().trim();
+      if (i == null || i < 0 || i >= count || a.isEmpty) continue;
+      out[i] = a;
+    }
+    return out;
+  }
+
+  /// 把模型给的答案规整成 App 认可的形式（选择题只留合法选项字母），
+  /// 规整后为空 ⇒ 视为没补出来。
+  @visibleForTesting
+  static String normalizeInferredAnswer(Question q, String raw) {
+    var a = raw.trim();
+    if (a.isEmpty) return '';
+    // 去掉「答案：」「Answer:」这类前缀与包裹引号
+    a = a.replaceFirst(RegExp(r'^(答案|answer)\s*[:：]\s*', caseSensitive: false), '');
+    a = a.replaceAll(RegExp(r'''^["'「”]+|["'」”]+$'''), '').trim();
+    if (a.isEmpty) return '';
+
+    final type = q.questionType;
+    if (type == 'true_false') {
+      if (a.contains('对') || a.contains('正确') || a.contains('√') ||
+          a.toLowerCase() == 'true' || a.toLowerCase() == 't') {
+        return '对';
+      }
+      if (a.contains('错') || a.contains('错误') || a.contains('×') ||
+          a.toLowerCase() == 'false' || a.toLowerCase() == 'f') {
+        return '错';
+      }
+      return '';
+    }
+
+    if (type == 'single_choice' || type == 'multi_choice') {
+      final letters = <String>[];
+      // ① 先看模型是不是直接抄了选项文本（"缺铁性贫血" → B）
+      for (var k = 0; k < q.options.length; k++) {
+        final opt = q.options[k].trim();
+        if (opt.isEmpty) continue;
+        if (a == opt || a.contains(opt)) {
+          final letter = String.fromCharCode(65 + k);
+          if (!letters.contains(letter)) letters.add(letter);
+        }
+      }
+      // ② 再抽显式字母（"A"、"A,C"、"答案是B"）
+      if (letters.isEmpty) {
+        for (final ch in a.toUpperCase().split('')) {
+          if (!RegExp(r'[A-Z]').hasMatch(ch)) continue;
+          final idx = ch.codeUnitAt(0) - 65;
+          if (idx < 0 || idx >= q.options.length) continue; // 越界字母不算
+          if (!letters.contains(ch)) letters.add(ch);
+        }
+        letters.sort();
+      }
+      if (letters.isEmpty) return '';
+      // 单选题只保留一个（模型偶尔给两个）
+      if (type == 'single_choice') return letters.first;
+      return letters.join(',');
+    }
+
+    // 填空 / 名解 / 简答：保留文本，过长则截断（答案库不适合存小作文）
+    return a.length <= 200 ? a : a.substring(0, 200);
+  }
+
+
   /// [grounding]：知识库约束块（非空时注入提示词、约束答案依据；因缓存键
   /// 不含约束上下文，带 grounding 时不走缓存、不写缓存，保证不同知识库
   /// 得到各自对应的答案）。

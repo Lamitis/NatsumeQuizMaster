@@ -8,6 +8,7 @@ import 'package:pdfrx/pdfrx.dart';
 import '../models/question_image.dart';
 import '../utils/pdf_layout.dart';
 import 'ai_service.dart';
+import 'question_image_service.dart';
 
 /// PDF 抽取失败（[message] 可直接展示给用户）。
 /// [scanned] = 判定为扫描件/图片字（无文字层）——这不是损坏，
@@ -304,15 +305,13 @@ class PdfImportService {
     final raw = _decode(rendered);
     rendered.dispose();
 
-    final enc = _encodeJpeg(raw);
-    return QuestionImage(
+    // v1.34：统一走配图服务 → WebP（长边 ≤1280、单张 ≤512KB）
+    return QuestionImageService.fromImage(
+      raw,
       position: slot,
-      width: enc.width,
-      height: enc.height,
       // anchor：页码:y 中心:期望题序（丢 token 抢修按期望题序补挂）
       anchor:
           '${page.pageNumber}:${((fig.top + fig.bottom) / 2).toStringAsFixed(1)}:$expectedQuestion',
-      content: enc.bytes,
     );
   }
 

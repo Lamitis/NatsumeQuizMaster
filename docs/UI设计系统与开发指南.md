@@ -9,7 +9,7 @@
 ## 1. 项目速览
 
 - **定位**：面向医学生的本地优先开源免费刷题 App（Android + Windows），无账号/无广告/无会员，AI 讲解走 BYOK
-- **技术栈**：Flutter 3.24.5 / Dart 3.5.4 · SQLite（schema v11）· Provider · FSRS-5 · DeepSeek API
+- **技术栈**：Flutter 3.24.5 / Dart 3.5.4 · SQLite（schema v15）· Provider · FSRS-5 · DeepSeek API
 - **工程规模**：完整自动化测试套件全绿 · 发布前四维基线核对 · APK 签名校验防篡改
 - **核心不变量**：包名 `com.natsume.quiz`、签名证书配置（`android/key.properties`）、main 分支
 

@@ -1,8 +1,11 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/question.dart';
 import '../models/question_edit.dart';
 import '../models/question_image.dart';
+import '../services/question_image_service.dart';
 import '../utils/design_tokens.dart';
+import 'question_image_viewer.dart';
 
 class QuestionEditDialog extends StatefulWidget {
   final Question question;
@@ -35,6 +38,9 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
   late List<TextEditingController> _optionCtrls;
   late String? _type;
   late List<QuestionImage> _images;
+
+  /// 正在把用户选的图片转成 WebP（编码要几百毫秒，按钮置灰防重复点）
+  bool _addingImage = false;
 
   /// 有选项的题型（其余题型保留原选项不动，不展示选项编辑区）
   static const Set<String> _optionTypes = {'single_choice', 'multi_choice'};
@@ -149,6 +155,86 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
     });
   }
 
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// 下一个可用槽位（题内 0 起，取现有最大值 +1，删过的槽位不复用，
+  /// 避免与题干里残留的旧占位符撞号）
+  int _nextImageSlot() {
+    var maxSlot = -1;
+    for (final i in _images) {
+      if (i.position > maxSlot) maxSlot = i.position;
+    }
+    return maxSlot + 1;
+  }
+
+  /// 在题干光标处插入占位符（没光标就追加到末尾）
+  void _insertImageToken(int slot) {
+    final token = '{{img:$slot}}';
+    final sel = _titleCtrl.selection;
+    final text = _titleCtrl.text;
+    if (sel.isValid && sel.start >= 0 && sel.end >= sel.start) {
+      final inserted = '$token\n';
+      final newText = text.replaceRange(sel.start, sel.end, inserted);
+      _titleCtrl.value = TextEditingValue(
+        text: newText,
+        selection: TextSelection.collapsed(offset: sel.start + inserted.length),
+      );
+    } else {
+      _titleCtrl.text = text.isEmpty ? token : '$text\n$token';
+    }
+  }
+
+  /// 从本地选图加到题目里（导入时/编辑时都能用）。
+  ///
+  /// 用户选的原图可能是 JPEG/PNG/HEIC 等任意格式：统一交给
+  /// [QuestionImageService] 转成 WebP 并压到「长边 ≤1280、≤512KB」，
+  /// 库里因此永远只存 WebP，做题页也只需一条解码路径。
+  Future<void> _addImage() async {
+    if (_addingImage) return;
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: true,
+        withData: true,
+      );
+    } catch (e) {
+      _snack('打开文件选择器失败：$e');
+      return;
+    }
+    if (picked == null || picked.files.isEmpty) return;
+    setState(() => _addingImage = true);
+
+    final added = <QuestionImage>[];
+    var slot = _nextImageSlot();
+    for (final file in picked.files) {
+      QuestionImage? image;
+      final bytes = file.bytes;
+      if (bytes != null) {
+        image = QuestionImageService.fromEncoded(bytes, position: slot);
+      } else if (file.path != null) {
+        image = await QuestionImageService.fromFile(file.path!,
+            position: slot);
+      }
+      if (image == null) continue;
+      added.add(image);
+      _insertImageToken(slot);
+      slot++;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _images = [..._images, ...added];
+      _addingImage = false;
+    });
+    if (added.isEmpty) {
+      _snack('这些图片无法解析（支持 PNG / JPEG / WebP / GIF / BMP）');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
@@ -251,13 +337,41 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
                 alignLabelWithHint: true,
               ),
             ),
-            if (_images.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              const Align(
-                alignment: Alignment.centerLeft,
-                child: Text('题目配图 · 题干里 {{img:N}} 标位置，可改文本挪图',
+            // 题目配图：导入时/编辑时都能直接加图（v1.34）。
+            // 统一转 WebP 入库；缩略图点击可全屏查看（Hero + 双指缩放）。
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Text('题目配图',
                     style: TextStyle(fontSize: 12, color: Colors.grey)),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _addingImage ? null : _addImage,
+                  icon: _addingImage
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add_photo_alternate_outlined, size: 16),
+                  label: Text(_addingImage ? '转 WebP…' : '添加图片'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+              ],
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _images.isEmpty
+                    ? '可加图（自动转 WebP，长边 ≤1280、≤512KB）；题干用 {{img:N}} 定位置'
+                    : '题干里 {{img:N}} 标位置，改文本即可挪图；点击缩略图看大图',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
               ),
+            ),
+            if (_images.isNotEmpty) ...[
               const SizedBox(height: 6),
               Align(
                 alignment: Alignment.centerLeft,
@@ -272,9 +386,21 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
                         child: Stack(
                           children: [
                             Positioned.fill(
-                              child: ClipRRect(
-                                borderRadius: NatsumeRadius.smallBorder,
-                                child: Image.memory(img.content, fit: BoxFit.cover),
+                              child: GestureDetector(
+                                onTap: () => openQuestionImageViewer(
+                                  context,
+                                  image: img,
+                                  heroTag: 'qedit-${img.position}',
+                                ),
+                                child: Hero(
+                                  tag: 'qedit-${img.position}',
+                                  child: ClipRRect(
+                                    borderRadius: NatsumeRadius.smallBorder,
+                                    child: Image.memory(img.content,
+                                        fit: BoxFit.cover,
+                                        gaplessPlayback: true),
+                                  ),
+                                ),
                               ),
                             ),
                             Positioned(

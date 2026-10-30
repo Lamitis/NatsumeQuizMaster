@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/question.dart';
 import '../models/question_image.dart';
 import '../models/question_bank.dart';
+import '../models/bank_category.dart';
 import '../models/quiz_session.dart';
 import '../models/answer_record.dart';
 import '../models/knowledge_base.dart';
@@ -14,6 +15,7 @@ import '../models/kb_document.dart';
 import '../models/kb_chunk.dart';
 import '../models/note.dart';
 import '../models/plugin.dart';
+import '../models/schedule_item.dart';
 import '../models/world.dart';
 import 'backup_crypto.dart';
 import 'device_service.dart';
@@ -60,6 +62,10 @@ class DatabaseService {
   static DatabaseService? _instance;
   static Database? _database;
 
+  /// 当前 schema 版本（唯一来源：`openDatabase(version:)` 与备份版本闸门共用，
+  /// 避免「建库涨到 v15 但备份校验还卡在 v14」这种自拒备份的老坑）
+  static const int schemaVersion = 16;
+
   /// 测试用：覆盖数据库文件路径（多测试文件并行时按文件隔离，防互相清库）
   static String? overrideDbPath;
 
@@ -102,7 +108,7 @@ class DatabaseService {
 
     return await openDatabase(
       dbPath,
-      version: 14,
+      version: schemaVersion,
       onConfigure: _onConfigure,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
@@ -322,6 +328,50 @@ class DatabaseService {
       // v14 笔记插件（Logseq 风格双链笔记）：笔记本体 + 双链索引
       await _createNotesTables(db);
     }
+    if (oldVersion < 15) {
+      // v15 题库分类树：分类表 + 题库挂到分类上（`{{img:N}}` 与配图无变更）
+      await _upgradeToV15(db);
+    }
+    if (oldVersion < 16) {
+      // v16 日程待办插件：按到期日排期的待办表（本机保存，不进同步清单）
+      await _createScheduleTable(db);
+    }
+  }
+
+  /// v15 迁移：题库分类树。
+  ///
+  /// `question_banks.category_id` 用 ALTER 补列（既有题库保持 `NULL` = 未分类），
+  /// 分类表全新建（`IF NOT EXISTS`，与 onCreate 共用同一段建表逻辑）。
+  Future<void> _upgradeToV15(Database db) async {
+    final cols = (await db.rawQuery('PRAGMA table_info(question_banks)'))
+        .map((r) => r['name'] as String)
+        .toList();
+    if (!cols.contains('category_id')) {
+      await db
+          .execute('ALTER TABLE question_banks ADD COLUMN category_id INTEGER');
+    }
+    await _createBankCategoryTable(db);
+  }
+
+  /// 分类树表（v15）。`parent_id` 自引用成树，`NULL` = 根分类；
+  /// 题库侧只存 `category_id`，刻意**不加外键**：分类被删时题库要「上移一级」
+  /// 而不是跟着消失（用户删分类不等于删题库）。
+  Future<void> _createBankCategoryTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS bank_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        parent_id INTEGER,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT,
+        FOREIGN KEY (parent_id) REFERENCES bank_categories(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_bank_categories_parent '
+        'ON bank_categories(parent_id)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_question_banks_category '
+        'ON question_banks(category_id)');
   }
 
   /// 笔记 / 双链表（v14 · 笔记插件）。全部 IF NOT EXISTS，幂等，
@@ -355,6 +405,29 @@ class DatabaseService {
         'CREATE INDEX IF NOT EXISTS idx_notes_question ON notes(question_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_note_links_target '
         'ON note_links(target)');
+  }
+
+  /// 日程待办表（v16 · 日程插件）。IF NOT EXISTS 幂等，
+  /// onCreate 与 onUpgrade(v16) 共用。
+  ///
+  /// `due_at` 可空：允许「无期限待办」；完成状态用整数存（sqflite 不支持 bool）。
+  /// 同样**不加外键**：待办是用户手写内容，不随题库/题目删除而消失。
+  Future<void> _createScheduleTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS schedule_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL DEFAULT '',
+        due_at TEXT,
+        done INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_schedule_due '
+        'ON schedule_items(due_at)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_schedule_done '
+        'ON schedule_items(done)');
   }
 
   /// 知识库 / 插件 / 世界表（v13）。全部 IF NOT EXISTS，幂等，
@@ -433,7 +506,7 @@ class DatabaseService {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         question_id INTEGER NOT NULL,
         position INTEGER NOT NULL,
-        mime TEXT NOT NULL DEFAULT 'image/jpeg',
+        mime TEXT NOT NULL DEFAULT 'image/webp',
         width INTEGER NOT NULL DEFAULT 0,
         height INTEGER NOT NULL DEFAULT 0,
         anchor TEXT,
@@ -576,9 +649,12 @@ class DatabaseService {
         question_count INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         uid TEXT,
-        updated_at TEXT
+        updated_at TEXT,
+        category_id INTEGER
       )
     ''');
+
+    await _createBankCategoryTable(db);
 
     await db.execute('''
       CREATE TABLE questions (
@@ -736,6 +812,9 @@ class DatabaseService {
 
     // v14 笔记插件（双链笔记 + 链接索引）
     await _createNotesTables(db);
+
+    // v16 日程待办插件（待办表 + 到期/完成索引）
+    await _createScheduleTable(db);
 
     // 同步索引（uid 唯一 + 批注设备过滤）
     await _createSyncIndexes(db);
@@ -976,6 +1055,110 @@ class DatabaseService {
     return maps.map((m) => QuestionBank.fromMap(m)).toList();
   }
 
+  // ======================== 题库分类树（v15） ========================
+
+  /// 全部分类（同级按 sort_order → 名称排序；树结构由 [parentId] 还原）
+  Future<List<BankCategory>> getAllBankCategories() async {
+    final db = await database;
+    final maps = await db.query('bank_categories',
+        orderBy: 'sort_order ASC, name ASC');
+    return maps.map((m) => BankCategory.fromMap(m)).toList();
+  }
+
+  /// 新建分类，返回 id。`sortOrder` 不传时追加到同级末尾。
+  Future<int> insertBankCategory({
+    required String name,
+    int? parentId,
+    int? sortOrder,
+  }) async {
+    final db = await database;
+    var order = sortOrder;
+    if (order == null) {
+      final rows = await db.rawQuery(
+          'SELECT MAX(sort_order) AS m FROM bank_categories WHERE '
+          '${parentId == null ? 'parent_id IS NULL' : 'parent_id = ?'}',
+          parentId == null ? const <Object?>[] : <Object?>[parentId]);
+      order = ((rows.first['m'] as int?) ?? -1) + 1;
+    }
+    return db.insert('bank_categories', {
+      'name': name,
+      'parent_id': parentId,
+      'sort_order': order,
+      'created_at': DateTime.now().toIso8601String(),
+      'updated_at': DateTime.now().toIso8601String(),
+    });
+  }
+
+  Future<void> renameBankCategory(int id, String name) async {
+    final db = await database;
+    await db.update(
+        'bank_categories',
+        {
+          'name': name,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id]);
+  }
+
+  /// 把分类挪到 [newParentId] 之下（`null` = 挪到根）。
+  ///
+  /// 返回 false 表示这次移动会成环（挪到自己或自己的后代下面），调用方
+  /// 应当提示用户而不是静默失败——树一旦成环，渲染时就会无限递归。
+  Future<bool> moveBankCategory(int id, int? newParentId) async {
+    if (newParentId == id) return false;
+    final all = await getAllBankCategories();
+    final parentOf = {for (final c in all) c.id!: c.parentId};
+    if (!parentOf.containsKey(id)) return false;
+    // 从目标父级往上走，撞到自己就说明成环
+    int? cursor = newParentId;
+    final guard = <int>{};
+    while (cursor != null) {
+      if (cursor == id) return false;
+      if (!guard.add(cursor)) return false; // 历史脏数据成环时自保
+      cursor = parentOf[cursor];
+    }
+    final db = await database;
+    await db.update(
+        'bank_categories',
+        {
+          'parent_id': newParentId,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [id]);
+    return true;
+  }
+
+  /// 删分类：子分类与题库**上移一级**（不连带删除，用户的题库不会因为
+  /// 删了一个文件夹就消失）。
+  Future<void> deleteBankCategory(int id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final rows = await txn.query('bank_categories',
+          columns: ['parent_id'], where: 'id = ?', whereArgs: [id]);
+      final parentId = rows.isEmpty ? null : rows.first['parent_id'] as int?;
+      await txn.update('bank_categories', {'parent_id': parentId},
+          where: 'parent_id = ?', whereArgs: [id]);
+      await txn.update('question_banks', {'category_id': parentId},
+          where: 'category_id = ?', whereArgs: [id]);
+      await txn.delete('bank_categories', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  /// 题库挂到分类下（`null` = 取消分类）
+  Future<void> setBankCategory(int bankId, int? categoryId) async {
+    final db = await database;
+    await db.update(
+        'question_banks',
+        {
+          'category_id': categoryId,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [bankId]);
+  }
+
   Future<void> updateBankQuestionCount(int bankId, int count) async {
     final db = await database;
     await db.update(
@@ -1187,6 +1370,36 @@ class DatabaseService {
           conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     await batch.commit(noResult: true);
+  }
+
+  /// 还不是 WebP 的配图（v1.34 存量统一转码用，按 id 升序取一小批）
+  Future<List<QuestionImage>> getImagesNeedingWebp({int limit = 12}) async {
+    final db = await database;
+    final maps = await db.query(
+      'question_images',
+      where: "mime IS NULL OR mime <> 'image/webp'",
+      orderBy: 'id ASC',
+      limit: limit,
+    );
+    return maps.map((m) => QuestionImage.fromMap(m)).toList();
+  }
+
+  /// 就地替换一张配图的内容与元信息（转码为 WebP 后用）。
+  /// 槽位/归属不动：题目文本里的 `{{img:N}}` 必须继续指向同一张图。
+  Future<void> updateQuestionImageContent(
+      int imageId, QuestionImage image) async {
+    final db = await database;
+    await db.update(
+      'question_images',
+      {
+        'mime': image.mime,
+        'width': image.width,
+        'height': image.height,
+        'content': image.content,
+      },
+      where: 'id = ?',
+      whereArgs: [imageId],
+    );
   }
 
   /// 更新题目内容。[options]/[analysis] 仅在传入时覆盖
@@ -2632,10 +2845,10 @@ class DatabaseService {
       final versionRows = await tmpDb.rawQuery('PRAGMA user_version');
       final version =
           versionRows.isNotEmpty ? versionRows.first.values.first as int : 0;
-      if (version < 1 || version > 14) {
+      if (version < 1 || version > schemaVersion) {
         // user_version 0/非法：非本 App 生成或版本被外部重置，导入后会触发
         // onUpgrade(0→8) 破坏性重建清空题目，拒绝导入。
-        // 版本上界随 schema 走：当前 schema v14（v13 知识库/插件 + v14 笔记插件）
+        // 版本上界随 schema 走（当前 v15：分类树；v13 知识库/插件、v14 笔记插件）
         return '文件不是有效的数据库备份（版本信息缺失或非法）';
       }
       final tables = await tmpDb.rawQuery(
@@ -3266,6 +3479,47 @@ class DatabaseService {
       ORDER BY n.updated_at DESC, n.id DESC
     ''', [target]);
     return maps.map(Note.fromMap).toList();
+  }
+
+  // ======================== 日程待办 DAO（v16 · 日程插件） ========================
+  //
+  // 表结构见 _createScheduleTable。这里只做「读写一张表」，排序与逾期判定
+  // 放在 ScheduleService（口径集中一处：列表、徽章、测试都看同一份）。
+
+  Future<int> insertScheduleItem(ScheduleItem item) async {
+    final db = await database;
+    return db.insert('schedule_items', item.toMap()..remove('id'));
+  }
+
+  Future<void> updateScheduleItem(ScheduleItem item) async {
+    if (item.id == null) return;
+    final db = await database;
+    await db.update('schedule_items', item.toMap()..remove('id'),
+        where: 'id = ?', whereArgs: [item.id]);
+  }
+
+  Future<void> deleteScheduleItem(int id) async {
+    final db = await database;
+    await db.delete('schedule_items', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// 取待办；[includeDone] 为 false 时只返回未完成项
+  Future<List<ScheduleItem>> getScheduleItems(
+      {bool includeDone = true}) async {
+    final db = await database;
+    final maps = await db.query(
+      'schedule_items',
+      where: includeDone ? null : 'done = 0',
+      orderBy: 'due_at IS NULL, due_at ASC, id ASC',
+    );
+    return maps.map(ScheduleItem.fromMap).toList();
+  }
+
+  Future<ScheduleItem?> getScheduleItem(int id) async {
+    final db = await database;
+    final maps =
+        await db.query('schedule_items', where: 'id = ?', whereArgs: [id]);
+    return maps.isEmpty ? null : ScheduleItem.fromMap(maps.first);
   }
 
   Future<void> upsertWorld(WorldInfo world) async {

@@ -191,7 +191,7 @@ class BankFileService {
       }
       out.add(QuestionImage(
         position: (item['position'] as num?)?.toInt() ?? out.length,
-        mime: item['mime'] as String? ?? 'image/jpeg',
+        mime: item['mime'] as String? ?? 'image/webp',
         width: (item['width'] as num?)?.toInt() ?? 0,
         height: (item['height'] as num?)?.toInt() ?? 0,
         anchor: item['anchor'] as String?,

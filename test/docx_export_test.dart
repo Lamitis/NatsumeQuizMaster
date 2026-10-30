@@ -357,12 +357,13 @@ void main() {
         placement: DocxAnswerPlacement.underQuestion,
       );
       final zip = ZipDecoder().decodeBytes(bytes);
-      expect(zip.findFile('word/media/image1.jpeg'), isNotNull);
+      // v1.34：题库内统一存 WebP，导出件转 PNG（旧版 Word 不认 WebP）
+      expect(zip.findFile('word/media/image1.png'), isNotNull);
 
       final rels = utf8.decode(
           zip.findFile('word/_rels/document.xml.rels')!.content as List<int>);
       expect(rels, contains('Id="rIdImg1"'));
-      expect(rels, contains('Target="media/image1.jpeg"'));
+      expect(rels, contains('Target="media/image1.png"'));
 
       final doc =
           utf8.decode(zip.findFile('word/document.xml')!.content as List<int>);
@@ -377,7 +378,7 @@ void main() {
       );
       final zip = ZipDecoder().decodeBytes(bytes);
       expect(zip.findFile('word/_rels/document.xml.rels'), isNull);
-      expect(zip.findFile('word/media/image1.jpeg'), isNull);
+      expect(zip.findFile('word/media/image1.png'), isNull);
     });
 
     test('缺图槽位印「图N缺失」，不给一个空洞', () {

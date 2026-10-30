@@ -122,18 +122,37 @@ void main() {
     await teardownTree(tester);
   });
 
-  testWidgets('我的 → 学习工具：小鲸助教入口随插件启停显隐', (tester) async {
+  testWidgets('我的 → 学习工具：小鲸助教 / 日程待办入口随插件启停显隐', (tester) async {
     setSurface(tester);
     final appState = await seed(tester);
     await tester.pumpWidget(host(appState, const ProfileTab()));
     await settleFrames(tester);
 
+    // 入口在长列表里，先滚到能看见为止（ListView 只构建可视区内元素）
+    Future<void> scrollTo(String label) async {
+      await tester.scrollUntilVisible(
+        find.text(label),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await settleFrames(tester);
+    }
+
+    await scrollTo('小鲸助教');
     expect(find.text('小鲸助教'), findsOneWidget);
     expect(find.textContaining('无法同步'), findsWidgets);
+
+    // v1.34 日程插件同样有入口，且同样标注本机保存
+    await scrollTo('日程待办');
+    expect(find.text('日程待办'), findsOneWidget);
 
     await tester.runAsync(() => appState.setCompanionPluginEnabled(false));
     await tester.pump();
     expect(find.text('小鲸助教'), findsNothing);
+
+    await tester.runAsync(() => appState.setSchedulePluginEnabled(false));
+    await tester.pump();
+    expect(find.text('日程待办'), findsNothing);
 
     await teardownTree(tester);
   });

@@ -194,3 +194,24 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -SkipBuild
 `/CURRENTUSER`）。**绿色版 / zip 这一步完全不需要 Inno Setup**，急着发版时用
 `-PortableOnly` 只出免安装版即可。
 
+### 10. Inno Setup 装在自定义目录（例如 D 盘）
+
+Inno Setup 是绿色的：**整个安装目录**挪到任何位置都能用（`ISCC.exe` 依赖同目录的
+`ISCmplr.dll`、`islzma*.exe` 等，不能只拷 `ISCC.exe`）。挪完/装完后让脚本知道位置即可，
+`Find-Iscc` 的查找顺序是：`-IsccPath` → 环境变量 `ISCC` → `PATH` 里的 `iscc` →
+常见位置（`C:\Program Files (x86)`、`%LOCALAPPDATA%\Programs`、`D:\Tools` 等）。
+
+```powershell
+# 方式 A：装/挪到 D 盘后设一次环境变量（新开终端生效，之后脚本自动用）
+Start-Process (Join-Path $env:TEMP 'innosetup-6.7.4.exe') `
+  -ArgumentList '/VERYSILENT','/CURRENTUSER','/SUPPRESSMSGBOXES','/NORESTART','/SP-','/DIR=D:\Tools\Inno Setup 6' -Wait
+setx ISCC 'D:\Tools\Inno Setup 6\ISCC.exe'
+
+# 方式 B：每次显式指定（不改环境变量）
+powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -SkipBuild -IsccPath 'D:\Tools\Inno Setup 6\ISCC.exe'
+```
+
+> 注意：如果只是把某个目录「复制/解压」到桌面（例如 `C:\Users\Public\Desktop\Inno Setup 6`），
+> 那只是一份**重复副本**，不带 `unins000.exe`，也不进「应用和功能」列表，可直接删掉；
+> 正式安装在 `%LOCALAPPDATA%\Programs\Inno Setup 6`（带卸载器）。
+
