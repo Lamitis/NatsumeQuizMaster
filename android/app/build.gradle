@@ -12,7 +12,7 @@
 // flutter.versionCode / flutter.versionName，但新版 flutter 工具**不再往
 // local.properties 写这两项**（本机该文件只有 flutter.sdk），于是一直走
 // 兜底的 1 / "1.0" —— APK 的 versionCode 恒为 1，覆盖安装时会撞版本。现在改用
-// Flutter Gradle 插件从 pubspec.yaml（version: 1.35.1+29）解析出的
+// Flutter Gradle 插件从 pubspec.yaml（version: 1.35.2+30）解析出的
 // flutter.versionCode / flutter.versionName。
 // ============================================================
 plugins {

@@ -12,6 +12,39 @@
 
 ---
 
+## [1.35.2] - 2026-10-30
+
+### 修复
+- **Windows 构建 C2440（`ATL::CW2A` → `std::string`）**：`flutter_local_notifications`
+  22.3.3 的 Windows 实现 `flutter_local_notifications_windows` 3.1.1 虽已是 ffiPlugin，
+  但仍会编译一小段 C++（点击通知的激活回调 `src/plugin.cpp`），里面是
+  `const std::string key = CW2A(item.Key, CP_UTF8);` 这类 ATL 隐式转换。新版 ATL 把
+  转换运算符改成显式后，`CW2A → LPSTR → std::string` 属于两次用户自定义转换，任何
+  runner 镜像都一样报（`windows-2022` 的 VS 17.14 起与 `windows-latest` 无差别），而
+  pub 上没有已修复的稳定版（只有 4.0.0-dev.x）。现由 `tools/patch_pub_cache.dart` 在
+  `flutter pub get` 之后把它改成 `static_cast<LPCSTR>(...)` 再构造（语义不变），本地
+  构建与 CI 共用同一条命令；Windows job 里的「拉取依赖 / 打补丁 / 构建」也已拆成三步，
+  补丁失败时一眼能看出是哪一步。
+- **`kAppVersion` 默认值与 `pubspec.yaml` 不同步**：`lib/utils/app_constants.dart` 的
+  `defaultValue` 还停在更早的 `v1.35.0.28`，于是 `test/version_single_source_test.dart`
+  在 1.35.1 上一路红（本地那次全绿早于版本号改动，没能拦住）。现已同步，并随本版升到
+  `v1.35.2.30`。
+
+### 升级说明
+- `flutter_local_notifications` 已确认停在 **22.3.3**（pub 上最新稳定版），其 Windows
+  实现 3.1.1 也没有更新的稳定版可升：再往上只有 4.0.0-dev.x（预发布，要求 Flutter
+  ≥ 3.44，平台接口一起跳到 13.0.0-dev），本次不采用。`pubspec.lock` 未变动。
+- 这次**没有**采用「把 CMake 标准降回 C++17 / 给 CI 加 `CXXFLAGS=/std:c++17`」的绕法：
+  那是 ATL 转换运算符隐式性的问题，与语言标准无关；降标准反而会让这些插件需要的
+  C++20 协程（C++/WinRT 的 `<coroutine>`）报 C2338。`windows/CMakeLists.txt` 已写明。
+
+### 文档
+- README「给 pub 缓存里的依赖打补丁」与 `docs/Windows构建说明.md` 第 6 节改为指向
+  **受版本控制**的 `tools/patch_pub_cache.dart`（原来指向本机专用的
+  `patch_windows_plugin_deps.ps1`，而它要修的 share_plus 10.1.4 /
+  flutter_secure_storage_windows 3.1.2 / flutter_local_notifications_windows 1.0.3
+  在当前依赖里都已不存在）。
+
 ## [1.35.1] - 2026-10-30
 
 ### 修复
