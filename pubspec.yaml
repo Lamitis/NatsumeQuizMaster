@@ -32,7 +32,7 @@ dependencies:
   fl_chart: ^0.66.0
   shimmer: ^3.0.0
   flutter_markdown: ^0.7.1
-  audioplayers: ^6.1.0
+  audioplayers: ^6.8.1
   # share_plus 已移除（v1.34：导出改用 ExportStorage 的「另存为」，不再走系统分享面板）
   
   # 工具
