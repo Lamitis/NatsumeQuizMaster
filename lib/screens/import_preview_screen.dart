@@ -80,7 +80,8 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
         return Scaffold(
           backgroundColor: ac.background,
           appBar: AppBar(
-            title: Text('预览: ${appState.previewBankName}'),
+            title: Text('预览: ${appState.previewBankName}'
+                '${appState.previewQueue.isNotEmpty ? '（还有 ${appState.previewQueue.length} 份待预览）' : ''}'),
             elevation: 0,
             backgroundColor: ac.navBar,
             foregroundColor: Theme.of(context).appBarTheme.foregroundColor,
@@ -91,6 +92,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                     ? null
                     : () async {
                         final nav = Navigator.of(context);
+                        final messenger = ScaffoldMessenger.of(context);
                         final discard = await NatsumeDialog.show<bool>(
                           context,
                           title: '放弃本次导入？',
@@ -111,7 +113,20 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                           ],
                         );
                         if (discard != true || !mounted) return;
-                        appState.clearPreview();
+                        // 放弃当前这份；批量导入时若有排队文档就接着预览下一份
+                        final hasNext = appState.clearPreview();
+                        if (hasNext) {
+                          setState(() {
+                            _pendingDeletes.clear();
+                            _filter = _PreviewFilter.all;
+                            _confirmError = null;
+                          });
+                          messenger.showSnackBar(
+                            const SnackBar(
+                                content: Text('已放弃这一份，接着预览下一份')),
+                          );
+                          return;
+                        }
                         // v1.0.2 修复：放弃后返回上一页（此前只清数据，停留在死页面）
                         nav.pop();
                       },
@@ -480,6 +495,15 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
         content: Text(appState.importStatus),
         backgroundColor: ac.success,
       ));
+      // 批量导入：还有排队文档就留在本页接着预览下一份（不打断用户）
+      if (appState.previewQuestions.isNotEmpty) {
+        setState(() {
+          _pendingDeletes.clear();
+          _filter = _PreviewFilter.all;
+          _confirmError = null;
+        });
+        return;
+      }
       nav.popUntil((route) => route.isFirst);
     } catch (error) {
       if (!mounted) return;

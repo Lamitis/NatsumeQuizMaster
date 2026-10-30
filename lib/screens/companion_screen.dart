@@ -5,13 +5,15 @@ import 'package:provider/provider.dart';
 
 import '../models/companion.dart';
 import '../models/companion_memory.dart';
+import '../models/companion_settings.dart';
+import '../models/plugin_sync_scope.dart';
 import '../services/ai_service.dart';
 import '../services/app_state.dart';
 import '../services/companion/companion_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
-import '../widgets/companion/companion_avatar.dart';
+import '../widgets/companion/companion_avatar_view.dart';
 import '../widgets/kit/natsume_kit.dart';
 import 'companion_settings_screen.dart';
 
@@ -24,7 +26,7 @@ import 'companion_settings_screen.dart';
 ///    本机统计，AI 只被允许复述这些数字（`CompanionService.buildPrompt`），
 ///    杜绝「bot 夸你连了 30 天、首页显示 2 天」这种幻觉型鼓励；
 /// 2. **没配 API Key 也能用**：脚本台词 + 关键词兜底永远在线，AI 只是增强；
-/// 3. **同步边界说清楚**：好感度与聊天只存本机，页头直接挂「无法同步」，
+/// 3. **同步边界说清楚**：人设与记忆可同步（设置可关），API Key 与好感度只留本机，
 ///    与双链笔记同一口径。
 class CompanionScreen extends StatefulWidget {
   const CompanionScreen({super.key});
@@ -40,6 +42,10 @@ class _CompanionScreenState extends State<CompanionScreen> {
   CompanionSnapshot _snapshot = CompanionSnapshot.empty;
   CompanionState _state = CompanionState.empty;
   CompanionMood _mood = CompanionMood.idle;
+
+  /// 助教设置（v1.35：形象也来自这里，改完设置回来自动刷新）
+  CompanionSettings _settings = CompanionSettings.defaults;
+
   final List<_ChatMessage> _messages = [];
 
   /// v1.33 记忆：最近 40 轮 + 客观摘要，进入页面时回填到最后几条
@@ -88,6 +94,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
       _mood = line.mood;
       _loading = false;
       _memory = memory;
+      _settings = settings;
       _messages.clear();
       if (settings.memoryEnabled && memory.turns.isNotEmpty) {
         // 回填历史：用户一进来看到的是「上次聊到哪」，不是又一句开场白
@@ -241,6 +248,9 @@ class _CompanionScreenState extends State<CompanionScreen> {
     final settings = app.companionSettings;
     final botName = settings.displayName;
     final service = CompanionService.instance;
+    // v1.35：人设与记忆可同步（Key / 好感度不同步），标签跟着开关走
+    final companionSyncOn =
+        app.isPluginSyncEnabled(PluginSyncScope.companionPluginId);
 
     return Scaffold(
       backgroundColor: ac.background,
@@ -286,7 +296,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
                     padding: const EdgeInsets.all(NatsumeSpace.sm),
                     child: Row(
                       children: [
-                        CompanionAvatar(mood: _mood, size: 64),
+                        CompanionAvatarView(
+                            settings: _settings, mood: _mood, size: 64),
                         const SizedBox(width: NatsumeSpace.sm),
                         Expanded(
                           child: Column(
@@ -305,9 +316,13 @@ class _CompanionScreenState extends State<CompanionScreen> {
                                     ),
                                   ),
                                   const SizedBox(width: NatsumeSpace.xs),
-                                  // 插件数据不进同步清单：页内也要写明
-                                  const NatsumeTag('无法同步',
-                                      tone: NatsumeTagTone.warning),
+                                  // 同步边界：v1.35 起人设/记忆可同步，Key 与好感度仍本机
+                                  NatsumeTag(
+                                    companionSyncOn ? '人设可同步' : '仅本机',
+                                    tone: companionSyncOn
+                                        ? NatsumeTagTone.success
+                                        : NatsumeTagTone.warning,
+                                  ),
                                 ],
                               ),
                               const SizedBox(height: NatsumeSpace.xxs),
@@ -367,7 +382,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
                   const SizedBox(height: NatsumeSpace.md),
                   // ── 对话气泡 ──
                   for (final m in _messages) ...[
-                    _Bubble(message: m),
+                    _Bubble(message: m, settings: settings),
                     const SizedBox(height: NatsumeSpace.xs),
                   ],
                   if (_replying)
@@ -445,9 +460,12 @@ class _ChatMessage {
 
 /// 对话气泡：bot 左对齐带小头像，用户右对齐带强调底。
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message});
+  const _Bubble({required this.message, required this.settings});
 
   final _ChatMessage message;
+
+  /// 气泡头像要跟「助教形象」设置一致（v1.35）
+  final CompanionSettings settings;
 
   @override
   Widget build(BuildContext context) {
@@ -478,7 +496,7 @@ class _Bubble extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (!isUser) ...[
-          const CompanionAvatar(size: 28),
+          CompanionAvatarView(settings: settings, size: 28),
           const SizedBox(width: NatsumeSpace.xs),
         ],
         Flexible(

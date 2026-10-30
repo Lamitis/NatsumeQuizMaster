@@ -94,7 +94,7 @@ void main() {
     return appState;
   }
 
-  testWidgets('笔记页：按题库名称分组 + 顶部明示无法同步', (tester) async {
+  testWidgets('笔记页：按题库名称分组 + 顶部显示同步状态', (tester) async {
     setSurface(tester);
     final appState = await seed(tester);
     await tester.pumpWidget(host(appState, const NotesScreen()));
@@ -105,8 +105,8 @@ void main() {
     expect(find.text(NotesService.ungroupedName), findsOneWidget);
     expect(find.text('缺铁性贫血'), findsOneWidget);
     expect(find.text('游离笔记'), findsOneWidget);
-    // 同步边界必须在页面上看得见
-    expect(find.text('无法同步'), findsOneWidget);
+    // 同步状态必须在页面上看得见（v1.35：默认开着 → 显示「随局域网同步」）
+    expect(find.text('随局域网同步'), findsOneWidget);
     expect(find.textContaining(NotesService.syncNotice), findsOneWidget);
 
     await teardownTree(tester);
@@ -137,7 +137,7 @@ void main() {
     await settleFrames(tester);
 
     expect(find.text('双链笔记'), findsOneWidget);
-    expect(find.textContaining('无法同步'), findsWidgets);
+    expect(find.textContaining('可随局域网同步'), findsWidgets);
 
     await tester.runAsync(() => appState.setNotesPluginEnabled(false));
     await tester.pump();

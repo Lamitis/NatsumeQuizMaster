@@ -1,5 +1,6 @@
 import '../services/key_crypto.dart';
 import 'app_settings.dart';
+import 'companion_avatar.dart';
 
 /// 陪伴插件的人格语气（v1.33 可配置人设）。
 ///
@@ -76,6 +77,7 @@ class CompanionSettings {
   const CompanionSettings({
     this.overlayEnabled = true,
     this.bubbleMinutes = 10,
+    this.avatar = CompanionAvatarOption.defaultId,
     this.tone = CompanionTone.gentle,
     this.botName = defaultBotName,
     this.customPersona = '',
@@ -109,6 +111,9 @@ class CompanionSettings {
 
   /// 气泡提醒间隔（分钟）；0 = 不再主动冒泡，只能点开头像对话
   final int bubbleMinutes;
+
+  /// 助教形象 id（见 [CompanionAvatarOption]；默认 = 跟 App 图标一致）
+  final String avatar;
 
   /// 人格语气
   final CompanionTone tone;
@@ -169,6 +174,12 @@ class CompanionSettings {
     return raw.length > maxNameChars ? raw.substring(0, maxNameChars) : raw;
   }
 
+  /// 当前形象选项（未知 id 已由 [CompanionAvatarOption.byId] 兜底）
+  CompanionAvatarOption get avatarOption => CompanionAvatarOption.byId(avatar);
+
+  /// 当前形象资产路径（浮层、对话页、气泡共用同一张）
+  String get avatarAsset => avatarOption.asset;
+
   /// 把「陪伴用的接口配置」套到 App 设置上。
   ///
   /// 关键点：以用户的 App 设置为底做 copyWith，而不是从零新建 AppSettings——
@@ -189,6 +200,7 @@ class CompanionSettings {
   CompanionSettings copyWith({
     bool? overlayEnabled,
     int? bubbleMinutes,
+    String? avatar,
     CompanionTone? tone,
     String? botName,
     String? customPersona,
@@ -207,6 +219,7 @@ class CompanionSettings {
     return CompanionSettings(
       overlayEnabled: overlayEnabled ?? this.overlayEnabled,
       bubbleMinutes: bubbleMinutes ?? this.bubbleMinutes,
+      avatar: avatar ?? this.avatar,
       tone: tone ?? this.tone,
       botName: botName ?? this.botName,
       customPersona: customPersona ?? this.customPersona,
@@ -231,6 +244,7 @@ class CompanionSettings {
     return {
       'overlay': overlayEnabled,
       'bubble_minutes': bubbleMinutes,
+      'avatar': avatarOption.id,
       'tone': tone.name,
       'bot_name': displayName,
       'custom_persona': customPersona,
@@ -292,6 +306,10 @@ class CompanionSettings {
       overlayEnabled: flag(json['overlay'], true),
       // 频率只允许白名单值：手改 JSON 写个 0.5 分钟会把气泡刷成弹幕
       bubbleMinutes: bubbleMinuteOptions.contains(minutes) ? minutes : 10,
+      // 形象同样只认白名单：被删掉的选项静默回落默认项，不挡住整页设置
+      avatar: CompanionAvatarOption.isValidId(str(json['avatar']))
+          ? str(json['avatar'])
+          : CompanionAvatarOption.defaultId,
       tone: pick(CompanionTone.values, json['tone'], CompanionTone.gentle),
       botName: name.isEmpty
           ? defaultBotName

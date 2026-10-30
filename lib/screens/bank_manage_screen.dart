@@ -207,6 +207,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
             bank: bank,
             isSelected: isSelected,
             onTap: () => appState.toggleBankSelection(bank.id!),
+            onRename: () => _renameBank(appState, bank),
             onMove: () => _moveBankToCategory(appState, bank),
             onDelete: () => _confirmDelete(context, appState, bank),
             onExport: () => _exportBank(bank),
@@ -314,6 +315,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
   Future<String?> _promptCategoryName({
     required String title,
     String initial = '',
+    String label = '分类名称',
   }) async {
     final ctrl = TextEditingController(text: initial);
     final result = await showDialog<String>(
@@ -324,9 +326,9 @@ class _BankManageScreenState extends State<BankManageScreen> {
           controller: ctrl,
           autofocus: true,
           maxLength: 24,
-          decoration: const InputDecoration(
-            labelText: '分类名称',
-            border: OutlineInputBorder(),
+          decoration: InputDecoration(
+            labelText: label,
+            border: const OutlineInputBorder(),
           ),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
@@ -357,6 +359,19 @@ class _BankManageScreenState extends State<BankManageScreen> {
         await _promptCategoryName(title: '重命名分类', initial: category.name);
     if (name == null) return;
     await appState.renameBankCategory(category.id!, name);
+  }
+
+  /// 题库改名（导入后叫「新建题库」之类的名字随时可改）。
+  /// 空名 / 重名由应用层拒绝，这里把原因提示出来，不静默失败。
+  Future<void> _renameBank(AppState appState, QuestionBank bank) async {
+    final name = await _promptCategoryName(
+      title: '重命名题库',
+      initial: bank.name,
+      label: '题库名称',
+    );
+    if (name == null) return;
+    final error = await appState.renameBank(bank.id!, name);
+    if (error != null) _snack(error);
   }
 
   Future<void> _deleteCategory(AppState appState, BankCategory category) async {
@@ -675,6 +690,7 @@ class _BankCard extends StatelessWidget {
   final QuestionBank bank;
   final bool isSelected;
   final VoidCallback onTap;
+  final VoidCallback onRename;
   final VoidCallback onMove;
   final VoidCallback onDelete;
   final VoidCallback onExport;
@@ -684,6 +700,7 @@ class _BankCard extends StatelessWidget {
     required this.bank,
     required this.isSelected,
     required this.onTap,
+    required this.onRename,
     required this.onMove,
     required this.onDelete,
     required this.onExport,
@@ -743,15 +760,6 @@ class _BankCard extends StatelessWidget {
                   ),
                 ),
                 IconButton(
-                  tooltip: '移动到分类',
-                  icon: Icon(Icons.drive_file_move_outline,
-                      color: ac.textSecondary, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 40, minHeight: 40),
-                  onPressed: onMove,
-                ),
-                IconButton(
                   tooltip: '查看 / 编辑题目',
                   icon: Icon(Icons.edit_note, color: ac.textSecondary, size: 20),
                   padding: EdgeInsets.zero,
@@ -759,24 +767,29 @@ class _BankCard extends StatelessWidget {
                       const BoxConstraints(minWidth: 40, minHeight: 40),
                   onPressed: onOpenQuestions,
                 ),
-                IconButton(
-                  tooltip: '导出题库',
-                  icon: Icon(Icons.file_download_outlined,
-                      color: ac.textSecondary, size: 20),
-                  padding: EdgeInsets.zero,
-                  // 触达目标 ≥40×40（与预览页同一图标按钮口径）
-                  constraints:
-                      const BoxConstraints(minWidth: 40, minHeight: 40),
-                  onPressed: onExport,
-                ),
-                IconButton(
-                  tooltip: '删除题库',
-                  icon: Icon(Icons.delete_outline,
-                      color: ac.textSecondary, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 40, minHeight: 40),
-                  onPressed: onDelete,
+                // 改名 / 移动 / 导出 / 删除收进「更多」：题库卡在窄屏上
+                // 塞四个图标按钮会把题库名挤成一两个字
+                PopupMenuButton<String>(
+                  tooltip: '题库操作',
+                  icon: Icon(Icons.more_vert, color: ac.textSecondary, size: 20),
+                  onSelected: (value) {
+                    switch (value) {
+                      case 'rename':
+                        onRename();
+                      case 'move':
+                        onMove();
+                      case 'export':
+                        onExport();
+                      case 'delete':
+                        onDelete();
+                    }
+                  },
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(value: 'rename', child: Text('重命名')),
+                    PopupMenuItem(value: 'move', child: Text('移动到分类')),
+                    PopupMenuItem(value: 'export', child: Text('导出题库')),
+                    PopupMenuItem(value: 'delete', child: Text('删除题库')),
+                  ],
                 ),
               ],
             ),

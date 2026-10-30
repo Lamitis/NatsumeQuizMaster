@@ -397,7 +397,8 @@ class _CompanionHostState extends State<CompanionHost> {
           ),
           child: ClipOval(
             child: Image.asset(
-              CompanionService.avatarAsset,
+              // v1.35：用户在助教设置里选的角色图（默认仍是 App 图标）
+              settings.avatarAsset,
               fit: BoxFit.cover,
               // 图标缺失也不能让浮层崩：退回 v1.32 的自绘头像
               errorBuilder: (_, __, ___) => CompanionAvatar(

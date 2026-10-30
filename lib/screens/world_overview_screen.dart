@@ -15,6 +15,7 @@ import '../services/integrity_service.dart';
 import '../services/knowledge_base/kb_service.dart';
 import '../services/plugins/builtin_plugins.dart';
 import '../services/plugins/plugin_loader.dart';
+import '../services/plugins/plugin_registry.dart';
 import '../services/plugins/world_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
@@ -45,14 +46,34 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   List<WorldInfo> _worlds = [];
   List<PluginInfo> _plugins = [];
 
+  /// 第三方插件表（v1.35 · Natsume-Registry）。
+  ///
+  /// [registry] 为 null 表示**还没成功拉到过**；拉取失败时保留上一次的快照，
+  /// 只在 [_registryError] 里写一句「这次没拉到」，绝不把已有列表清空。
+  RegistrySnapshot? _registry;
+  bool _registryLoading = false;
+  String? _registryError;
+
+  /// 正在安装的插件 id（按钮转圈，防重复点）
+  final Set<String> _installing = {};
+
+  /// 已安装插件（id → 行），用于「已安装 / 可更新」
+  Map<String, PluginInfo> _installed = {};
+
   @override
   void initState() {
     super.initState();
-    if (widget.autoload) _reload();
+    if (widget.autoload) {
+      _reload();
+      _loadRegistry();
+    }
   }
 
   /// 供 MainShell 切 Tab 时调用（与 StatsTabState.refresh 同口径）。
-  Future<void> refresh() => _reload();
+  Future<void> refresh() {
+    _loadRegistry();
+    return _reload();
+  }
 
   Future<void> _reload() async {
     final worlds = await _db.getAllWorlds();
@@ -61,7 +82,37 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
     setState(() {
       _worlds = worlds;
       _plugins = plugins;
+      _installed = {for (final p in plugins) p.id: p};
     });
+  }
+
+  /// 拉插件登记表：失败只提示，不清空 [_registry]。
+  Future<void> _loadRegistry() async {
+    if (_registryLoading) return;
+    setState(() {
+      _registryLoading = true;
+      _registryError = null;
+    });
+    try {
+      final snapshot = await PluginRegistryService.instance.fetch();
+      if (!mounted) return;
+      setState(() {
+        _registry = snapshot;
+        _registryLoading = false;
+      });
+    } on PluginRegistryException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _registryLoading = false;
+        _registryError = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _registryLoading = false;
+        _registryError = '插件表读取失败：$e';
+      });
+    }
   }
 
   @override
@@ -222,8 +273,173 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
                 ),
                 const SizedBox(height: NatsumeSpace.xs),
               ],
+            const SizedBox(height: NatsumeSpace.lg),
+            _registrySection(ac),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 插件生态：登记表条目 + 免责声明 + 安装/更新入口。
+  Widget _registrySection(AppThemeColors ac) {
+    final snapshot = _registry;
+    final entries = snapshot?.plugins ?? const <RegistryPlugin>[];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        NatsumeSectionHeader(
+          title: '插件生态',
+          subtitle: 'Natsume-Registry：只登记信息，不审核、不托管插件文件',
+          trailing: _registryLoading
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : NatsumeButton(
+                  label: '刷新',
+                  dense: true,
+                  kind: NatsumeButtonKind.ghost,
+                  icon: Icons.refresh_rounded,
+                  onPressed: _loadRegistry,
+                ),
+        ),
+        const SizedBox(height: NatsumeSpace.sm),
+        // disclaimer 必须能看见（用户要求：列表旁边显示，或安装前弹一次）
+        if (snapshot != null && snapshot.disclaimer.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: NatsumeSpace.xs),
+            child: Text(
+              snapshot.disclaimer,
+              style: NatsumeType.microStyle
+                  .copyWith(color: ac.textTertiary, height: 1.5),
+            ),
+          ),
+        if (_registryError != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: NatsumeSpace.xs),
+            child: Row(
+              children: [
+                const NatsumeTag('本次没拉到', tone: NatsumeTagTone.warning),
+                const SizedBox(width: NatsumeSpace.xs),
+                Expanded(
+                  child: Text(
+                    // 拉表失败只提示，列表保持上一次的内容
+                    '$_registryError${entries.isEmpty ? '' : '（下面是上次的结果）'}',
+                    style: NatsumeType.microStyle
+                        .copyWith(color: ac.textSecondary, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        if (snapshot == null && _registryLoading)
+          NatsumeEmptyState(
+            icon: Icons.cloud_download_outlined,
+            title: '正在读取插件表',
+            description: '首次读取需要联网；失败时不会影响已安装插件',
+          )
+        else if (entries.isEmpty)
+          NatsumeEmptyState(
+            icon: Icons.storefront_outlined,
+            title: '登记表里还没有插件',
+            description: '表是空的（count = 0），不是加载失败；'
+                '作者提交 PR 后会自动进表',
+          )
+        else
+          for (final entry in entries) ...[
+            _registryCard(ac, entry),
+            const SizedBox(height: NatsumeSpace.xs),
+          ],
+        if (snapshot != null && snapshot.generatedAt.isNotEmpty)
+          Text(
+            '表生成于 ${snapshot.generatedAt}'
+            '${snapshot.droppedCount > 0 ? ' · 丢弃 ${snapshot.droppedCount} 条不合规登记' : ''}',
+            style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+          ),
+      ],
+    );
+  }
+
+  Widget _registryCard(AppThemeColors ac, RegistryPlugin entry) {
+    final installed = _installed[entry.id];
+    final action = PluginRegistryService.actionFor(entry, installed);
+    final busy = _installing.contains(entry.id);
+    return NatsumeSurface(
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(entry.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: NatsumeType.h3Style.copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: ac.textPrimary)),
+                    ),
+                    const SizedBox(width: NatsumeSpace.xs),
+                    Text('v${entry.version}',
+                        style: NatsumeType.microStyle
+                            .copyWith(color: ac.textTertiary)),
+                    if (installed != null) ...[
+                      const SizedBox(width: NatsumeSpace.xs),
+                      NatsumeTag(
+                        action == 'update' ? '可更新' : '已安装',
+                        tone: action == 'update'
+                            ? NatsumeTagTone.warning
+                            : NatsumeTagTone.success,
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text('by ${entry.author}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NatsumeType.microStyle
+                        .copyWith(color: ac.textTertiary)),
+                const SizedBox(height: 2),
+                Text(entry.description,
+                    style: NatsumeType.captionStyle
+                        .copyWith(color: ac.textSecondary)),
+              ],
+            ),
+          ),
+          const SizedBox(width: NatsumeSpace.xs),
+          if (busy)
+            const Padding(
+              padding: EdgeInsets.all(NatsumeSpace.xs),
+              child: SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else if (action == 'installed')
+            Padding(
+              padding: const EdgeInsets.only(top: NatsumeSpace.xxs),
+              child: Text('已安装',
+                  style:
+                      NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+            )
+          else
+            NatsumeButton(
+              label: action == 'update' ? '更新' : '安装',
+              dense: true,
+              kind: action == 'update'
+                  ? NatsumeButtonKind.secondary
+                  : NatsumeButtonKind.primary,
+              onPressed: () => _installRegistryPlugin(entry),
+            ),
+        ],
       ),
     );
   }
@@ -249,6 +465,123 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   Future<void> _deleteWorld(WorldInfo w) async {
     await _db.deleteWorld(w.id);
     _reload();
+  }
+
+  // ── 插件生态（Natsume-Registry） ──
+
+  /// 安装前的一次性来源说明。返回 true 才继续。
+  Future<bool> _ensureDisclaimer(RegistrySnapshot snapshot) async {
+    if (await PluginRegistryService.instance.hasAcceptedDisclaimer()) {
+      return true;
+    }
+    if (!mounted) return false;
+    final text = snapshot.disclaimer.isEmpty
+        ? '本表只登记插件信息，不审核、不托管插件文件，也不保证插件安全。'
+            '插件由各自作者开发和发布，安装与使用风险自负。'
+        : snapshot.disclaimer;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('插件来源说明'),
+        content: SingleChildScrollView(
+          child: Text('$text\n\n'
+              '客户端只会做两件机械校验：下载地址必须属于 GitHub 系域名、'
+              '下载后重算 sha256 与登记表一致。校验通过不代表代码安全，'
+              '装不装由你决定（不会自动安装、不会静默升级）。'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('先不装')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('我已经了解')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await PluginRegistryService.instance.acceptDisclaimer();
+    }
+    return ok == true;
+  }
+
+  Future<void> _installRegistryPlugin(RegistryPlugin entry) async {
+    final snapshot = _registry;
+    if (snapshot == null) return;
+    final installed = _installed[entry.id];
+    final action = PluginRegistryService.actionFor(entry, installed);
+
+    if (!await _ensureDisclaimer(snapshot)) return;
+    if (!mounted) return;
+
+    // 安装/更新都要用户点确认：登记表证明不了代码安全
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(action == 'update' ? '更新插件「${entry.name}」？' : '安装插件「${entry.name}」？'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('作者：${entry.author}'),
+              Text('登记版本：${entry.version}'),
+              if (installed != null) Text('本机版本：${installed.version}'),
+              const SizedBox(height: NatsumeSpace.xs),
+              Text(entry.description),
+              const SizedBox(height: NatsumeSpace.sm),
+              Text('下载地址（仅 GitHub 域名）',
+                  style: NatsumeType.microStyle.copyWith(
+                      color: AppThemeColors.of(ctx).textTertiary)),
+              Text(entry.downloadUrl,
+                  style: NatsumeType.microStyle.copyWith(
+                      color: AppThemeColors.of(ctx).textSecondary)),
+              const SizedBox(height: NatsumeSpace.xs),
+              Text('sha256：${entry.sha256}',
+                  style: NatsumeType.microStyle.copyWith(
+                      color: AppThemeColors.of(ctx).textTertiary)),
+              const SizedBox(height: NatsumeSpace.sm),
+              Text('安装时会在本机重算 sha256 比对，不一致直接拒绝；'
+                  '插件是声明式包，不执行任意第三方代码。',
+                  style: NatsumeType.microStyle.copyWith(
+                      color: AppThemeColors.of(ctx).danger, height: 1.5)),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(action == 'update' ? '更新' : '安装')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _installing.add(entry.id));
+    try {
+      final result = await PluginRegistryService.instance.install(entry);
+      if (!mounted) return;
+      await _reload();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(result.updated
+            ? '已更新「${result.entry.name}」到 v${result.loaded.manifest.version}'
+            : '已安装「${result.entry.name}」v${result.loaded.manifest.version}'),
+      ));
+    } on PluginRegistryException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('安装失败：$e')));
+    } finally {
+      if (mounted) setState(() => _installing.remove(entry.id));
+    }
   }
 
   Future<void> _importPlugin() async {

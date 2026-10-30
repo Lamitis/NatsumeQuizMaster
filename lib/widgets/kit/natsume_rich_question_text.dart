@@ -70,6 +70,14 @@ class NatsumeRichQuestionText extends StatelessWidget {
       textBuilder?.call(context, value) ?? Text(value, style: style);
 }
 
+/// 题干内嵌配图的缩略尺寸：**约 3 行正文 × 3 行正文**。
+///
+/// 图片仍是题目内容的一部分（就出现在占位符处的阅读位置），但默认显示
+/// 不该由一张图把整道题顶出屏幕——先给一个 3 行字见方的小缩略图，
+/// 点击再全屏放大（[openQuestionImageViewer]）。
+const double kQuestionImageThumbSize =
+    NatsumeType.body * NatsumeType.bodyHeight * 3;
+
 class _QuestionImageBlock extends StatelessWidget {
   const _QuestionImageBlock(
       {required this.slot, required this.images, this.heroGroup});
@@ -93,18 +101,29 @@ class _QuestionImageBlock extends StatelessWidget {
     }
     if (img == null || img.content.isEmpty) return _missing(ac);
 
-    return GestureDetector(
-      onTap: () => openQuestionImageViewer(context, image: img!, heroTag: _tag),
-      child: Hero(
-        tag: _tag,
-        child: ClipRRect(
-          borderRadius: NatsumeRadius.cardBorder,
-          child: Image.memory(
-            img.content,
-            fit: BoxFit.contain,
-            width: double.infinity,
-            gaplessPlayback: true,
-            errorBuilder: (_, __, ___) => _missing(ac),
+    return Semantics(
+      button: true,
+      label: '题目配图，点击放大',
+      child: GestureDetector(
+        onTap: () => openQuestionImageViewer(context, image: img!, heroTag: _tag),
+        child: Hero(
+          tag: _tag,
+          // 固定 3 行字见方：图片再长也不会把整题铺满一屏
+          child: Container(
+            width: kQuestionImageThumbSize,
+            height: kQuestionImageThumbSize,
+            decoration: BoxDecoration(
+              color: ac.surfaceAlt,
+              border: Border.all(color: ac.border, width: NatsumeLine.width),
+              borderRadius: NatsumeRadius.cardBorder,
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Image.memory(
+              img.content,
+              fit: BoxFit.contain,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => _missing(ac),
+            ),
           ),
         ),
       ),

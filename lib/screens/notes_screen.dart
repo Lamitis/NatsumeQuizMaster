@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/note.dart';
+import '../models/plugin_sync_scope.dart';
 import '../services/app_state.dart';
 import '../services/notes/notes_service.dart';
 import '../services/theme_service.dart';
@@ -20,7 +21,8 @@ import 'note_editor_screen.dart';
 /// - 刷题看解析时也能随手写（入口在答题页解析卡）。
 ///
 /// 同步边界：笔记不参与局域网同步（插件数据不在同步导出清单里），
-/// 页面顶部与插件区都明示「无法同步」，避免换机后发现笔记没有。
+/// 页面顶部写着同步状态（v1.35：跟着「插件内容同步」开关走，开 / 关都明说），
+/// 避免换机后发现笔记没有。
 class NotesScreen extends StatefulWidget {
   const NotesScreen({super.key});
 
@@ -96,7 +98,11 @@ class _NotesScreenState extends State<NotesScreen>
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
-    final enabled = context.watch<AppState>().notesPluginEnabled;
+    final appState = context.watch<AppState>();
+    final enabled = appState.notesPluginEnabled;
+    // v1.35：同步开关决定顶部提示（默认开）
+    final syncOn =
+        appState.isPluginSyncEnabled(PluginSyncScope.notesPluginId);
     return Scaffold(
       backgroundColor: ac.background,
       appBar: AppBar(
@@ -121,7 +127,7 @@ class _NotesScreenState extends State<NotesScreen>
         child: Column(
           children: [
             if (!enabled) _buildDisabledBanner(ac),
-            if (!NotesService.syncable) _buildSyncBanner(ac),
+            _buildSyncBanner(ac, syncOn),
             Expanded(
               child: TabBarView(
                 controller: _tabs,
@@ -144,8 +150,8 @@ class _NotesScreenState extends State<NotesScreen>
     );
   }
 
-  /// 「无法同步」提示：插件数据不在同步清单里（这是事实，不能省）
-  Widget _buildSyncBanner(AppThemeColors ac) {
+  /// 同步提示（v1.35）：开 / 关都说清楚，不能一律写「无法同步」
+  Widget _buildSyncBanner(AppThemeColors ac, bool syncOn) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
           NatsumeSpace.md, NatsumeSpace.sm, NatsumeSpace.md, 0),
@@ -155,15 +161,21 @@ class _NotesScreenState extends State<NotesScreen>
             horizontal: NatsumeSpace.sm, vertical: NatsumeSpace.xs),
         child: Row(
           children: [
-            Icon(Icons.cloud_off_outlined, size: 16, color: ac.warning),
+            Icon(syncOn ? Icons.cloud_done_outlined : Icons.cloud_off_outlined,
+                size: 16, color: syncOn ? ac.success : ac.warning),
             const SizedBox(width: NatsumeSpace.xs),
             Expanded(
               child: Text(
-                '${NotesService.syncNotice}（换设备不跟随，请用「备份与恢复」）',
+                syncOn
+                    ? NotesService.syncNotice
+                    : '已关闭笔记同步：换设备不跟随，请用「备份与恢复」',
                 style: NatsumeType.microStyle.copyWith(color: ac.textSecondary),
               ),
             ),
-            const NatsumeTag('无法同步', tone: NatsumeTagTone.warning),
+            NatsumeTag(
+              syncOn ? '随局域网同步' : '仅本机',
+              tone: syncOn ? NatsumeTagTone.success : NatsumeTagTone.warning,
+            ),
           ],
         ),
       ),

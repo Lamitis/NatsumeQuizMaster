@@ -219,19 +219,20 @@ void main() {
       DatabaseService.overrideDbPath = null;
     });
 
-    test('插件清单：随 App 出厂、声明不可同步、注明取形来源', () {
+    test('插件清单：随 App 出厂、声明可同步范围、注明取形来源', () {
       expect(BuiltinPlugins.companionId, 'natsume.companion');
       // 出厂三件套：双链笔记 / 小鲸助教 / 日程待办（v1.34）
       expect(BuiltinPlugins.all.length, 3);
-      expect(BuiltinPlugins.companion.syncable, isFalse);
-      expect(BuiltinPlugins.companion.manifestMap['syncable'], isFalse);
+      // v1.35：人设与记忆可随局域网同步（Key / 好感度仍只留本机）
+      expect(BuiltinPlugins.companion.syncable, isTrue);
+      expect(BuiltinPlugins.companion.manifestMap['syncable'], isTrue);
       expect(BuiltinPlugins.companion.license, 'AGPL-3.0');
       expect(BuiltinPlugins.companion.upstream, contains('Coopanion'));
-      expect(CompanionService.syncable, isFalse);
-      // 日程插件同样只在本地（schedule_items 表），清单也得写清楚
+      expect(CompanionService.syncable, isTrue);
+      // 日程插件同样可同步（v17 起 schedule_items 带 uid）
       expect(BuiltinPlugins.scheduleId, 'natsume.schedule');
-      expect(BuiltinPlugins.schedule.syncable, isFalse);
-      expect(BuiltinPlugins.schedule.manifestMap['syncable'], isFalse);
+      expect(BuiltinPlugins.schedule.syncable, isTrue);
+      expect(BuiltinPlugins.schedule.manifestMap['syncable'], isTrue);
       expect(BuiltinPlugins.byId(BuiltinPlugins.scheduleId), isNotNull);
       // 素材边界：上游鲸鱼娘贴图不在 AGPL 范围内，本工程不得携带其图像
       expect(Directory('assets/companion').existsSync(), isFalse,

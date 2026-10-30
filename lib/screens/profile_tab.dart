@@ -193,7 +193,7 @@ class _ProfileTabState extends State<ProfileTab> {
                 icon: Icons.sticky_note_2_outlined,
                 title: '双链笔记',
                 // 同步边界写在入口上：插件数据不入同步清单，用户点进去前就该知道
-                subtitle: '刷题随手记 · [[双链]] 与 Graph · 本机保存（无法同步）',
+                subtitle: '刷题随手记 · [[双链]] 与 Graph · 可随局域网同步',
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const NotesScreen()),
@@ -206,7 +206,7 @@ class _ProfileTabState extends State<ProfileTab> {
               _EntryTile(
                 icon: Icons.pets_outlined,
                 title: '小鲸助教',
-                subtitle: '鲸鱼娘陪伴 · 按连胜与正确率打气 · 本机保存（无法同步）',
+                subtitle: '鲸鱼娘陪伴 · 按连胜与正确率打气 · 人设与记忆可同步',
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const CompanionScreen()),
@@ -219,7 +219,7 @@ class _ProfileTabState extends State<ProfileTab> {
               _EntryTile(
                 icon: Icons.event_note_outlined,
                 title: '日程待办',
-                subtitle: '复习计划拆成待办 · 按日排期与勾选 · 本机保存（无法同步）',
+                subtitle: '复习计划拆成待办 · 按日排期与勾选 · 可随局域网同步',
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const ScheduleScreen()),

@@ -1,7 +1,7 @@
 name: natsume_quiz_master
 description: NatsumeQuizMaster —— 本地优先、知识库约束 AI、可插件化的备考刷题工具（Android / Windows）
 publish_to: 'none'
-version: 1.34.0+27
+version: 1.35.0+28
 
 environment:
   # 标准工具链：Flutter 3.47.8 / Dart 3.13.7（见 .fvmrc），依赖锁定 pdfrx 1.3.5
@@ -77,6 +77,10 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+    # 官方插件资产（v1.35）：目前是陪伴插件的三张助教形象。
+    # 只注册 avatars/（PNG，App 渲染用），同目录 masters/ 里的 .ico 母版
+    # 刻意不注册——Flutter 的目录条目不含子目录，母版因此不进包体。
+    - assets/plugins/official/companion/avatars/
   # v1.27 视觉优化：内置 MiSans（小米开源字体），PC/安卓跨端字形一致，
   # 解决默认微软雅黑小字号发虚观感。只带 Regular + Semibold 两字重（省包体，
   # w500 自动回落 Regular，观感几乎无差）

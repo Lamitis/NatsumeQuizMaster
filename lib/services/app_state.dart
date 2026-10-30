@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../models/plugin_sync_scope.dart';
 import '../models/question.dart';
 import '../models/question_edit.dart';
 import '../models/question_image.dart';
+import '../models/preview_batch.dart';
 import '../models/question_bank.dart';
 import '../models/bank_category.dart';
 import '../models/quiz_session.dart';
@@ -226,11 +228,74 @@ class AppState extends ChangeNotifier {
   List<String> _previewParseErrors = [];
   List<String> get previewParseErrors => _previewParseErrors;
 
-  /// 解析文件并在预览中展示（不保存到数据库）
-  Future<void> parseForPreview(List<String> filePaths) async {
+  /// 排队等待确认的预览批次（批量导入多份文档时，后一份解析完先排队，
+  /// 不会把前一份还没确认的结果顶掉）。
+  final List<PreviewBatch> _previewQueue = [];
+
+  /// 排队中的批次（只读快照；含题库名与题数，供 UI 展示「还有 N 份」）
+  List<PreviewBatch> get previewQueue => List.unmodifiable(_previewQueue);
+
+  int get previewQueueLength => _previewQueue.length;
+
+  /// 待确认的题目总数 = 当前预览 + 排队批次
+  int get previewTotalQuestionCount =>
+      _previewQuestions.length +
+      _previewQueue.fold<int>(0, (sum, b) => sum + b.questions.length);
+
+  /// 把一份解析结果放进预览：当前没有待确认内容就直接展示，否则排队。
+  /// 返回 true 表示它成了「当前预览」。
+  bool enqueuePreviewBatch(PreviewBatch batch) {
+    if (_previewQuestions.isEmpty) {
+      _applyPreviewBatch(batch);
+      notifyListeners();
+      return true;
+    }
+    _previewQueue.add(batch);
+    notifyListeners();
+    return false;
+  }
+
+  void _applyPreviewBatch(PreviewBatch batch) {
+    _previewBankName = batch.bankName;
+    _previewQuestions = batch.questions;
+    _previewOrphans = batch.orphans;
+    _previewParseErrors = batch.parseErrors;
+  }
+
+  void _clearCurrentPreview() {
+    _previewBankName = '';
     _previewQuestions = [];
-    _previewParseErrors = [];
     _previewOrphans = {};
+    _previewParseErrors = [];
+  }
+
+  /// 当前预览处理完（确认入库 / 放弃）后接上下一份排队批次。
+  /// 返回 false 表示队列已空、预览区已清空。
+  bool promoteNextPreview() {
+    if (_previewQueue.isEmpty) {
+      _clearCurrentPreview();
+      _importStatus = '';
+      notifyListeners();
+      return false;
+    }
+    _applyPreviewBatch(_previewQueue.removeAt(0));
+    notifyListeners();
+    return true;
+  }
+
+  /// 取消整个导入任务：当前预览与排队批次全部丢弃（不再接下一份）
+  void discardAllPreviews() {
+    _previewQueue.clear();
+    _clearCurrentPreview();
+    notifyListeners();
+  }
+
+  /// 解析文档并在预览中展示（不保存到数据库）。
+  ///
+  /// **批量**：多选 DOCX/PDF 时逐个解析，每份文档各成一个题库批次——
+  /// 当前还没有待确认预览时第一份直接展示，其余进 [previewQueue] 排队。
+  /// 因此既不会「只解析第一个」，也不会把上一份还没确认的解析结果顶掉。
+  Future<void> parseForPreview(List<String> filePaths) async {
     _importProgress = 0;
     _importStatus = '正在整理...';
     notifyListeners();
@@ -255,8 +320,52 @@ class AppState extends ChangeNotifier {
       return;
     }
 
-    final file = files.first;
-    final fileName = file.path.split('/').last.split('\\').last;
+    // 多份文档：总进度按文件数切段，段内仍按 AI 分块推进（进度条不跳变）
+    final outerBase = _bgProgressBase;
+    final outerSpan = _bgProgressSpan;
+    var failed = 0;
+    String? lastError;
+    try {
+      for (var i = 0; i < files.length; i++) {
+        if (files.length > 1) {
+          _importStatus =
+              '正在解析 (${i + 1}/${files.length})：${_fileName(files[i].path)}';
+          notifyListeners();
+        }
+        _bgProgressBase = outerBase + outerSpan * (i / files.length);
+        _bgProgressSpan = outerSpan / files.length;
+        final batch = await _parseFileForPreview(files[i]);
+        if (batch == null) {
+          failed++;
+          lastError = _importStatus;
+          continue;
+        }
+        // 当前没待确认预览 → 直接展示；否则排队等用户确认完前一份
+        enqueuePreviewBatch(batch);
+      }
+    } finally {
+      _bgProgressBase = outerBase;
+      _bgProgressSpan = outerSpan;
+    }
+
+    if (_previewQuestions.isEmpty && _previewQueue.isEmpty) {
+      _importStatus = '解析失败：${lastError ?? '未解析出题目'}';
+      notifyListeners();
+      return;
+    }
+    final total = previewTotalQuestionCount;
+    final batches = _previewQueue.length + 1;
+    _importStatus = '解析完成，共 $total 道题目，请预览确认'
+        '${batches > 1 ? '（$batches 份文档，确认完一份自动接下一份）' : ''}'
+        '${failed > 0 ? '（$failed 份解析失败，已跳过）' : ''}';
+    notifyListeners();
+  }
+
+  /// 解析单个文档 → 预览批次；返回 null 表示这份失败（原因已写进
+  /// [_importStatus]）。
+  Future<PreviewBatch?> _parseFileForPreview(File file) async {
+    final fileName = _fileName(file.path);
+    var bankName = '';
 
     final isPdf = file.path.toLowerCase().endsWith('.pdf');
     String rawText = '';
@@ -264,7 +373,7 @@ class AppState extends ChangeNotifier {
     var scannedPdf = false;
     if (isPdf) {
       // PDF：本地抽图文（图片是题目的一部分，随 {{img:N}} 占位符进解析流）
-      _previewBankName =
+      bankName =
           fileName.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
       _importStatus = '正在提取 PDF 图文...';
       notifyListeners();
@@ -292,7 +401,7 @@ class AppState extends ChangeNotifier {
         if (!e.scanned) {
           _importStatus = '「$fileName」${e.message}';
           notifyListeners();
-          return;
+          return null;
         }
         // 扫描件/图片字：字画在图里、无文字层——改走视觉切题通道
         scannedPdf = true;
@@ -304,14 +413,14 @@ class AppState extends ChangeNotifier {
         _importStatus =
             '「$fileName」是旧版 .doc 格式，不兼容。\n请用 Word 打开 → 文件 → 另存为 → .docx';
         notifyListeners();
-        return;
+        return null;
       }
       if (format != 'docx') {
         _importStatus = '「$fileName」不是有效的 DOCX 文件';
         notifyListeners();
-        return;
+        return null;
       }
-      _previewBankName = fileName.replaceAll(
+      bankName = fileName.replaceAll(
           RegExp(r'\.(docx|doc)$', caseSensitive: false), '');
       rawText = await DocParserService.extractRawText(file.path);
     }
@@ -320,7 +429,7 @@ class AppState extends ChangeNotifier {
     if (scannedPdf) {
       // v1.30.2：扫描件切题抽成独立方法（MinerU 优先 → 端上 OCR → 视觉切题）
       final scannedResult = await _parseScannedPdf(file, fileName);
-      if (scannedResult == null) return; // 失败原因已写进 _importStatus
+      if (scannedResult == null) return null; // 失败原因已写进 _importStatus
       result = scannedResult;
     } else {
       _importStatus = 'AI 解析中...';
@@ -338,19 +447,19 @@ class AppState extends ChangeNotifier {
     // 挂不上的显性进「待指派」，绝不静默丢图
     final materialized =
         materializeQuestionImages(questions: result.questions, pool: imagePool);
-    _previewQuestions = materialized.questions;
-    _previewOrphans = materialized.orphans;
-    _previewParseErrors = result.errors;
 
     // v1.0.2 设计审查修复：失败块显性提示，不再「解析完成，共 0 道题目」假成功
-    if (_previewQuestions.isEmpty && _previewParseErrors.isNotEmpty) {
-      _importStatus = '解析失败：${_previewParseErrors.first}';
+    if (materialized.questions.isEmpty && result.errors.isNotEmpty) {
+      _importStatus = '「$fileName」解析失败：${result.errors.first}';
       notifyListeners();
-      return;
+      return null;
     }
-    _importStatus = '解析完成，共 ${_previewQuestions.length} 道题目，请预览确认'
-        '${_previewParseErrors.isNotEmpty ? '（${_previewParseErrors.length} 个分块失败，已跳过）' : ''}';
-    notifyListeners();
+    return PreviewBatch(
+      bankName: bankName,
+      questions: materialized.questions,
+      orphans: materialized.orphans,
+      parseErrors: result.errors,
+    );
   }
 
   /// 扫描版 PDF 切题（v1.30.2 抽成独立方法）。
@@ -503,10 +612,12 @@ class AppState extends ChangeNotifier {
       rethrow;
     }
 
+    // 当前这份已入库：有排队批次就接上下一份（批量导入），否则清空预览
+    final remaining = _previewQueue.length;
+    promoteNextPreview();
     _importStatus = '导入完成！共 ${questions.length} 道题目'
-        '${renamed ? '（检测到同名题库，已自动命名为「$uniqueName」）' : ''}';
-    _previewQuestions = [];
-    _previewOrphans = {};
+        '${renamed ? '（检测到同名题库，已自动命名为「$uniqueName」）' : ''}'
+        '${remaining > 0 ? '（还有 $remaining 份待预览）' : ''}';
     notifyListeners();
   }
 
@@ -593,13 +704,11 @@ class AppState extends ChangeNotifier {
     return filled;
   }
 
-  /// 清空预览
-  void clearPreview() {
-    _previewQuestions = [];
-    _previewBankName = '';
-    _importStatus = "";
+  /// 放弃当前预览（不写库）：有排队批次就接上下一份（批量导入时一份一份来）。
+  /// 返回 true 表示还有待预览的内容。
+  bool clearPreview() {
     _importProgress = 0;
-    notifyListeners();
+    return promoteNextPreview();
   }
 
   // 刷题模式
@@ -654,6 +763,15 @@ class AppState extends ChangeNotifier {
     } catch (e) {
       DebugLogService.instance.log('COMPANION', '陪伴设置读取失败: $e');
       _companionSettings = CompanionSettings.defaults;
+    }
+
+    // v1.35：插件内容同步范围（本机选择，默认三项全开）
+    try {
+      _pluginSyncScope =
+          PluginSyncScope.decode(await _db.getSetting(PluginSyncScope.settingsKey));
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '插件同步范围读取失败: $e');
+      _pluginSyncScope = PluginSyncScope.all;
     }
 
     await _loadHomeStats();
@@ -719,6 +837,32 @@ class AppState extends ChangeNotifier {
     _companionSettings = settings;
     notifyListeners();
     await CompanionService.instance.saveSettings(settings);
+  }
+
+  // ======================== 插件内容同步范围（v1.35） ========================
+  //
+  // 每台设备各自决定「本机要不要把插件数据带进局域网快照」：
+  // 手机端关掉笔记同步，不该影响桌面端；所以这份设置只存本机、不进快照。
+
+  PluginSyncScope _pluginSyncScope = PluginSyncScope.all;
+
+  PluginSyncScope get pluginSyncScope => _pluginSyncScope;
+
+  /// 某个插件在本机是否参与同步（页面文案与同步快照共用同一判断）
+  bool isPluginSyncEnabled(String pluginId) =>
+      _pluginSyncScope.enabledFor(pluginId);
+
+  /// 改一项并落盘（设置页三个开关都走这里）
+  Future<void> setPluginSyncEnabled(String pluginId, bool enabled) async {
+    final next = _pluginSyncScope.withPlugin(pluginId, enabled);
+    if (next.notes == _pluginSyncScope.notes &&
+        next.companion == _pluginSyncScope.companion &&
+        next.schedule == _pluginSyncScope.schedule) {
+      return;
+    }
+    _pluginSyncScope = next;
+    notifyListeners();
+    await _db.setSetting(PluginSyncScope.settingsKey, next.encode());
   }
 
   void _initAIService() {
@@ -1050,6 +1194,30 @@ class AppState extends ChangeNotifier {
     await _loadBanks();
   }
 
+  /// 改题库名（导入后随时可改）。
+  ///
+  /// 返回 `null` 表示成功，否则返回给用户看的失败原因——
+  /// 空名 / 重名都不写库，避免出现两个同名题库把用户绕晕。
+  Future<String?> renameBank(int bankId, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '题库名不能为空';
+    QuestionBank? current;
+    for (final b in _banks) {
+      if (b.id == bankId) {
+        current = b;
+        break;
+      }
+    }
+    if (current == null) return '题库不存在';
+    if (current.name == trimmed) return null; // 名字没改，当成功
+    if (_banks.any((b) => b.id != bankId && b.name == trimmed)) {
+      return '已存在同名题库「$trimmed」';
+    }
+    await _db.renameBank(bankId, trimmed);
+    await _loadBanks();
+    return null;
+  }
+
   /// 分类自身 + 所有后代的 id（「整支」口径：点父分类的题也刷得到子分类）
   Set<int> categoryWithDescendants(int categoryId) {
     final out = <int>{categoryId};
@@ -1306,13 +1474,13 @@ class AppState extends ChangeNotifier {
         await _loadBanks();
       }
 
-      // 阶段二：DOC/DOCX/PDF AI 解析（按分块推进；解析完待预览确认）
+      // 阶段二：DOC/DOCX/PDF AI 解析（逐个文件解析；解析完待预览确认）
       if (hasAi) {
         _bgProgressBase = jsonSpan;
         _bgProgressSpan = 1 - jsonSpan;
         if (aiFiles.length > 1) {
-          _importStatus =
-              '已选 ${aiFiles.length} 个文档，本次仅解析第一个：${_fileName(aiFiles.first)}';
+          // 多选文档：逐个解析、逐个排队预览（不再「只解析第一个」）
+          _importStatus = '已选 ${aiFiles.length} 个文档，将逐个解析并排队预览';
           notifyListeners();
         }
         await parseForPreview(aiFiles);
@@ -1324,14 +1492,16 @@ class AppState extends ChangeNotifier {
     // 汇总结果（完成提示由主壳在主页弹出）
     final ImportTaskResult result;
     if (hasAi) {
-      if (_previewQuestions.isNotEmpty) {
+      final previewTotal = previewTotalQuestionCount;
+      final previewBatches = _previewQueue.length + 1;
+      if (previewTotal > 0) {
         result = ImportTaskResult(
           kind: ImportTaskKind.docxParse,
           success: true,
-          message: 'AI 解析完成，共 ${_previewQuestions.length} 道题目，'
-              '请预览确认后入库'
+          message: 'AI 解析完成，共 $previewTotal 道题目，请预览确认后入库'
+              '${previewBatches > 1 ? '\n（$previewBatches 份文档，确认完一份自动接下一份）' : ''}'
               '${jsonBanks > 0 ? '\n（JSON 题库已入库：$jsonBanks 个 / $jsonQuestions 道）' : ''}',
-          questionCount: _previewQuestions.length,
+          questionCount: previewTotal,
         );
       } else {
         result = ImportTaskResult(
@@ -1340,7 +1510,7 @@ class AppState extends ChangeNotifier {
           message: (jsonBanks > 0
                   ? 'JSON 题库已入库（$jsonBanks 个 / $jsonQuestions 道），'
                       '但文档解析失败：'
-                  : '解析失败：') +
+                  : '') +
               _importStatus,
           questionCount: 0,
         );
@@ -2211,6 +2381,16 @@ class AppState extends ChangeNotifier {
 
   Future<bool> isInErrorBook(int questionId) async {
     return await _db.isInErrorBook(questionId);
+  }
+
+  /// 从错题本移除（可批量）：删本机收藏 + FSRS 复习卡，**不删题目**、
+  /// 不动历史作答记录。用于「这些错题我不想再练了」。
+  ///
+  /// 返回实际移除的题数；有变化时刷新首页/统计口径。
+  Future<int> removeQuestionsFromErrorBook(Iterable<int> questionIds) async {
+    final removed = await _db.removeQuestionsFromErrorBook(questionIds);
+    if (removed > 0) await bumpStatsRevision();
+    return removed;
   }
 
   /// 获取错题本统计（按题库分组）：到期题数 + 收藏题数 + 全部去重

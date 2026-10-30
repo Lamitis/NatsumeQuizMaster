@@ -113,8 +113,8 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
   /// 「取消」= 不再展示进度、结果与解析结果直接丢弃。
   void _cancelImport(AppState appState) {
     NatsumeImportTask.discarded = true;
-    // 丢弃解析结果，并借 clearPreview 的通知让各页立即隐藏任务卡
-    appState.clearPreview();
+    // 丢弃当前预览与全部排队批次，并借通知让各页立即隐藏任务卡
+    appState.discardAllPreviews();
     _toast('已取消导入，解析结果将丢弃');
   }
 
@@ -481,7 +481,9 @@ class _PreviewConfirmCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('已解析 ${appState.previewQuestions.length} 道题，待确认',
+                Text(
+                    '已解析 ${appState.previewTotalQuestionCount} 道题，待确认'
+                    '${appState.previewQueue.isNotEmpty ? '（还有 ${appState.previewQueue.length} 份排队）' : ''}',
                     style: NatsumeType.h3Style.copyWith(
                         fontWeight: FontWeight.w600, color: ac.accent)),
                 const SizedBox(height: 2),

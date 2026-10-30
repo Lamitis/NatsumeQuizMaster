@@ -8,18 +8,19 @@ import '../database_service.dart';
 ///
 /// **同步边界（重要）**：`SyncRepository` 的导出清单只含
 /// 题库 / 题目 / 配图 / 会话 / 作答记录 / 错题 / 批注；笔记属于插件数据，
-/// 不参与局域网同步——[syncable] 恒为 false，界面必须据此显示「无法同步」。
+/// 不参与局域网同步已改为「默认参与、可按设备关掉」（v1.35）：
+/// [syncable] 恒为 true，界面据此显示同步状态，而不是一律「无法同步」。
 class NotesService {
   NotesService._();
   static final NotesService instance = NotesService._();
 
   static final DatabaseService _db = DatabaseService.instance;
 
-  /// 笔记当前是否参与局域网同步（false = 换设备看不到，界面要明说）
-  static const bool syncable = false;
+  /// 笔记当前是否参与局域网同步（v1.35：可同步，设置页可按设备关掉）
+  static const bool syncable = true;
 
   /// 界面统一复用的同步提示文案（插件区与笔记页共用一个说法）
-  static const String syncNotice = '笔记保存在本机，不参与局域网同步';
+  static const String syncNotice = '笔记随局域网同步（可在设置里关掉）';
 
   /// 未归类 / 题库已删除时的分组标题
   static const String ungroupedName = '未分类';

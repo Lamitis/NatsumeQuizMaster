@@ -300,7 +300,11 @@ class ThemeService extends ChangeNotifier {
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleSpacing: NatsumeSpace.lg,
-        toolbarHeight: 56,
+        // v1.35：56 → 60，顶栏更舒展（用户要求「最上面的栏宽一点」）。
+        // 只加 4px 而不是 64：64 会让「题目编辑」这类高弹窗在 600px 高的窗口里
+        // 把底部按钮顶出可点区域（widget 测试实测点击落空），60 是兼顾观感与
+        // 小窗口可用性的上限。
+        toolbarHeight: NatsumeChrome.appBarHeight,
         titleTextStyle: NatsumeType.h2Style.copyWith(
           fontFamily: 'MiSans',
           fontSize: NatsumeType.h1,
@@ -311,7 +315,7 @@ class ThemeService extends ChangeNotifier {
             Border(bottom: BorderSide(color: c.border, width: NatsumeLine.width)),
       ),
 
-      // ---- 卡片：10 圆角 + 实色 hairline，无阴影（层级靠描边与明度差） ----
+      // ---- 卡片：14 圆角 + 实色 hairline，无阴影（层级靠描边与明度差） ----
       cardTheme: CardThemeData(
         elevation: 0,
         color: c.surface,
@@ -322,7 +326,7 @@ class ThemeService extends ChangeNotifier {
         ),
       ),
 
-      // ---- 按钮：统一 14 圆角，三级层次 ----
+      // ---- 按钮：统一 12 圆角，三级层次 ----
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           backgroundColor: c.accent,

@@ -80,7 +80,7 @@ void main() {
     return appState;
   }
 
-  testWidgets('陪伴页：自绘头像 + 真实统计 + 明示无法同步', (tester) async {
+  testWidgets('陪伴页：自绘头像 + 真实统计 + 同步状态', (tester) async {
     setSurface(tester);
     final appState = await seed(tester);
     await tester.pumpWidget(host(appState, const CompanionScreen()));
@@ -88,7 +88,7 @@ void main() {
 
     expect(find.byType(CompanionAvatar), findsWidgets);
     expect(find.textContaining(CompanionService.personaName), findsWidgets);
-    expect(find.text('无法同步'), findsOneWidget);
+    expect(find.text('人设可同步'), findsOneWidget);
     expect(find.text(CompanionService.syncNotice), findsOneWidget);
     // 统计标签即使全 0 也要展示（bot 说话的依据是同一组数字）
     expect(find.text('连续打卡 0 天'), findsOneWidget);
@@ -140,7 +140,7 @@ void main() {
 
     await scrollTo('小鲸助教');
     expect(find.text('小鲸助教'), findsOneWidget);
-    expect(find.textContaining('无法同步'), findsWidgets);
+    expect(find.textContaining('人设与记忆可同步'), findsWidgets);
 
     // v1.34 日程插件同样有入口，且同样标注本机保存
     await scrollTo('日程待办');

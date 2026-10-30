@@ -7,6 +7,11 @@ import 'package:sqflite/sqflite.dart';
 import '../database_service.dart';
 import '../debug_log_service.dart';
 import '../device_service.dart';
+import '../companion/companion_service.dart';
+import '../../models/companion_avatar.dart';
+import '../../models/companion_memory.dart';
+import '../../models/companion_settings.dart';
+import '../../models/plugin_sync_scope.dart';
 import '../../models/question_image.dart';
 import 'sync_models.dart';
 
@@ -79,6 +84,8 @@ class SyncRepository {
         'answer_records': const [],
         'error_book': const [],
         'annotations': const [],
+        // 仅题库模式：插件内容同样不出门（分享题库不该带笔记/待办/人设）
+        'plugins': const <String, dynamic>{},
       };
     }
 
@@ -136,7 +143,97 @@ class SyncRepository {
       'answer_records': records,
       'error_book': errors,
       'annotations': annotations,
+      // v1.35 插件内容（笔记 / 助教 / 待办），按本机开关逐项决定
+      'plugins': await _exportPlugins(db),
     };
+  }
+
+  /// 导出插件内容（v1.35）。
+  ///
+  /// 开关取自本机 settings（[PluginSyncScope]），**不写进快照**：同步过来的是
+  /// 数据，不是「你该不该同步」的决定。三项都关时返回空 Map，快照形状不变。
+  Future<Map<String, dynamic>> _exportPlugins(Database db) async {
+    final scope = PluginSyncScope.decode(
+        await _db.getSetting(PluginSyncScope.settingsKey));
+    final out = <String, dynamic>{};
+    if (scope.notes) {
+      out['notes'] = {
+        'notes': await db.rawQuery('''
+          SELECT n.uid, n.title, n.content, n.created_at, n.updated_at,
+                 n.origin_device, b.uid AS bank_uid, q.uid AS question_uid
+          FROM notes n
+          LEFT JOIN question_banks b ON b.id = n.bank_id
+          LEFT JOIN questions q ON q.id = n.question_id
+          WHERE n.uid IS NOT NULL AND n.uid != ''
+        '''),
+        'links': await db.rawQuery('''
+          SELECT n.uid AS note_uid, l.target
+          FROM note_links l JOIN notes n ON n.id = l.note_id
+          WHERE n.uid IS NOT NULL AND n.uid != ''
+        '''),
+      };
+    }
+    if (scope.schedule) {
+      out['schedule'] = {
+        'items': await db.rawQuery('''
+          SELECT uid, title, detail, due_at, done, created_at, updated_at,
+                 origin_device
+          FROM schedule_items WHERE uid IS NOT NULL AND uid != ''
+        '''),
+      };
+    }
+    if (scope.companion) {
+      out['companion'] = await _exportCompanion();
+    }
+    return out;
+  }
+
+  /// 助教只同步「人设 + 记忆」。
+  ///
+  /// **不同步**：API Key（加密是按本机密钥做的，换机也解不开）、接口地址 /
+  /// 模型（可能指向本机 Ollama）、知识库 id（库是另一台设备的自增 id）、
+  /// 悬浮位置与好感度（那是这台设备上的相处记录）。
+  Future<Map<String, dynamic>> _exportCompanion() async {
+    final settings = <String, dynamic>{};
+    try {
+      final raw = await _db.getSetting(CompanionService.settingsKey);
+      if (raw != null && raw.trim().isNotEmpty) {
+        final parsed = jsonDecode(raw);
+        if (parsed is Map) {
+          final s =
+              CompanionSettings.fromJson(Map<String, dynamic>.from(parsed));
+          settings.addAll({
+            'bot_name': s.displayName,
+            'avatar': s.avatarOption.id,
+            'tone': s.tone.name,
+            'custom_persona': s.customPersona,
+            'memory': s.memoryEnabled,
+            'bubble_minutes': s.bubbleMinutes,
+          });
+        }
+      }
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '助教设置导出失败: $e');
+    }
+
+    final memory = <String, dynamic>{};
+    try {
+      final raw = await _db.getSetting(CompanionService.memoryKey);
+      if (raw != null && raw.trim().isNotEmpty) {
+        final parsed = jsonDecode(raw);
+        if (parsed is Map) {
+          final m = CompanionMemory.fromJson(Map<String, dynamic>.from(parsed));
+          memory.addAll({
+            'summary': m.summary,
+            'turns': [for (final t in m.turns) t.toJson()],
+          });
+        }
+      }
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '助教记忆导出失败: $e');
+    }
+
+    return {'settings': settings, 'memory': memory};
   }
 
   /// bank_ids 文本中的本地数字 id 替换为题库 uid；非数字标记
@@ -598,7 +695,258 @@ class SyncRepository {
         });
         merged++;
       }
+      // 7. 插件内容（v1.35）：笔记 / 待办 / 助教人设与记忆
+      final pluginPayload = snapshot['plugins'];
+      if (pluginPayload is Map) {
+        merged += await _importPlugins(
+          txn,
+          Map<String, dynamic>.from(pluginPayload),
+          now,
+        );
+      }
     });
     return merged;
   }
+
+  /// 合并插件内容（事务内）。
+  ///
+  /// 冲突口径与题库一致：**按 uid 认同一行，`updated_at` 新的赢**；
+  /// 对端没带 uid 的脏数据直接跳过（宁可少合并，也不制造重复）。
+  Future<int> _importPlugins(
+    DatabaseExecutor txn,
+    Map<String, dynamic> payload,
+    String now,
+  ) async {
+    var merged = 0;
+
+    final bankRows = await txn.query('question_banks', columns: ['id', 'uid']);
+    final bankIdByUid = <String, int>{
+      for (final r in bankRows)
+        if (r['uid'] != null && (r['uid'] as String).isNotEmpty)
+          r['uid'] as String: r['id'] as int,
+    };
+
+    Future<int?> questionIdByUid(String? uid) async {
+      if (uid == null || uid.isEmpty) return null;
+      final rows = await txn.query('questions',
+          columns: ['id'], where: 'uid = ?', whereArgs: [uid]);
+      return rows.isEmpty ? null : rows.first['id'] as int;
+    }
+
+    // ── 笔记 ──
+    final notesBlock = payload['notes'];
+    if (notesBlock is Map) {
+      final localIds = <String, int>{};
+      final noteRows = notesBlock['notes'];
+      if (noteRows is List) {
+        for (final raw in noteRows) {
+          if (raw is! Map) continue;
+          final m = Map<String, dynamic>.from(raw);
+          final uid = (m['uid'] ?? '').toString();
+          if (uid.isEmpty) continue;
+          final updatedAt =
+              (m['updated_at'] ?? m['created_at'] ?? now).toString();
+          final values = <String, Object?>{
+            'bank_id': bankIdByUid[(m['bank_uid'] ?? '').toString()],
+            'question_id':
+                await questionIdByUid((m['question_uid'] ?? '').toString()),
+            'title': (m['title'] ?? '').toString(),
+            'content': (m['content'] ?? '').toString(),
+            'created_at': m['created_at'] ?? now,
+            'updated_at': updatedAt,
+            'origin_device': m['origin_device'],
+          };
+          final existing = await txn.query('notes',
+              columns: ['id', 'updated_at'],
+              where: 'uid = ?',
+              whereArgs: [uid]);
+          if (existing.isEmpty) {
+            final id = await txn.insert('notes', {...values, 'uid': uid});
+            localIds[uid] = id;
+            merged++;
+          } else {
+            final localId = existing.first['id'] as int;
+            localIds[uid] = localId;
+            final localUpdated =
+                (existing.first['updated_at'] ?? '').toString();
+            if (updatedAt.compareTo(localUpdated) > 0) {
+              await txn.update('notes', values,
+                  where: 'id = ?', whereArgs: [localId]);
+              merged++;
+            }
+          }
+        }
+      }
+
+      // 出链：按 (note, target) 幂等插入；不删本机已有链（删除型差异不传播）
+      final linkRows = notesBlock['links'];
+      if (linkRows is List) {
+        for (final raw in linkRows) {
+          if (raw is! Map) continue;
+          final m = Map<String, dynamic>.from(raw);
+          final noteUid = (m['note_uid'] ?? '').toString();
+          final target = (m['target'] ?? '').toString().trim();
+          if (noteUid.isEmpty || target.isEmpty) continue;
+          var noteId = localIds[noteUid];
+          if (noteId == null) {
+            final rows = await txn.query('notes',
+                columns: ['id'], where: 'uid = ?', whereArgs: [noteUid]);
+            if (rows.isEmpty) continue;
+            noteId = rows.first['id'] as int;
+            localIds[noteUid] = noteId;
+          }
+          await txn.insert(
+            'note_links',
+            {'note_id': noteId, 'target': target},
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+        }
+      }
+    }
+
+    // ── 日程待办 ──
+    final scheduleBlock = payload['schedule'];
+    if (scheduleBlock is Map && scheduleBlock['items'] is List) {
+      for (final raw in (scheduleBlock['items'] as List)) {
+        if (raw is! Map) continue;
+        final m = Map<String, dynamic>.from(raw);
+        final uid = (m['uid'] ?? '').toString();
+        if (uid.isEmpty) continue;
+        final updatedAt =
+            (m['updated_at'] ?? m['created_at'] ?? now).toString();
+        final values = <String, Object?>{
+          'title': (m['title'] ?? '').toString(),
+          'detail': (m['detail'] ?? '').toString(),
+          'due_at': m['due_at'],
+          'done': m['done'] is bool
+              ? ((m['done'] as bool) ? 1 : 0)
+              : (m['done'] ?? 0),
+          'created_at': m['created_at'] ?? now,
+          'updated_at': updatedAt,
+          'origin_device': m['origin_device'],
+        };
+        final existing = await txn.query('schedule_items',
+            columns: ['id', 'updated_at'],
+            where: 'uid = ?',
+            whereArgs: [uid]);
+        if (existing.isEmpty) {
+          await txn.insert('schedule_items', {...values, 'uid': uid});
+          merged++;
+        } else {
+          final localUpdated = (existing.first['updated_at'] ?? '').toString();
+          if (updatedAt.compareTo(localUpdated) > 0) {
+            await txn.update('schedule_items', values,
+                where: 'id = ?', whereArgs: [existing.first['id']]);
+            merged++;
+          }
+        }
+      }
+    }
+
+    // ── 助教：人设 + 记忆（不含 Key / 接口 / 知识库 / 好感度） ──
+    final companionBlock = payload['companion'];
+    if (companionBlock is Map) {
+      merged += await _importCompanion(
+          txn, Map<String, dynamic>.from(companionBlock));
+    }
+
+    return merged;
+  }
+
+  /// 合并助教人设与记忆：对端有值的字段覆盖本机，本机独有的接口配置保持不动。
+  Future<int> _importCompanion(
+      DatabaseExecutor txn, Map<String, dynamic> block) async {
+    var merged = 0;
+    final remoteSettings = block['settings'];
+    if (remoteSettings is Map && remoteSettings.isNotEmpty) {
+      final rows = await txn.query('settings',
+          where: 'key = ?', whereArgs: [CompanionService.settingsKey]);
+      CompanionSettings local = CompanionSettings.defaults;
+      if (rows.isNotEmpty) {
+        try {
+          final parsed = jsonDecode((rows.first['value'] ?? '').toString());
+          if (parsed is Map) {
+            local =
+                CompanionSettings.fromJson(Map<String, dynamic>.from(parsed));
+          }
+        } catch (_) {}
+      }
+      final avatar = (remoteSettings['avatar'] ?? '').toString();
+      final toneName = (remoteSettings['tone'] ?? '').toString();
+      final minutes = int.tryParse('${remoteSettings['bubble_minutes']}');
+      final remoteName = (remoteSettings['bot_name'] ?? '').toString().trim();
+      final next = local.copyWith(
+        botName: remoteName.isEmpty ? local.botName : remoteName,
+        avatar: CompanionAvatarOption.isValidId(avatar) ? avatar : local.avatar,
+        tone: CompanionTone.values.where((t) => t.name == toneName).firstOrNull ??
+            local.tone,
+        customPersona: (remoteSettings['custom_persona'] ?? '').toString(),
+        memoryEnabled: remoteSettings['memory'] is bool
+            ? remoteSettings['memory'] as bool
+            : local.memoryEnabled,
+        bubbleMinutes: CompanionSettings.bubbleMinuteOptions.contains(minutes)
+            ? minutes!
+            : local.bubbleMinutes,
+      );
+      await txn.insert(
+        'settings',
+        {
+          'key': CompanionService.settingsKey,
+          'value': jsonEncode(next.toJson()),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      merged++;
+    }
+
+    final remoteMemory = block['memory'];
+    if (remoteMemory is Map && remoteMemory.isNotEmpty) {
+      final rows = await txn.query('settings',
+          where: 'key = ?', whereArgs: [CompanionService.memoryKey]);
+      var local = CompanionMemory();
+      if (rows.isNotEmpty) {
+        try {
+          final parsed = jsonDecode((rows.first['value'] ?? '').toString());
+          if (parsed is Map) {
+            local = CompanionMemory.fromJson(Map<String, dynamic>.from(parsed));
+          }
+        } catch (_) {}
+      }
+      final turns = <CompanionTurn>[...local.turns];
+      final seen = {
+        for (final t in turns) '${t.role}|${t.day}|${t.text}',
+      };
+      final incoming = remoteMemory['turns'];
+      if (incoming is List) {
+        for (final raw in incoming) {
+          final turn = CompanionTurn.tryFromJson(raw);
+          if (turn == null) continue;
+          if (!seen.add('${turn.role}|${turn.day}|${turn.text}')) continue;
+          turns.add(turn);
+        }
+      }
+      // 超出上限就丢最早的（与 CompanionMemory.add 的口径一致）
+      final trimmed = turns.length > CompanionMemory.maxTurns
+          ? turns.sublist(turns.length - CompanionMemory.maxTurns)
+          : turns;
+      final summary = (remoteMemory['summary'] ?? '').toString().trim();
+      final mergedMemory = CompanionMemory(
+        turns: trimmed,
+        // 摘要两边都有时取更长的：那是信息更多的那份「长期记忆」
+        summary:
+            summary.length > local.summary.length ? summary : local.summary,
+      );
+      await txn.insert(
+        'settings',
+        {
+          'key': CompanionService.memoryKey,
+          'value': jsonEncode(mergedMemory.toJson()),
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      merged++;
+    }
+    return merged;
+  }
 }
+

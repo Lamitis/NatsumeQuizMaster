@@ -441,13 +441,13 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -IsccPath 
 也可以手动分三步来做：
 
 ```powershell
-flutter build windows --release --dart-define=APP_VERSION=v1.34.0.27
+flutter build windows --release --dart-define=APP_VERSION=v1.35.0.28
 powershell -ExecutionPolicy Bypass -File tools\package_windows.ps1
 # 产物：dist\NatsumeQuizMaster-Windows-<yyyyMMdd>\（绿色版目录）+ 同名 .zip
 
 # 可选：生成安装包（需 Inno Setup 6；与 CI 用法一致）
 # ISCC.exe 常见位置有两个：全局安装（Program Files (x86)）或仅当前用户安装
-$V = '1.34.0'
+$V = '1.35.0'
 $pkg = "$PWD\dist\NatsumeQuizMaster-Windows-$(Get-Date -Format yyyyMMdd)"
 $iscc = @(
   'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',

@@ -64,7 +64,7 @@ class DatabaseService {
 
   /// 当前 schema 版本（唯一来源：`openDatabase(version:)` 与备份版本闸门共用，
   /// 避免「建库涨到 v15 但备份校验还卡在 v14」这种自拒备份的老坑）
-  static const int schemaVersion = 16;
+  static const int schemaVersion = 17;
 
   /// 测试用：覆盖数据库文件路径（多测试文件并行时按文件隔离，防互相清库）
   static String? overrideDbPath;
@@ -340,6 +340,58 @@ class DatabaseService {
       // v16 日程待办插件：按到期日排期的待办表（本机保存，不进同步清单）
       await _createScheduleTable(db);
     }
+    if (oldVersion < 17) {
+      // v17 插件数据同步：笔记 / 待办补 uid + 来源设备，存量行补随机 uid
+      await _upgradeToV17(db);
+    }
+  }
+
+  /// v17 迁移：给 `notes` / `schedule_items` 补同步身份列。
+  ///
+  /// 两列都允许 NULL（老库升级瞬间先补列再加值），补完立刻回填：
+  /// - `uid`：跨设备唯一标识，用 `randomblob(16)` 生成，形状与 Dart 侧 uuid v4
+  ///   不同但同样唯一；新写入的行一律走 Dart 侧 uuid；
+  /// - `origin_device`：留空 = 本机产生。同步合并时用它区分「他端记录」。
+  ///
+  /// 必须**先补列再建唯一索引**：唯一索引对 NULL 不生效，但一旦有两条 NULL
+  /// 之外的空串就会撞车，所以回填完再建索引最稳。
+  Future<void> _upgradeToV17(Database db) async {
+    // 用例里会造「只有部分表」的旧库（例如只验分类迁移），缺表时直接跳过：
+    // 迁移只对真实存在的表负责，不要因为一张不存在的表把整个 open 打挂。
+    Future<bool> tableExists(String table) async {
+      final rows = await db.rawQuery(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+          [table]);
+      return rows.isNotEmpty;
+    }
+
+    Future<void> addColumnIfMissing(String table, String column) async {
+      if (!await tableExists(table)) return;
+      final cols = (await db.rawQuery('PRAGMA table_info($table)'))
+          .map((r) => r['name'] as String)
+          .toList();
+      if (!cols.contains(column)) {
+        await db.execute('ALTER TABLE $table ADD COLUMN $column TEXT');
+      }
+    }
+
+    await addColumnIfMissing('notes', 'uid');
+    await addColumnIfMissing('notes', 'origin_device');
+    await addColumnIfMissing('schedule_items', 'uid');
+    await addColumnIfMissing('schedule_items', 'origin_device');
+
+    if (await tableExists('notes')) {
+      await db.execute(
+          "UPDATE notes SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''");
+      await db.execute(
+          'CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_uid ON notes(uid)');
+    }
+    if (await tableExists('schedule_items')) {
+      await db.execute(
+          "UPDATE schedule_items SET uid = lower(hex(randomblob(16))) WHERE uid IS NULL OR uid = ''");
+      await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_uid '
+          'ON schedule_items(uid)');
+    }
   }
 
   /// v15 迁移：题库分类树。
@@ -393,7 +445,9 @@ class DatabaseService {
         title TEXT NOT NULL,
         content TEXT NOT NULL DEFAULT '',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        uid TEXT,
+        origin_device TEXT
       )
     ''');
     await db.execute('''
@@ -409,6 +463,9 @@ class DatabaseService {
         'CREATE INDEX IF NOT EXISTS idx_notes_question ON notes(question_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_note_links_target '
         'ON note_links(target)');
+    // v17 同步：笔记按 uid 合并（跨设备同一页笔记只更新不重复）
+    await db.execute(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_notes_uid ON notes(uid)');
   }
 
   /// 日程待办表（v16 · 日程插件）。IF NOT EXISTS 幂等，
@@ -425,13 +482,18 @@ class DatabaseService {
         due_at TEXT,
         done INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        uid TEXT,
+        origin_device TEXT
       )
     ''');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_schedule_due '
         'ON schedule_items(due_at)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_schedule_done '
         'ON schedule_items(done)');
+    // v17 同步：待办按 uid 合并
+    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_uid '
+        'ON schedule_items(uid)');
   }
 
   /// 知识库 / 插件 / 世界表（v13）。全部 IF NOT EXISTS，幂等，
@@ -1157,6 +1219,19 @@ class DatabaseService {
         'question_banks',
         {
           'category_id': categoryId,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'id = ?',
+        whereArgs: [bankId]);
+  }
+
+  /// 改题库名（导入后改名；只动名字，题目与作答记录一概不动）
+  Future<void> renameBank(int bankId, String name) async {
+    final db = await database;
+    await db.update(
+        'question_banks',
+        {
+          'name': name,
           'updated_at': DateTime.now().toIso8601String(),
         },
         where: 'id = ?',
@@ -2009,7 +2084,33 @@ class DatabaseService {
         whereArgs: [questionId, await DeviceService.instance.deviceId]);
   }
 
-  /// 本机是否已收藏（刷题页收藏状态只反映本机，不误删他端记录）
+  /// 移出错题本（批量）：删本机收藏 **并** 删 FSRS 复习卡。
+  ///
+  /// 「错题本」= 到期卡 ∪ 收藏，两处都清掉才算真的从错题本消失；
+  /// 题库里的题目、历史作答记录（统计口径）一概不动——用户只是不想再
+  /// 练这道题，不是要把它从题库里删掉。删掉卡以后若再次答错，会重新
+  /// 建卡并回到错题本。
+  ///
+  /// 返回实际处理的题数（去重后）。
+  Future<int> removeQuestionsFromErrorBook(Iterable<int> questionIds) async {
+    final ids = questionIds.toSet().toList();
+    if (ids.isEmpty) return 0;
+    final db = await database;
+    final deviceId = await DeviceService.instance.deviceId;
+    for (var i = 0; i < ids.length; i += maxBindingVars) {
+      final chunk = ids.sublist(i, min(i + maxBindingVars, ids.length));
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      await db.transaction((txn) async {
+        await txn.delete('error_book',
+            where: 'question_id IN ($placeholders) AND origin_device = ?',
+            whereArgs: [...chunk, deviceId]);
+        await txn.delete('fsrs_cards',
+            where: 'question_id IN ($placeholders)', whereArgs: chunk);
+      });
+    }
+    return ids.length;
+  }
+
   Future<bool> isInErrorBook(int questionId) async {
     final db = await database;
     final result = await db.query('error_book',
@@ -3450,7 +3551,12 @@ class DatabaseService {
 
   Future<int> insertNote(Note note) async {
     final db = await database;
-    return db.insert('notes', note.toMap()..remove('id'));
+    final map = note.toMap()..remove('id');
+    // v17：新行一律带 uid + 来源设备，同步合并才有身份
+    map['uid'] = note.uid ?? const Uuid().v4();
+    map['origin_device'] = note.originDevice ??
+        await DeviceService.instance.deviceId;
+    return db.insert('notes', map);
   }
 
   Future<void> updateNote(Note note) async {
@@ -3539,7 +3645,12 @@ class DatabaseService {
 
   Future<int> insertScheduleItem(ScheduleItem item) async {
     final db = await database;
-    return db.insert('schedule_items', item.toMap()..remove('id'));
+    final map = item.toMap()..remove('id');
+    // v17：与笔记同一口径
+    map['uid'] = item.uid ?? const Uuid().v4();
+    map['origin_device'] = item.originDevice ??
+        await DeviceService.instance.deviceId;
+    return db.insert('schedule_items', map);
   }
 
   Future<void> updateScheduleItem(ScheduleItem item) async {

@@ -16,6 +16,7 @@ import '../widgets/guide/guide_anchor.dart';
 import '../widgets/guide/guide_steps.dart';
 import '../widgets/ai_response_widget.dart';
 import '../widgets/kit/natsume_kit.dart';
+import 'error_book_manage_screen.dart';
 import 'quiz_screen.dart';
 
 /// 错题本（v1.0.2 重写）
@@ -111,6 +112,29 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     if (bankIds == null) return _selectedBanks.isEmpty;
     return bankIds.length == _selectedBanks.length &&
         bankIds.every(_selectedBanks.contains);
+  }
+
+  /// v1.34.1 错题删减：进「管理」页按当前范围勾选并移除不想再练的错题。
+  /// 移除后刷新统计条 / 知识点面板（口径与列表同源，必须一起重算）。
+  Future<void> _openManage() async {
+    final bankIds =
+        _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
+    final removed = await Navigator.push<int>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ErrorBookManageScreen(
+          mode: _filter,
+          bankIds: bankIds,
+        ),
+      ),
+    );
+    if (!mounted || removed == null || removed == 0) return;
+    setState(() => _loading = true);
+    await _loadStats();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已从错题本移除 $removed 道题')),
+    );
   }
 
   Future<void> _switchFilter(String filter) async {
@@ -922,6 +946,12 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         ),
         title: const Text('错题本'),
         actions: [
+          // v1.34.1 错题删减：把不想再练 / 不需要练的错题移出错题本
+          IconButton(
+            tooltip: '管理错题',
+            icon: const Icon(Icons.playlist_remove),
+            onPressed: _openManage,
+          ),
           // v1.0.2 对齐里程碑：导出错题为 .json
           IconButton(
             tooltip: '导出错题',

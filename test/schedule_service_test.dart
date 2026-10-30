@@ -173,9 +173,9 @@ void main() {
       DatabaseService.overrideDbPath = null;
     });
 
-    test('日程插件不可同步（插件数据本机保存）', () {
-      expect(BuiltinPlugins.schedule.syncable, isFalse);
-      expect(BuiltinPlugins.schedule.manifestMap['syncable'], isFalse);
+    test('日程插件可同步（v1.35：按 uid 合并，可在设置里关掉）', () {
+      expect(BuiltinPlugins.schedule.syncable, isTrue);
+      expect(BuiltinPlugins.schedule.manifestMap['syncable'], isTrue);
     });
 
     test('增删改查：新建 → 勾选 → 删除', () async {

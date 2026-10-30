@@ -81,7 +81,7 @@ void main() {
     await settleFrames(tester);
 
     expect(find.text('日程待办'), findsOneWidget);
-    expect(find.textContaining('无法同步'), findsWidgets);
+    expect(find.textContaining('随局域网同步'), findsWidgets);
     expect(find.textContaining('逾期'), findsWidgets);
     expect(tester.takeException(), isNull);
 
@@ -182,7 +182,7 @@ void main() {
     await settleFrames(tester);
 
     expect(find.text('今天没有待办'), findsOneWidget);
-    expect(find.text('暂无待办 · 本机保存（无法同步）'), findsOneWidget);
+    expect(find.text('暂无待办 · 随局域网同步（可在设置里关掉）'), findsOneWidget);
 
     await teardownTree(tester);
   });

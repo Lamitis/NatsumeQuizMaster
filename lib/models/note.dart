@@ -5,9 +5,9 @@
 /// 这里只复用它的**格式与交互习惯**，不引入上游代码；Logseq 与本工程同为
 /// AGPL-3.0，署名见 `THIRD_PARTY_NOTICES.md`。
 ///
-/// 注意：笔记属于**本机数据**（插件数据），`sync_repository.dart` 的导出清单
-/// 只有题库/题目/会话/记录/错题/批注，不含 `notes`/`note_links`
-/// ——界面上必须明示「无法同步」，不能让用户以为换机还在。
+/// 注意：笔记属于**插件数据**。v1.35 起可在「设置 → 同步与提醒 → 插件内容同步」
+/// 里开关；开启时随局域网快照按 `uid` 合并（两端同一页笔记只更新不重复），
+/// 关闭时只留本机。界面文案必须跟着开关走，不能一律写「无法同步」。
 library;
 
 /// 双链 / 标签解析与展示的纯函数集合（无 IO，便于单测）。
@@ -62,6 +62,12 @@ class NoteLinks {
 class Note {
   final int? id;
 
+  /// 跨设备唯一 id（v1.35 同步；老数据在 v17 迁移时补）
+  final String? uid;
+
+  /// 产生这条笔记的设备（null / 空 = 本机）
+  final String? originDevice;
+
   /// 归属题库（空 = 未归类；题库被删后仍保留笔记，只显示「已删除题库」）
   final int? bankId;
 
@@ -75,6 +81,8 @@ class Note {
 
   const Note({
     this.id,
+    this.uid,
+    this.originDevice,
     this.bankId,
     this.questionId,
     required this.title,
@@ -90,6 +98,8 @@ class Note {
 
   Map<String, dynamic> toMap() => {
         if (id != null) 'id': id,
+        if (uid != null) 'uid': uid,
+        if (originDevice != null) 'origin_device': originDevice,
         'bank_id': bankId,
         'question_id': questionId,
         'title': title,
@@ -100,6 +110,8 @@ class Note {
 
   factory Note.fromMap(Map<String, dynamic> map) => Note(
         id: map['id'] as int?,
+        uid: map['uid'] as String?,
+        originDevice: map['origin_device'] as String?,
         bankId: map['bank_id'] as int?,
         questionId: map['question_id'] as int?,
         title: (map['title'] as String?) ?? '',
@@ -110,6 +122,8 @@ class Note {
 
   Note copyWith({
     int? id,
+    String? uid,
+    String? originDevice,
     int? bankId,
     int? questionId,
     String? title,
@@ -119,6 +133,8 @@ class Note {
   }) =>
       Note(
         id: id ?? this.id,
+        uid: uid ?? this.uid,
+        originDevice: originDevice ?? this.originDevice,
         bankId: bankId ?? this.bankId,
         questionId: questionId ?? this.questionId,
         title: title ?? this.title,

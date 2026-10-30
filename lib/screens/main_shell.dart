@@ -114,7 +114,7 @@ class _MainShellState extends State<MainShell>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         appState.consumeImportResult();
-        appState.clearPreview();
+        appState.discardAllPreviews();
         NatsumeImportTask.discarded = false;
       });
       return;

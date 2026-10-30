@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 //
 // 设计取向：Linear / Vercel 式的精密与克制。
 //   · 画布分层靠「明度差 + 1px 发丝描边」表达，不用大阴影
-//   · 圆角收紧，控件方正利落
+//   · 圆角在 v1.35 整体外扩一档（4/6/8/10/12 → 6/8/12/14/18）：
+//     用户反馈「四个角可以更圆润一点」，但保留方正的骨架，不做胶囊化
 //   · 字阶紧凑、大字号带负字距；数字一律等宽（tabular figures）对齐
 //   · 动效短促干脆（120/180/260ms）
 //
@@ -179,19 +180,22 @@ class NatsumeRadius {
   const NatsumeRadius._();
 
   /// 标签、小徽标
-  static const double chip = 4;
+  static const double chip = 6;
 
   /// 小控件（缩略图、进度条槽、色板）
-  static const double small = 6;
+  static const double small = 8;
 
   /// 按钮、输入框
-  static const double control = 8;
+  static const double control = 12;
 
   /// 卡片
-  static const double card = 10;
+  static const double card = 14;
 
   /// 大容器、弹窗、底部弹层
-  static const double large = 12;
+  static const double large = 18;
+
+  /// 窗口级容器 / 全屏浮层（v1.35）
+  static const double window = 22;
 
   /// 胶囊（999 视为全圆）
   static const double pill = 999;
@@ -206,6 +210,25 @@ class NatsumeRadius {
       BorderRadius.all(Radius.circular(card));
   static const BorderRadius largeBorder =
       BorderRadius.all(Radius.circular(large));
+  static const BorderRadius windowBorder =
+      BorderRadius.all(Radius.circular(window));
+}
+
+// ============================================================
+// 3b. 框架尺寸（顶栏等「不属于内容」的固定高度）
+// ============================================================
+
+/// 顶栏高度等框架级尺寸。
+///
+/// v1.35 用户要求「最上面的栏可以适当增加宽度（高度），让软件更美观」：
+/// 56 → 60。比 64 保守：64 会让「题目编辑」这类高弹窗在 600px 高的窗口
+/// （widget 测试默认画布、也是小尺寸桌面窗口）里把底部按钮顶出可点区域，
+/// 60 在不挤压小屏首屏内容的前提下把标题行撑开。
+class NatsumeChrome {
+  const NatsumeChrome._();
+
+  /// AppBar 高度
+  static const double appBarHeight = 60;
 }
 
 // ============================================================

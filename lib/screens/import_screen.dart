@@ -46,8 +46,8 @@ class _ImportScreenState extends State<ImportScreen> {
   /// 「取消」= 不再展示进度、结果与解析结果直接丢弃。
   void _cancelImport(AppState appState) {
     NatsumeImportTask.discarded = true;
-    // 丢弃解析结果，并借 clearPreview 的通知让各页立即隐藏任务卡
-    appState.clearPreview();
+    // 丢弃当前预览与全部排队批次，并借通知让各页立即隐藏任务卡
+    appState.discardAllPreviews();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('已取消导入，解析结果将丢弃')),
     );
@@ -253,16 +253,14 @@ class _ImportScreenState extends State<ImportScreen> {
                           fontSize: NatsumeType.body,
                           fontWeight: FontWeight.w600,
                           color: ac.textPrimary)),
-                  // 多选文档只解析第 1 个（应用层如此实现）——选了就得说，
-                  // 否则用户以为剩下的也会被解析
-                  if (_selectedFiles
-                          .where((f) => _isAiDoc(f))
-                          .length >
-                      1) ...[
+                  // 多选文档会逐个解析、逐个排队预览——不再只解析第一个，
+                  // 也不会把上一份还没确认的解析结果顶掉
+                  if (_selectedFiles.where((f) => _isAiDoc(f)).length > 1) ...[
                     const SizedBox(height: 4),
-                    Text('多选文档将只解析第 1 个，其余文件请分次导入',
+                    Text(
+                        '多选文档将逐个解析：每份各成一个题库，确认完一份自动接下一份预览',
                         style: TextStyle(
-                            fontSize: NatsumeType.body, color: ac.warning)),
+                            fontSize: NatsumeType.body, color: ac.textSecondary)),
                   ],
                   const SizedBox(height: 8),
                   for (var index = 0; index < _selectedFiles.length; index++)

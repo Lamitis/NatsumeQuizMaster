@@ -14,6 +14,7 @@ import '../services/keepalive_service.dart';
 import '../services/mineru_service.dart';
 import '../services/reminder_service.dart';
 import '../models/app_settings.dart';
+import '../models/plugin_sync_scope.dart';
 import '../services/device_service.dart';
 import '../services/sync/sync_engine.dart';
 import '../services/theme_service.dart';
@@ -70,7 +71,9 @@ enum SettingsGroup {
         SettingsGroup.all => const [],
         SettingsGroup.ai => const [0, 1, 2, 3, 4, 5, 6, 7, 32],
         SettingsGroup.appearance => const [20, 21, 22, 23, 24, 25, 26, 27],
-        SettingsGroup.sync => const [12, 13, 14, 15, 16, 17, 31],
+        // 33 = v1.35 新增的「插件内容同步」卡片（追加在 sections 末尾，
+        // 这样不会打乱已有索引——加卡片时改这张表的老坑别再踩一遍）
+        SettingsGroup.sync => const [12, 13, 14, 15, 16, 17, 31, 33],
         SettingsGroup.advanced => const [8, 9, 10, 11, 18, 19, 28, 29, 30],
       };
 }
@@ -2271,6 +2274,64 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                 ),
 
+                // v1.35 插件内容同步：每台设备各自决定带不带插件数据
+                _SettingsCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.extension_outlined,
+                              color: ac.accent, size: 20),
+                          const SizedBox(width: 8),
+                          Text('插件内容同步',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: NatsumeType.h3,
+                                  color: ac.textPrimary)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '默认三项都跟着局域网同步；关掉只是「本机不再收发该插件的数据」，'
+                        '已经同步过去的内容不会被删除。',
+                        style: TextStyle(
+                            fontSize: NatsumeType.body,
+                            color: ac.textSecondary,
+                            height: 1.4),
+                      ),
+                      const SizedBox(height: NatsumeSpace.xs),
+                      _pluginSyncSwitch(
+                        ac,
+                        title: '双链笔记',
+                        subtitle: '笔记正文与 [[双链]]：按 uid 合并，同一条只更新不重复',
+                        pluginId: PluginSyncScope.notesPluginId,
+                      ),
+                      _pluginSyncSwitch(
+                        ac,
+                        title: '小鲸助教',
+                        subtitle: '角色名 / 形象 / 语气 / 自定义人设 / 对话记忆',
+                        pluginId: PluginSyncScope.companionPluginId,
+                      ),
+                      _pluginSyncSwitch(
+                        ac,
+                        title: '日程待办',
+                        subtitle: '待办标题、备注、到期日与完成状态',
+                        pluginId: PluginSyncScope.schedulePluginId,
+                      ),
+                      const SizedBox(height: NatsumeSpace.xxs),
+                      Text(
+                        '永不参与同步：助教的 API Key、接口地址、知识库选择、'
+                        '悬浮位置与好感度（那是这台设备上的相处记录）。',
+                        style: TextStyle(
+                            fontSize: NatsumeType.caption,
+                            color: ac.textTertiary,
+                            height: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+
               ];
               // 按分组过滤：非 all 时只保留该组的 sections（索引表见 SettingsGroup.indices）
               final sections = widget.group == SettingsGroup.all
@@ -2310,6 +2371,32 @@ class _SettingsScreenState extends State<SettingsScreen>
           ),
         ),
       ),
+    );
+  }
+
+  /// 插件内容同步开关（v1.35）。三行同一个实现：id 决定读写哪一项。
+  Widget _pluginSyncSwitch(
+    AppThemeColors ac, {
+    required String title,
+    required String subtitle,
+    required String pluginId,
+  }) {
+    // 用 watch 而不是 read：开关状态由 AppState 持有，点一下要立刻重画
+    final appState = context.watch<AppState>();
+    final enabled = appState.isPluginSyncEnabled(pluginId);
+    return SwitchListTile(
+      key: ValueKey('pluginSync-$pluginId'),
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      title: Text(title,
+          style: TextStyle(fontSize: NatsumeType.body, color: ac.textPrimary)),
+      subtitle: Text(subtitle,
+          style: TextStyle(
+              fontSize: NatsumeType.caption,
+              color: ac.textSecondary,
+              height: 1.4)),
+      value: enabled,
+      onChanged: (v) => appState.setPluginSyncEnabled(pluginId, v),
     );
   }
 

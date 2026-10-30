@@ -53,10 +53,10 @@ void main() {
       DatabaseService.overrideDbPath = null;
     });
 
-    test('笔记插件：不可同步（同步导出清单不含笔记表）', () {
-      expect(NotesService.syncable, isFalse);
-      expect(BuiltinPlugins.notes.syncable, isFalse);
-      expect(BuiltinPlugins.notes.manifestMap['syncable'], isFalse);
+    test('笔记插件：可同步（v1.35，按设备开关）', () {
+      expect(NotesService.syncable, isTrue);
+      expect(BuiltinPlugins.notes.syncable, isTrue);
+      expect(BuiltinPlugins.notes.manifestMap['syncable'], isTrue);
     });
 
     test('新建笔记会写入双链索引，改正文后索引重建', () async {
@@ -141,7 +141,7 @@ void main() {
       final info =
           await DatabaseService.instance.getPlugin(BuiltinPlugins.notesId);
       expect(info, isNotNull);
-      expect(BuiltinPlugins.isSyncable(info!), isFalse);
+      expect(BuiltinPlugins.isSyncable(info!), isTrue);
     });
   });
 }

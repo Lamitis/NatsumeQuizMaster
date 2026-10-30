@@ -72,8 +72,8 @@ class BuiltinPlugins {
     version: '1.0.0',
     description: '刷题时随手记：[[双链]]、反向链接、Graph 图谱，按题库分类',
     capabilities: ['notes', 'backlinks', 'graph'],
-    // 同步导出清单（sync_repository.dart）不含插件数据 ⇒ 本插件不可同步
-    syncable: false,
+    // v1.35：随局域网同步（按 uid 合并）；可在「同步与提醒 → 插件内容同步」关掉
+    syncable: true,
     upstream: 'Logseq（AGPL-3.0）双链笔记格式与 Graph 交互',
   );
 
@@ -93,8 +93,8 @@ class BuiltinPlugins {
     version: '1.0.0',
     description: '鲸鱼娘学习陪伴：结合连胜、本周正确率与错题到期给打气和建议（AI 可选）',
     capabilities: ['companion', 'chat', 'encouragement'],
-    // 好感度与聊天记录存 settings，同样不在同步导出清单里
-    syncable: false,
+    // v1.35：人设与记忆随局域网同步（不含 API Key / 好感度 / 悬浮位置）
+    syncable: true,
     upstream: 'Coopanion（AGPL-3.0-or-later）好感度 / 情绪气泡 · Cortico（MIT）框架思路',
   );
 
@@ -104,15 +104,15 @@ class BuiltinPlugins {
   /// 日程待办插件（v1.34）。
   ///
   /// 复习计划落地成待办：按到期日排期、勾选完成、逾期标红。数据在本地
-  /// `schedule_items` 表（schema v16），不在同步导出清单里 —— 与笔记同一条
-  /// 边界，界面必须写明「无法同步」。
+  /// `schedule_items` 表（schema v16）；v17 起带 `uid`，随局域网同步
+  /// （可在「同步与提醒 → 插件内容同步」里关掉）。
   static const BuiltinPlugin schedule = BuiltinPlugin(
     id: scheduleId,
     name: '日程待办',
-    version: '1.0.0',
-    description: '把复习计划拆成待办：按日排期、勾选完成、逾期提醒（本机保存）',
+    version: '1.1.0',
+    description: '把复习计划拆成待办：按日排期、勾选完成、逾期提醒（可同步）',
     capabilities: ['schedule', 'todo'],
-    syncable: false,
+    syncable: true,
   );
 
   static const List<BuiltinPlugin> all = [notes, companion, schedule];

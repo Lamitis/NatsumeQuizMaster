@@ -92,14 +92,21 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('五个分区齐全；默认跟随软件，不逼用户填第二遍 Key', (tester) async {
+  testWidgets('分区齐全（含助教形象）；默认跟随软件，不逼用户填第二遍 Key', (tester) async {
     setSurface(tester);
     final appState = await seed(tester);
     await tester.pumpWidget(host(appState, const CompanionSettingsScreen()));
     await settleFrames(tester);
 
+    // v1.35：形象选择排在最前（用户反馈在 AI 设置里找不到换头像的地方）
+    expect(find.text('助教形象'), findsOneWidget);
+    expect(find.byKey(const ValueKey('companionAvatarChoice-navy')),
+        findsOneWidget);
     expect(find.text('悬浮小鲸'), findsOneWidget);
+
+    await scrollTo(tester, find.text('人格设定'));
     expect(find.text('人格设定'), findsOneWidget);
+    await scrollTo(tester, find.text('记忆'));
     expect(find.text('记忆'), findsOneWidget);
 
     await scrollTo(tester, find.text('AI 接口'));
@@ -110,8 +117,8 @@ void main() {
 
     await scrollTo(tester, find.text('知识库'));
     expect(find.text('知识库'), findsOneWidget);
-    // 页面底部把「只在本机」讲清楚
-    expect(find.textContaining('不参与局域网同步'), findsWidgets);
+    // 页面底部把同步边界讲清楚：人设/记忆可同步，Key 与好感度仍本机
+    expect(find.textContaining('API Key、好感度与悬浮位置只留本机'), findsWidgets);
 
     await teardownTree(tester);
   });

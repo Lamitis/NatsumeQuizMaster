@@ -1,6 +1,9 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../models/plugin_sync_scope.dart';
 import '../models/schedule_item.dart';
+import '../services/app_state.dart';
 import '../services/schedule_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
@@ -14,9 +17,9 @@ import '../widgets/kit/natsume_kit.dart';
 ///   2. 勾选完成（就地改，不跳页）；
 ///   3. 逾期标红（一眼看出欠账）。
 ///
-/// 同步边界与双链笔记一致：待办存本地 `schedule_items` 表（schema v16），
-/// **不进局域网同步导出清单**，所以页面上直接写明「本机保存，无法同步」
-/// —— 用户点进来之前就该知道，而不是同步完发现没带过去。
+/// 同步边界与双链笔记一致：待办存本地 `schedule_items` 表（schema v16/v17），
+/// v1.35 起随局域网同步（按 uid 合并），页面上跟着开关显示「随局域网同步」
+/// 或「仅本机」——用户点进来之前就该知道，而不是同步完才发现没带过去。
 ///
 /// 手机适配：整页 `ResponsivePage` 限宽 + 工具栏 [Wrap] 折行，
 /// 行内标题单行省略、到期标签不换行，360dp 宽也不会溢出。
@@ -77,6 +80,18 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   }
 
   int get _todoCount => _items.where((e) => !e.done).length;
+
+  /// 待办是否参与局域网同步（v1.35：设置页可关；读不到设置就当开）
+  bool _syncOn(BuildContext context) {
+    try {
+      return context
+          .watch<AppState>()
+          .isPluginSyncEnabled(PluginSyncScope.schedulePluginId);
+    } catch (_) {
+      // 测试里可能没挂 Provider：按默认（开启）显示，不让文案把页面打崩
+      return true;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -139,10 +154,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           ),
           const SizedBox(height: NatsumeSpace.xs),
           Text(
-            // 同步边界写在这里：看列表时就能看到，不用去翻插件说明
-            _todoCount == 0
-                ? '暂无待办 · 本机保存（无法同步）'
-                : '还有 $_todoCount 件事 · 本机保存（无法同步）',
+            // 同步边界写在这里：看列表时就能看到，不用去翻插件说明。
+            // v1.35：跟着「插件内容同步」开关走，开/关都说清楚。
+            '${_todoCount == 0 ? '暂无待办' : '还有 $_todoCount 件事'}'
+            ' · ${_syncOn(context) ? '随局域网同步（可在设置里关掉）' : '仅本机（同步已关闭）'}',
             style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
           ),
         ],

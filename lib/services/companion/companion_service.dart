@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import '../../models/companion.dart';
+import '../../models/companion_avatar.dart';
 import '../../models/companion_memory.dart';
 import '../../models/companion_settings.dart';
 import '../app_state.dart';
@@ -29,11 +30,11 @@ class CompanionService {
 
   static final DatabaseService _db = DatabaseService.instance;
 
-  /// 陪伴数据是否参与局域网同步（false = 换设备看不到，界面要明说）
-  static const bool syncable = false;
+  /// 陪伴数据是否参与局域网同步（v1.35：人设与记忆可同步，Key/好感度不同步）
+  static const bool syncable = true;
 
   /// 界面统一复用的同步提示文案
-  static const String syncNotice = '聊天与好感度只保存在本机，不参与局域网同步';
+  static const String syncNotice = '角色人设与对话记忆随局域网同步（不含 API Key / 好感度）';
 
   /// 角色名（头像、气泡、插件说明共用）
   static const String personaName = '小鲸';
@@ -47,9 +48,14 @@ class CompanionService {
   /// 对话记忆（v1.33：最近 40 轮 + 客观摘要）在 settings 表里的键
   static const String memoryKey = 'companion_memory_v1';
 
-  /// 悬浮头像用的图片：直接复用 App 图标，不再引入第三方素材
+  /// 悬浮头像的**默认**图片：复用 App 图标，不引入第三方素材
   /// （v1.33 用户原话：「用软件的图标也可以」）。
-  static const String avatarAsset = 'assets/app_logo.png';
+  ///
+  /// v1.35 起用户可在「助教设置 → 助教形象」换成官方插件自带的三张角色图，
+  /// 真实取值请用 [CompanionSettings.avatarAsset]；这个常量保留给
+  /// 「默认项 / 老备份没有 avatar 字段」的场景。
+  static const String avatarAsset = CompanionAvatarOption.defaultAsset;
+
 
   /// 与 `CompanionSnapshot.dailyGoal` 同值的本地别名，文案里直接用
   static const int dailyGoal = CompanionSnapshot.dailyGoal;

@@ -7,6 +7,7 @@ import '../widgets/guide/guide_anchor.dart';
 import '../widgets/guide/guide_steps.dart';
 import '../widgets/kit/natsume_kit.dart';
 import 'settings_screen.dart';
+import 'companion_settings_screen.dart';
 
 /// 设置中心（Natsume Des 2.0）
 ///
@@ -87,6 +88,52 @@ class SettingsHubScreen extends StatelessWidget {
               ),
               const SizedBox(height: NatsumeSpace.xs),
             ],
+            const SizedBox(height: NatsumeSpace.md),
+            // AI 助教的独立设置入口（v1.35）：形象 / 语气 / 模型 / 记忆。
+            // 之前只能从浮层右键或「我的 → 学习工具」进，用户反馈在设置里找不到。
+            NatsumeSurface(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                    builder: (_) => const CompanionSettingsScreen()),
+              ),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: NatsumeSpace.sm, vertical: NatsumeSpace.sm),
+              child: Row(
+                children: [
+                  Container(
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: ac.surfaceAlt,
+                      borderRadius: NatsumeRadius.smallBorder,
+                      border:
+                          Border.all(color: ac.border, width: NatsumeLine.width),
+                    ),
+                    child: Icon(Icons.face_retouching_natural_outlined,
+                        size: 16, color: ac.accent),
+                  ),
+                  const SizedBox(width: NatsumeSpace.sm),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('助教设置',
+                            style: NatsumeType.h3Style.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: ac.textPrimary)),
+                        const SizedBox(height: 1),
+                        Text('助教形象、语气、模型与记忆',
+                            style: NatsumeType.captionStyle
+                                .copyWith(color: ac.textSecondary)),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.chevron_right_rounded,
+                      size: 16, color: ac.textTertiary),
+                ],
+              ),
+            ),
             const SizedBox(height: NatsumeSpace.md),
             // 全部设置（保留一次性浏览全部项的能力）
             NatsumeSurface(

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../models/app_settings.dart';
 import '../models/companion.dart';
+import '../models/companion_avatar.dart';
 import '../models/companion_memory.dart';
 import '../models/companion_settings.dart';
 import '../models/knowledge_base.dart';
@@ -13,6 +14,7 @@ import '../services/knowledge_base/kb_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
+import '../widgets/companion/companion_avatar_view.dart';
 import '../widgets/kit/natsume_kit.dart';
 
 /// 「小鲸助教」设置页（v1.33）。
@@ -214,6 +216,8 @@ class _CompanionSettingsScreenState extends State<CompanionSettingsScreen> {
         child: ListView(
           padding: const EdgeInsets.all(NatsumeSpace.md),
           children: [
+            _avatarSection(ac),
+            const SizedBox(height: NatsumeSpace.md),
             _overlaySection(ac, today),
             const SizedBox(height: NatsumeSpace.md),
             _personaSection(ac),
@@ -232,7 +236,8 @@ class _CompanionSettingsScreenState extends State<CompanionSettingsScreen> {
             ),
             const SizedBox(height: NatsumeSpace.md),
             Text(
-              '助教的所有设置、对话记忆都只存在这台设备上，不参与局域网同步。',
+              '角色人设与对话记忆会随局域网同步（可在「设置 → 同步与提醒 → 插件内容同步」里关掉）；'
+              'API Key、好感度与悬浮位置只留本机。',
               style: NatsumeType.microStyle
                   .copyWith(color: ac.textTertiary, height: 1.6),
             ),
@@ -311,6 +316,81 @@ class _CompanionSettingsScreenState extends State<CompanionSettingsScreen> {
         child: Text(text,
             style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
       );
+
+  // ── 助教形象 ──
+  Widget _avatarSection(AppThemeColors ac) {
+    final current = _settings.avatarOption;
+    return _section(
+      ac,
+      title: '助教形象',
+      hint: '三张角色图是官方插件 natsume.companion 自带资产'
+          '（assets/plugins/official/companion/avatars）；'
+          '换形象只改外观，统计口径与提示词一字不动，选完立即生效。',
+      children: [
+        Wrap(
+          spacing: NatsumeSpace.sm,
+          runSpacing: NatsumeSpace.sm,
+          children: [
+            for (final option in CompanionAvatarOption.all)
+              _avatarChoice(ac, option),
+          ],
+        ),
+        const SizedBox(height: NatsumeSpace.xxs),
+        Text(
+          '当前：${current.label}${current.hint.isEmpty ? '' : ' · ${current.hint}'}',
+          style:
+              NatsumeType.microStyle.copyWith(color: ac.textTertiary, height: 1.5),
+        ),
+      ],
+    );
+  }
+
+  Widget _avatarChoice(AppThemeColors ac, CompanionAvatarOption option) {
+    final selected = _settings.avatar == option.id;
+    return Semantics(
+      label: '助教形象 ${option.label}${selected ? '（当前）' : ''}',
+      selected: selected,
+      button: true,
+      child: InkWell(
+        key: ValueKey('companionAvatarChoice-${option.id}'),
+        borderRadius: BorderRadius.circular(NatsumeRadius.card),
+        onTap: () => _apply(_settings.copyWith(avatar: option.id)),
+        child: Container(
+          width: 92,
+          padding: const EdgeInsets.symmetric(
+              horizontal: NatsumeSpace.xs, vertical: NatsumeSpace.xs),
+          decoration: BoxDecoration(
+            color: selected ? ac.accentSoft : ac.surfaceAlt,
+            borderRadius: BorderRadius.circular(NatsumeRadius.card),
+            border: Border.all(
+              color: selected ? ac.accent : ac.border,
+              width: selected ? 1.5 : NatsumeLine.width,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // 预览用同一套渲染：默认项是自绘头像，角色项是官方插件资产
+              CompanionAvatarView(
+                settings: _settings.copyWith(avatar: option.id),
+                size: 48,
+              ),
+              const SizedBox(height: NatsumeSpace.xxs),
+              Text(
+                option.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: NatsumeType.microStyle.copyWith(
+                  color: selected ? ac.accent : ac.textSecondary,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   // ── 悬浮头像 / 气泡 ──
   Widget _overlaySection(AppThemeColors ac, String today) {
