@@ -585,12 +585,11 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   }
 
   Future<void> _importPlugin() async {
-    final result = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['zip'],
     );
-    if (result == null) return;
-    final path = result.files.first.path;
+    final path = picked?.path;
     if (path == null) return;
     final dir = await ExportStorage.resolve();
     final installDir =
@@ -643,12 +642,11 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   }
 
   Future<void> _importWorld() async {
-    final result = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['zip', 'natsume-world'],
     );
-    if (result == null) return;
-    final path = result.files.first.path;
+    final path = picked?.path;
     if (path == null) return;
     try {
       final r = await WorldService.importWorld(path);

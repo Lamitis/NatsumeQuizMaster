@@ -1,7 +1,7 @@
 name: natsume_quiz_master
 description: NatsumeQuizMaster —— 本地优先、知识库约束 AI、可插件化的备考刷题工具（Android / Windows）
 publish_to: 'none'
-version: 1.35.0+28
+version: 1.35.1+29
 
 environment:
   # 标准工具链：Flutter 3.47.8 / Dart 3.13.7（见 .fvmrc），依赖锁定 pdfrx 1.3.5
@@ -20,7 +20,15 @@ dependencies:
   path: ^1.8.3
   
   # 文件处理
-  file_picker: ^6.1.1
+  # v1.35.1：6.2.1 → 13.x。原因不是「新」，而是 6.x 钉死了 `win32 ^5.x`，
+  # 而 flutter_secure_storage 11.x 的 Windows 实现（4.x，FFI 版）要求
+  # `win32 ^6.x`，两者无交集 —— 想升级安全存储就必须升 file_picker。
+  # 8.0.6~12.x 同样带 `win32 ^5.5.1`（pub 解析会直接冲突），只有 13.x 拆成
+  # 分平台包（android_file_picker / windows_file_picker …），不再直接依赖 win32。
+  # 代价：13.x 是 API 重写版——`FilePicker.platform` / `FilePickerResult` 没了，
+  # 改为静态方法 `FilePicker.pickFile/pickFiles/getDirectoryPath/saveFile`，
+  # 返回 `PlatformFile` / `List<PlatformFile>` / `Uri?`（各调用点已同步迁移）。
+  file_picker: ^13.3.0
   archive: ^3.4.9
   xml: ^6.3.0
   
@@ -44,8 +52,13 @@ dependencies:
   path_provider: 2.1.5
 
   # 每日提醒 + 保活（v1.0.2 新增）
-  flutter_local_notifications: ^19.5.0
-  timezone: ^0.10.1
+  # v1.35.1：19.x → 22.x。旧版 flutter_local_notifications_windows 1.0.3 的
+  # C++ 用了 ATL::CW2A 隐式转换与 `CW2A::GetValueKey` 这类旧写法，在新版 MSVC
+  # （GitHub Actions windows-latest）上直接 C2440 / C4596 编译失败；
+  # 22.x 的 Windows 实现改成了 FFI 插件（flutter_local_notifications_windows 3.x），
+  # 不再有那段 ATL 代码。timezone 也随之抬到 ^0.11.0（22.x 的硬约束）。
+  flutter_local_notifications: ^22.3.3
+  timezone: ^0.11.0
   flutter_timezone: ^4.1.1
   flutter_foreground_task: ^6.0.0
 
@@ -61,7 +74,11 @@ dependencies:
 
   # 安全存储（v1.0.2 七项改进：Android 上 API Key 走 Keystore 加密，
   # 其他平台回退 KeyCrypto 混淆存储）
-  flutter_secure_storage: ^9.2.0
+  # v1.35.1：9.2.4 → 11.x。旧版 flutter_secure_storage_windows 3.1.2 的
+  # C++ 里 `GetValueKey` 写成带限定名的成员（C4596），且 ATL::CW2A 到
+  # std::wstring 的隐式转换在新版 MSVC 下失效（C2440）；4.x 的 Windows
+  # 实现改成 FFI（win32）后这段 C++ 已经删掉。
+  flutter_secure_storage: ^11.2.0
   pdfrx: 1.3.5
   image: ^4.3.0
   google_mlkit_text_recognition: ^0.15.0
@@ -72,6 +89,9 @@ dev_dependencies:
   flutter_lints: ^3.0.1
   integration_test:
     sdk: flutter
+  # 单元测试里伪造 file_picker 的 PlatformFile 需要 XFile 类型
+  # （file_picker 13.x 的 PlatformFile.xFile 返回它），本身是 flutter 的传递依赖。
+  cross_file: ^0.3.4
 
 flutter:
   uses-material-design: true

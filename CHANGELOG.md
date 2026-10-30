@@ -12,6 +12,50 @@
 
 ---
 
+## [1.35.1] - 2026-10-30
+
+### 修复
+- **Windows 构建在 `windows-latest` 上编译失败**：runner 镜像滚到 Windows Server 2025 +
+  新版 MSVC 后，`flutter_local_notifications_windows` 1.0.3 与
+  `flutter_secure_storage_windows` 3.1.2 的 C++ 里 `ATL::CW2A` 隐式转换、
+  `CW2A::GetValueKey` 旧写法直接 C2440 / C4596 报错。CI 把系统镜像钉到
+  `windows-2022`，同时从依赖侧根治（见「升级说明」），不再依赖 runner 镜像的新旧。
+- **`ExportStorage.saveFileAs` 适配 file_picker 13.x**：13.x 的 `saveFile()` 自己把
+  bytes 写入目标并返回 `Uri`（桌面 `file://`、Android `content://`），所以删掉原先
+  「按源文件名补扩展名 + `File.writeAsBytes`」的逻辑，改为把 `Uri` 转成用户可见路径；
+  `content://` 没有本地路径时原样返回。
+- **单元测试里的假 picker 迁移**：`FilePicker` 在 13.x 是静态 API，改为替换
+  `FilePickerPlatform.instance`；`test/developer_backup_import_test.dart` 的 4 条用例
+  全绿（含 `content://` 无本地路径、取消、异常恢复三条边界）。
+
+### 升级说明
+- `flutter_local_notifications` 19.x → **22.x**：Windows 实现换成 FFI 插件
+  （`flutter_local_notifications_windows` 3.x），旧 ATL C++ 消失；连带
+  `timezone` → ^0.11.0（22.x 硬约束）、`flutter_timezone` → ^4.1.1。
+  代码迁移到 22.x 的命名参数 API：`initialize(settings:)`、
+  `zonedSchedule(id:/title:/body:/scheduledDate:/notificationDetails:)`、
+  `show(id:/title:/body:/notificationDetails:)`、`cancel(id:)`（`reminder_service.dart`
+  共 5 处调用点）。
+- `flutter_secure_storage` 9.2.4 → **11.x**：Windows 实现改为 FFI（`win32 ^6.x`），
+  C4596 / C2440 一并消失。
+- `file_picker` 6.2.1 → **13.x**：6.x 与 8.0.6~12.x 都钉死 `win32 ^5.x`，与
+  flutter_secure_storage 11.x 要求的 `win32 ^6.x` 无交集，只能上 13.x；13.x 拆成
+  分平台包（`file_picker_platform_interface` 4.x），不再直接依赖 win32。
+  **API 是重写版**：`FilePicker.platform` / `FilePickerResult` 被静态方法
+  `pickFile` / `pickFiles` / `getDirectoryPath` / `saveFile` 取代，返回
+  `PlatformFile` / `List<PlatformFile>` / `Uri?`，全仓 9 处调用点已同步迁移。
+- Android 侧迁移到**声明式 Gradle 插件**：`settings.gradle` 用
+  `pluginManagement` + `plugins {}`（AGP 8.13.2 / KGP 2.2.20 / Gradle 8.14.3），
+  `app/build.gradle` 不再 `apply from: flutter.gradle`；`versionCode` / `versionName`
+  改由 Flutter Gradle 插件从 `pubspec.yaml` 注入。
+
+### 文档
+- README 新增「特别鸣谢与版权说明（美术素材）」：应用图标 logo（**六阶堂希罗**）与
+  三张助教形象（**艾玛エマ**）为 **CC 授权素材，不属于本工程的 AGPL-3.0 范围**，
+  附作者 B 站出处链接。
+- `THIRD_PARTY_NOTICES.md` 新增「四、美术素材」，写明代码与素材的授权边界，以及
+  再分发时必须保留的署名义务。
+
 ## [1.35.0] - 2026-10-30
 
 ### 新增

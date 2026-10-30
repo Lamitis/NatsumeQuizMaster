@@ -46,8 +46,10 @@ Google、阿里云、月之暗面、MiniMax 的**商标图形**，归各公司�
 
 因此本工程：
 
-1. **不复制、不打包、不修改**上述任何贴图（`assets/` 下没有陪伴插件目录，
-   `test/companion_test.dart` 用断言钉住这一点）；
+1. **不复制、不打包、不修改**上述任何贴图（`assets/companion` 目录不存在，
+   `test/companion_test.dart` 用断言钉住这一点）；包内
+   `assets/plugins/official/companion/avatars/` 的三张助教形象是本项目自有的
+   第三方授权素材（见第四节），与 Coopanion 的 `web/whale/` 无关；
 2. 陪伴插件的头像由 `lib/widgets/companion/companion_avatar.dart` 以
    `CustomPainter` **现场自绘**（原创造型，不含任何厂商商标），代码随本工程
    以 AGPL-3.0 分发；
@@ -94,3 +96,27 @@ HTTP 客户端，不含 syncthing 源文件），因此本仓库不产生 MPL �
 并已做反向查重：核心业务逻辑使用最基础语法自行重组，未照搬任何带有特定公司
 版权头（如 Copyright OpenAI / Copyright Google）的代码。如仍有雷同或侵权，
 纯属巧合，请联系开发者处理（联系方式见 `SECURITY.md`）。
+
+---
+
+## 四、美术素材（CC 授权，不随本项目 AGPL-3.0 分发）
+
+代码与美术素材的授权是**分开**的：本仓库 `LICENSE`（AGPL-3.0）只覆盖代码。
+下列素材是第三方作者的原创作品，以 Creative Commons 系列协议授权，版权归原作者：
+
+| 素材文件 | 用途 | 作者 | 出处 | 授权 |
+|---|---|---|---|---|
+| 应用图标 logo（`assets/app_logo.png`） | 应用图标、悬浮助教头像、关于页 | 六阶堂希罗 | <https://space.bilibili.com/553336367> | CC（以原作者发布处的说明为准） |
+| `assets/plugins/official/companion/avatars/{rainbow,navy,amber}.png` | 小鲸助教头像 / 角色卡 | 艾玛エマ | <https://space.bilibili.com/1327387359> | CC（以原作者发布处的说明为准） |
+| `assets/plugins/official/companion/masters/{rainbow,navy,amber}.ico` | 上述 PNG 的母版，**仅仓库存档、未注册进 `pubspec.yaml`**（不进包体） | 同上 | 同上 | 同上 |
+
+义务说明：
+
+1. 再分发这些文件时必须**保留作者署名**与上述出处链接，并遵守原作者选择的 CC 条款
+   （是否允许商用、是否要求相同方式共享，以原发布处的说明为准）；
+2. 它们**不属于 AGPL-3.0 的「源代码」范围**，不能被本项目的 AGPL 授权覆盖，下游也
+   不能把它们当作 AGPL 素材再许可；
+3. 除上表外，界面内的插画与助教默认形象由本项目以 `CustomPainter` 自绘
+   （`lib/widgets/companion/companion_avatar.dart`），随代码以 AGPL-3.0 发布；
+4. 若原作者对使用方式有异议，请通过 `SECURITY.md` 中的联系方式告知，本项目会立即
+   移除相关素材。

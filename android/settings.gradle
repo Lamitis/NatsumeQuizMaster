@@ -1,6 +1,49 @@
-// China-network friendly plugin resolution (dl.google.com / plugins.gradle.org unreachable)
+// ============================================================
+// android/settings.gradle —— Flutter 声明式插件加载（v1.35.1 迁移）
+//
+// 旧写法是在 android/app/build.gradle 里
+//     apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+// 也就是「命令式 apply」。Flutter 新版直接拒绝执行并报：
+//     You are applying Flutter's main Gradle plugin imperatively using the
+//     apply script method, which is not possible anymore.
+// 新写法分三步（本文件 + android/build.gradle + android/app/build.gradle）：
+//   ① 这里把 Flutter SDK 自带的 flutter_tools/gradle 作为 included build 引入，
+//      并用 plugins {} 声明 flutter-plugin-loader；
+//   ② root 的 build.gradle 删掉 buildscript{}（AGP 依赖改为这里统一声明）；
+//   ③ app/build.gradle 改用 plugins {} 应用 Android / Flutter 插件。
+// plugin-loader 会自己读取 .flutter-plugins-dependencies 并 include 各插件子工程，
+// 所以这里不再手工遍历 .flutter-plugins（该文件自 Flutter 3.29 起已不再生成）。
+//
+// 版本选择依据（本机 Flutter 3.47.8，见 .fvmrc）：
+//   packages/flutter_tools/gradle/src/main/kotlin/DependencyVersionChecker.kt
+//     Gradle  < 8.14.0 → 报错     （建议 ≥ 9.1.0）
+//     AGP     < 8.11.1 → 报错     （建议 ≥ 9.0.1）
+//     KGP     < 2.2.20 → 报错     （建议 ≥ 2.3.20）
+//   这里取 AGP 8.x 线的最新稳定版 8.13.2 + KGP 2.2.20：
+//   仍在 Flutter 支持区间内，同时与仓库里所有第三方插件（都按 AGP 8 的 DSL 写
+//   build.gradle）保持兼容，不会踩到 AGP 9 移除旧 DSL / Jetifier 的坑。
+//   Gradle 侧用 8.14.3（见 gradle/wrapper/gradle-wrapper.properties）。
+// ============================================================
+
 pluginManagement {
+    // Flutter SDK 路径：优先 local.properties（flutter 工具会自动写入），
+    // 其次回退到 FLUTTER_ROOT 环境变量，最后才断言失败。
+    def flutterSdkPath = {
+        def properties = new Properties()
+        def localPropertiesFile = file('local.properties')
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.withInputStream { properties.load(it) }
+        }
+        def sdkPath = properties.getProperty('flutter.sdk') ?: System.getenv('FLUTTER_ROOT')
+        assert sdkPath != null : 'flutter.sdk 未在 local.properties 中设置，且 FLUTTER_ROOT 环境变量为空'
+        return sdkPath
+    }()
+
+    includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
+
     repositories {
+        // China-network friendly：dl.google.com / plugins.gradle.org 不稳定时，
+        // 插件标记与依赖仍能先从腾讯镜像解析到。
         maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
         google()
         mavenCentral()
@@ -8,18 +51,13 @@ pluginManagement {
     }
 }
 
-include ":app"
-
-def flutterProjectRoot = rootProject.projectDir.parentFile.toPath()
-
-def plugins = new Properties()
-def pluginsFile = new File(flutterProjectRoot.toFile(), '.flutter-plugins')
-if (pluginsFile.exists()) {
-    pluginsFile.withReader('UTF-8') { reader -> plugins.load(reader) }
+plugins {
+    id 'dev.flutter.flutter-plugin-loader' version '1.0.0'
+    // apply false：只把插件放到构建脚本的 classpath 上，
+    // 由各子工程（:app 与第三方插件）自己决定何时 apply。
+    id 'com.android.application' version '8.13.2' apply false
+    id 'org.jetbrains.kotlin.android' version '2.2.20' apply false
 }
 
-plugins.each { name, path ->
-    def pluginDirectory = flutterProjectRoot.resolve(path).resolve('android').toFile()
-    include ":$name"
-    project(":$name").projectDir = pluginDirectory
-}
+include ':app'
+

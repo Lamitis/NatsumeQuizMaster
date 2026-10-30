@@ -171,7 +171,11 @@ jobs:
   build-windows:
     name: 构建 Windows
     needs: verify
-    runs-on: windows-latest
+    # v1.35.1：windows-latest 已切到 Windows Server 2025 + 更新版 MSVC 工具链，
+    # 第三方插件里的旧 C++ 写法在上面会直接编译失败（C2440 / C4596）。
+    # 依赖侧已相应升级（flutter_local_notifications 22.x / flutter_secure_storage 11.x），
+    # 这里再把系统镜像钉住，避免 runner 镜像滚动带来「昨天能编、今天不能编」。
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 

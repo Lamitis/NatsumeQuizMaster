@@ -88,8 +88,10 @@ class ReminderService {
     }
 
     // 通知
+    // v1.35.1：flutter_local_notifications 22.x 起所有方法改为具名参数
+    // （initialize(settings:)），旧的位置参数写法直接编译不过。
     await _notifications.initialize(
-      const InitializationSettings(
+      settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       ),
     );
@@ -178,11 +180,11 @@ class ReminderService {
       ),
     );
     await _notifications.zonedSchedule(
-      alarmId,
-      'NatsumeQuizMaster',
-      await _buildReminderText(),
-      tz.TZDateTime.from(target, tz.local),
-      details,
+      id: alarmId,
+      title: 'NatsumeQuizMaster',
+      body: await _buildReminderText(),
+      scheduledDate: tz.TZDateTime.from(target, tz.local),
+      notificationDetails: details,
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     );
   }
@@ -235,7 +237,7 @@ class ReminderService {
 
     await _notify(now);
     // 弹通知后取消当天 alarm 防双弹，并接力排明天（保证次日提醒不中断）
-    await _notifications.cancel(alarmId);
+    await _notifications.cancel(id: alarmId);
     await _scheduleAlarm(forceTomorrow: true);
   }
 
@@ -255,10 +257,10 @@ class ReminderService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('$_notifiedKeyPrefix${dateKeyOf(now)}', true);
     await _notifications.show(
-      notifyId,
-      'NatsumeQuizMaster',
-      await _buildReminderText(),
-      const NotificationDetails(
+      id: notifyId,
+      title: 'NatsumeQuizMaster',
+      body: await _buildReminderText(),
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'natsume_reminder',
           '每日刷题提醒',
@@ -289,7 +291,7 @@ class ReminderService {
     if (ids.contains(alarmId) || ids.contains(notifyId)) return;
 
     await _notify(now);
-    await _notifications.cancel(alarmId);
+    await _notifications.cancel(id: alarmId);
     // 补弹后同样接力排明天
     await _scheduleAlarm(forceTomorrow: true);
   }
@@ -301,10 +303,10 @@ class ReminderService {
     if (!Platform.isAndroid || !_initialized) return false;
     if (!await hasNotificationPermission()) return false;
     await _notifications.show(
-      9999,
-      'NatsumeQuizMaster',
-      '这是一条测试通知，说明提醒渠道工作正常。',
-      const NotificationDetails(
+      id: 9999,
+      title: 'NatsumeQuizMaster',
+      body: '这是一条测试通知，说明提醒渠道工作正常。',
+      notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(
           'natsume_reminder',
           '每日刷题提醒',
@@ -372,8 +374,8 @@ class ReminderService {
 
   Future<void> _stopAll() async {
     await FlutterForegroundTask.stopService();
-    await _notifications.cancel(alarmId);
-    await _notifications.cancel(notifyId);
+    await _notifications.cancel(id: alarmId);
+    await _notifications.cancel(id: notifyId);
   }
 
   Future<void> stopAll() async {

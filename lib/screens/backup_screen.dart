@@ -180,14 +180,15 @@ class _BackupScreenState extends State<BackupScreen> {
     try {
       // Android 可能无法将 .db 映射到 MIME 类型，custom 过滤会导致选择器失败。
       // 允许选择任意文件；真正的备份内容仍由 DatabaseService 在导入时校验。
-      final result = await FilePicker.platform.pickFiles(type: FileType.any);
+      // file_picker 13.x：pickFiles 返回 List<PlatformFile>，用户取消是空列表。
+      final files = await FilePicker.pickFiles(type: FileType.any);
       picking = false;
       if (!mounted) return;
-      if (result == null || result.files.isEmpty) {
+      if (files.isEmpty) {
         setState(() => _importStatus = '已取消选择备份文件');
         return;
       }
-      final path = result.files.first.path;
+      final path = files.first.path;
       if (path == null || path.trim().isEmpty) {
         setState(() => _importStatus = '无法获取文件的本地路径，请先下载到本机后重试');
         return;

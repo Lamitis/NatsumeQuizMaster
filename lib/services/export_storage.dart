@@ -75,11 +75,12 @@ class ExportStorage {
   /// 而且 Android 11+ 上部分文件管理器/网盘接管后拿到的是一份副本而不是那个
   /// 文件本身；用户要的是「我自己挑个文件夹存下来」。
   ///
-  /// 平台差异（file_picker 6.x 的真实能力，别想当然）：
-  ///   · Windows/macOS/Linux：`saveFile()` 有原生另存为对话框，**只返回路径**，
-  ///     文件由本方法自己写（6.x 的 saveFile 没有 bytes 参数）。
-  ///   · Android/iOS：`saveFile()` 未实现（会抛 `UnimplementedError`），
-  ///     退回「选一个文件夹」（`getDirectoryPath()`，SAF 目录选择器）+ 写入。
+  /// 平台差异（file_picker 13.x 的真实能力，别想当然）：
+  ///   · 有原生「另存为」对话框的平台（Windows/macOS/Linux，以及新版
+  ///     android_file_picker）：`saveFile()` 自己写字节，返回 `Uri?`
+  ///     （桌面是 `file://`，Android 是 `content://`）——本方法不再自己写文件。
+  ///   · `saveFile()` 未实现（会抛 `UnimplementedError`）时，退回「选一个文件夹」
+  ///     （`getDirectoryPath()`，Android SAF 目录选择器）+ 写入。
   ///   · 都不可用（测试环境 / 插件缺失）：落 [resolve] 的导出目录，保证导出
   ///     不会因为「弹不出对话框」而整个失败。
   static Future<ExportSaveResult> saveAsBytes(
@@ -95,31 +96,27 @@ class ExportStorage {
       return ExportSaveResult(path: picked);
     }
 
-    final extensions = _extensionsOf(fileName);
-
-    // ① 桌面端原生「另存为」
+    // ① 原生「另存为」：file_picker 13.x 的 saveFile 自己把 bytes 写进目标，
+    // 返回 Uri ——所以这里既不用再 File(...).writeAsBytes，也不存在
+    // 「用户手输文件名丢了后缀」的问题（插件按 fileName 兜底）。
     try {
-      final picked = await FilePicker.platform.saveFile(
+      final picked = await FilePicker.saveFile(
         dialogTitle: dialogTitle ?? '保存导出文件',
         fileName: fileName,
-        type: extensions.isEmpty ? FileType.any : FileType.custom,
-        allowedExtensions: extensions.isEmpty ? null : extensions,
-        lockParentWindow: true,
+        bytes: bytes,
+        mimeType: _mimeOf(fileName),
       );
       if (picked == null) return const ExportSaveResult(path: null);
-      // 部分对话框不带扩展名返回（用户手输文件名），补回真实后缀
-      final target = _ensureExtension(picked, fileName);
-      await File(target).writeAsBytes(bytes, flush: true);
-      return ExportSaveResult(path: target);
+      return ExportSaveResult(path: _displayPathOf(picked));
     } on UnimplementedError {
-      // Android/iOS：saveFile 没有实现，走下面的目录选择
+      // 平台没实现 saveFile：走下面的目录选择
     } catch (_) {
       // 对话框实例化失败（极少数 Windows 环境）同样退化到目录选择
     }
 
     // ② 选文件夹 + 写入（Android SAF 目录选择器）
     try {
-      final dirPath = await FilePicker.platform.getDirectoryPath(
+      final dirPath = await FilePicker.getDirectoryPath(
         dialogTitle: dialogTitle ?? '选择保存位置',
       );
       if (dirPath == null) return const ExportSaveResult(path: null); // 用户取消
@@ -158,21 +155,29 @@ class ExportStorage {
     );
   }
 
-  /// 用户没改扩展名就按源文件名补上（Windows 对话框的过滤器不强制后缀）
-  static String _ensureExtension(String path, String sourceName) {
-    final dot = sourceName.lastIndexOf('.');
-    if (dot < 0 || dot == sourceName.length - 1) return path;
-    final ext = sourceName.substring(dot + 1).toLowerCase();
-    if (path.toLowerCase().endsWith('.$ext')) return path;
-    return '$path.$ext';
+  /// 保存对话框的 MIME 类型（Android 的 SAF 靠它决定默认打开方式；
+  /// 桌面端只当元数据用）。认不出就按二进制。
+  static String _mimeOf(String fileName) {
+    final dot = fileName.lastIndexOf('.');
+    final ext = dot < 0 ? '' : fileName.substring(dot + 1).toLowerCase();
+    return switch (ext) {
+      'pdf' => 'application/pdf',
+      'json' => 'application/json',
+      'csv' => 'text/csv',
+      'txt' || 'md' || 'markdown' => 'text/plain',
+      'docx' =>
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'xlsx' =>
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'zip' => 'application/zip',
+      _ => 'application/octet-stream',
+    };
   }
 
-  /// 文件名里的扩展名（供对话框过滤器用；没有扩展名返回空列表）
-  static List<String> _extensionsOf(String fileName) {
-    final dot = fileName.lastIndexOf('.');
-    if (dot < 0 || dot == fileName.length - 1) return const [];
-    return [fileName.substring(dot + 1).toLowerCase()];
-  }
+  /// 保存结果的展示路径：桌面 `file://` 转回盘符路径，
+  /// Android `content://` 没有本地路径，就原样返回 URI 字符串。
+  static String _displayPathOf(Uri uri) =>
+      uri.scheme == 'file' ? uri.toFilePath() : uri.toString();
 }
 
 /// 另存为的结果。

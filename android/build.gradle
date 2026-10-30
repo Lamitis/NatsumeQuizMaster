@@ -1,28 +1,34 @@
-buildscript {
-    repositories {
-        maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.5.0'
-    }
-}
+// ============================================================
+// android/build.gradle —— root 工程（v1.35.1）
+//
+// 原来的 buildscript { classpath 'com.android.tools.build:gradle:8.5.0' }
+// 整块已删除：AGP 与 Kotlin 的版本现在统一在 settings.gradle 的
+// plugins {} 里声明（apply false），脚本 classpath 由那里提供。
+// 保留 buildscript 会同时下载两套 AGP，且版本以 buildscript 为准，
+// 容易出现「声明的版本和实际生效的版本不一致」。
+//
+// buildDir 改用 layout.buildDirectory（Gradle 8.14 已弃用 Project#buildDir，
+// 9.0 起彻底移除）。目录布局保持不变：android/../build/<子工程名>。
+// ============================================================
 
 allprojects {
     repositories {
         maven { url 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/' }
+        google()
         mavenCentral()
     }
 }
 
-rootProject.buildDir = '../build'
+def newBuildDir = rootProject.layout.buildDirectory.dir('../../build').get()
+rootProject.layout.buildDirectory.set(newBuildDir)
 subprojects {
-    project.buildDir = "${rootProject.buildDir}/${project.name}"
+    project.layout.buildDirectory.set(newBuildDir.dir(project.name))
 }
 subprojects {
     project.evaluationDependsOn(':app')
 }
 
 tasks.register("clean", Delete) {
-    delete rootProject.buildDir
+    delete rootProject.layout.buildDirectory
 }
+

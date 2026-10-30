@@ -314,14 +314,12 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   }
 
   Future<void> _importDocument() async {
-    final result = await FilePicker.platform.pickFiles(
+    final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['txt', 'md', 'markdown', 'docx', 'pdf'],
-      allowMultiple: true,
     );
-    if (result == null || _selectedKbId == null) return;
-    final paths =
-        result.files.where((f) => f.path != null).map((f) => f.path!).toList();
+    if (_selectedKbId == null) return;
+    final paths = files.map((f) => f.path).whereType<String>().toList();
     for (final p in paths) {
       try {
         await _kb.importDocument(_selectedKbId!, p);
@@ -417,12 +415,11 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   }
 
   Future<void> _importKb() async {
-    final result = await FilePicker.platform.pickFiles(
+    final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['json'],
     );
-    if (result == null) return;
-    final path = result.files.first.path;
+    final path = picked?.path;
     if (path == null) return;
     final (id, err) = await KbFileService.importKbFile(path);
     if (id > 0) {

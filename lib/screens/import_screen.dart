@@ -54,16 +54,15 @@ class _ImportScreenState extends State<ImportScreen> {
   }
 
   Future<void> _pickFiles() async {
-    final result = await FilePicker.platform.pickFiles(
+    // file_picker 13.x：pickFiles 恒为多选，返回 List<PlatformFile>，取消即空列表
+    final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['doc', 'docx', 'json', 'pdf'], // v1.0.2: 支持 JSON 题库；v12: 支持 PDF
-      allowMultiple: true,
     );
 
-    if (result != null) {
+    if (files.isNotEmpty) {
       setState(() {
-        _selectedFiles =
-            result.files.where((f) => f.path != null).map((f) => f.path!).toList();
+        _selectedFiles = files.map((f) => f.path).whereType<String>().toList();
       });
     }
   }

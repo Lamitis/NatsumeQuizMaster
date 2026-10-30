@@ -1,3 +1,7 @@
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,36 +10,69 @@ import 'package:natsume_quiz_master/screens/backup_screen.dart';
 import 'package:natsume_quiz_master/services/app_state.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
 
-class _Picker extends FilePicker {
-  _Picker(this.result, {this.error});
-  final FilePickerResult? result;
+/// file_picker 13.x 的假文件：`path` 由基类按 [uri] 推导
+/// （`file://` 才有本地路径，`content://` 则为 null）。
+/// 注意 [Uri.file] 收到**相对路径**时生成的是不带 scheme 的 URI，基类会判定为
+/// 「没有本地路径」，所以默认按当前目录补成绝对路径（与真实桌面端一致）。
+base class _PickedFile extends PlatformFile {
+  _PickedFile({required this.name, Uri? uri})
+      : uri = uri ?? Uri.file(File(name).absolute.path);
+
+  @override
+  final String name;
+
+  @override
+  final Uri uri;
+
+  @override
+  XFile get xFile => XFile(path ?? name);
+
+  @override
+  int? lengthSync() => 1;
+
+  @override
+  Future<int?> length() async => 1;
+
+  @override
+  Future<Uint8List> readAsBytes() async => Uint8List(0);
+
+  @override
+  Stream<Uint8List> readAsByteStream() => const Stream.empty();
+}
+
+/// 13.x 起 `FilePicker` 是 `abstract final class` 且方法都是静态的，
+/// 只能通过平台实现注入：替换 `FilePickerPlatform.instance`。
+/// 注意 `_Picker` 直接继承 `FilePickerPlatform`（构造时带同一 token），
+/// 所以 [FilePickerPlatform.instance] 的 verifyToken 能通过，不需要 Mock 混入。
+class _Picker extends FilePickerPlatform {
+  _Picker(this.files, {this.error});
+  final List<PlatformFile> files;
   final Object? error;
 
   @override
-  Future<FilePickerResult?> pickFiles({
+  Future<List<PlatformFile>> pickFiles({
     String? dialogTitle,
     String? initialDirectory,
     FileType type = FileType.any,
     List<String>? allowedExtensions,
     Function(FilePickerStatus)? onFileLoading,
-    bool allowCompression = true,
-    int compressionQuality = 30,
-    bool allowMultiple = false,
-    bool withData = false,
-    bool withReadStream = false,
-    bool lockParentWindow = false,
-    bool readSequential = false,
+    int compressionQuality = 0,
+    AndroidOptions androidOptions = const AndroidOptions(),
+    DarwinOptions darwinOptions = const DarwinOptions(),
+    WindowsOptions windowsOptions = const WindowsOptions(),
+    LinuxOptions linuxOptions = const LinuxOptions(),
+    WebOptions webOptions = const WebOptions(),
   }) async {
     if (error != null) throw error!;
-    return result;
+    return files;
   }
 }
 
 void main() {
-  late FilePicker original;
+  late FilePickerPlatform original;
 
-  setUp(() => original = FilePicker.platform);
-  tearDown(() => FilePicker.platform = original);
+  setUp(() => original = FilePickerPlatform.instance);
+  tearDown(() => FilePickerPlatform.instance = original);
 
   Future<void> pumpScreen(WidgetTester tester) async {
     await tester.pumpWidget(
@@ -60,7 +97,8 @@ void main() {
 
   testWidgets('picker exception is visible and does not leave busy guard',
       (tester) async {
-    FilePicker.platform = _Picker(null, error: StateError('picker failed'));
+    FilePickerPlatform.instance =
+        _Picker(const [], error: StateError('picker failed'));
     await pumpScreen(tester);
     await tapImport(tester);
     await tester.pumpAndSettle();
@@ -70,7 +108,7 @@ void main() {
   });
 
   testWidgets('picker cancellation is visible', (tester) async {
-    FilePicker.platform = _Picker(null);
+    FilePickerPlatform.instance = _Picker(const []);
     await pumpScreen(tester);
     await tapImport(tester);
     await tester.pumpAndSettle();
@@ -78,9 +116,10 @@ void main() {
   });
 
   testWidgets('picker result without local path is visible', (tester) async {
-    FilePicker.platform = _Picker(
-      FilePickerResult([PlatformFile(name: 'cloud.db', size: 1)]),
-    );
+    // Android 云端 Provider 给的是 content:// ，没有本地路径
+    FilePickerPlatform.instance = _Picker([
+      _PickedFile(name: 'cloud.db', uri: Uri.parse('content://cloud/cloud.db')),
+    ]);
     await pumpScreen(tester);
     await tapImport(tester);
     await tester.pumpAndSettle();
@@ -89,10 +128,7 @@ void main() {
 
   testWidgets('valid path reaches destructive confirmation without importing',
       (tester) async {
-    FilePicker.platform = _Picker(
-      FilePickerResult(
-          [PlatformFile(name: 'backup.db', size: 1, path: 'backup.db')]),
-    );
+    FilePickerPlatform.instance = _Picker([_PickedFile(name: 'backup.db')]);
     await pumpScreen(tester);
     await tapImport(tester);
     await tester.pumpAndSettle();

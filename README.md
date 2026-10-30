@@ -547,6 +547,22 @@ $iscc = @(
 - 开发过程中使用了 AI 编程工具辅助
 - 感谢所有提供反馈与建议的早期用户
 
+## 特别鸣谢与版权说明（美术素材）
+
+本项目的**代码**以 AGPL-3.0 分发，但**美术素材走的是原作者自己的 CC 授权**，
+不属于 AGPL-3.0 覆盖范围。素材版权归原作者所有，本项目仅获得使用许可：
+
+| 素材 | 用途 | 作者 / 出处 | 授权 |
+|---|---|---|---|
+| 应用图标 logo | 应用图标、悬浮助教头像 | **六阶堂希罗**（B 站主页 <https://space.bilibili.com/553336367>） | Creative Commons（以原作者发布处的说明为准） |
+| 助教形象 · 彩虹发 / 蓝发 / 橙发 | 小鲸助教头像、角色卡（`assets/plugins/official/companion/avatars/`；`masters/*.ico` 母版只做仓库存档、不进包体） | **艾玛エマ**（B 站主页 <https://space.bilibili.com/1327387359>） | Creative Commons（以原作者发布处的说明为准） |
+
+- **不属于 AGPL-3.0**：上表素材不适用本仓库 `LICENSE`；二次分发或再创作请遵守原作者
+  的 CC 条款并保留署名，商用或改编前请先联系原作者。
+- 除上表外的界面插图、助教默认形象均为本项目自绘（如
+  `lib/widgets/companion/companion_avatar.dart`），随代码以 AGPL-3.0 发布。
+- 完整清单（含第三方代码许可）见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+
 ## 许可
 
 [GNU AGPL-3.0](LICENSE) —— 自由使用 · 修改 · 分发，衍生作品须同样开源

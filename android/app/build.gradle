@@ -1,9 +1,24 @@
-def localProperties = new Properties()
-def localPropertiesFile = rootProject.file('local.properties')
-if (localPropertiesFile.exists()) {
-    localPropertiesFile.withReader('UTF-8') { reader ->
-        localProperties.load(reader)
-    }
+// ============================================================
+// android/app/build.gradle（v1.35.1：迁移到声明式 plugins {}）
+//
+// 旧写法：
+//     apply plugin: 'com.android.application'
+//     apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+// Flutter 新版已彻底禁止第二种写法（"applying Flutter's main Gradle plugin
+// imperatively ... is not possible anymore"），插件必须由 settings.gradle 的
+// plugins {} 统一声明，这里只负责 apply。
+//
+// 顺带修掉一个隐藏问题：versionCode / versionName 原来读 local.properties 里的
+// flutter.versionCode / flutter.versionName，但新版 flutter 工具**不再往
+// local.properties 写这两项**（本机该文件只有 flutter.sdk），于是一直走
+// 兜底的 1 / "1.0" —— APK 的 versionCode 恒为 1，覆盖安装时会撞版本。现在改用
+// Flutter Gradle 插件从 pubspec.yaml（version: 1.35.1+29）解析出的
+// flutter.versionCode / flutter.versionName。
+// ============================================================
+plugins {
+    id 'com.android.application'
+    // 必须放在 Android 插件之后（Flutter Gradle 插件的硬性要求）
+    id 'dev.flutter.flutter-gradle-plugin'
 }
 
 def keystoreProperties = new Properties()
@@ -12,21 +27,6 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.withReader('UTF-8') { reader ->
         keystoreProperties.load(reader)
     }
-}
-
-def flutterRoot = localProperties.getProperty('flutter.sdk')
-if (flutterRoot == null) {
-    throw new Exception("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
-}
-
-def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
-if (flutterVersionCode == null) {
-    flutterVersionCode = '1'
-}
-
-def flutterVersionName = localProperties.getProperty('flutter.versionName')
-if (flutterVersionName == null) {
-    flutterVersionName = '1.0'
 }
 
 // ── ABI 过滤：把 Flutter 的 --target-platform 映射成 ndk.abiFilters ──────────
@@ -50,9 +50,6 @@ def requestedAbis = requestedPlatforms == null
     ? []
     : requestedPlatforms.split(',').collect { platformToAbi[it.trim()] }.findAll { it != null }
 
-apply plugin: 'com.android.application'
-apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-
 android {
     namespace "com.natsume.quiz"
     compileSdk 35
@@ -69,8 +66,9 @@ android {
         // flutter_foreground_task 要求 minSdk >= 23
         minSdk 23
         targetSdk 35
-        versionCode flutterVersionCode.toInteger()
-        versionName flutterVersionName
+        // 版本号由 Flutter Gradle 插件从 pubspec.yaml 注入（见文件头注释）
+        versionCode flutter.versionCode
+        versionName flutter.versionName
 
         // 见文件顶部说明：只对本次真正要构建的架构打包原生库。
         if (!requestedAbis.isEmpty()) {

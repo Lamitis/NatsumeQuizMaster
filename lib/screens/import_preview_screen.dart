@@ -571,22 +571,19 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
     final questions = appState.previewQuestions;
     if (index < 0 || index >= questions.length) return;
 
-    FilePickerResult? picked;
+    List<PlatformFile> picked;
     try {
-      // withData: false + 后台 isolate 转码：见 question_edit_dialog._addImage
-      // 的同款修复（v1.35 卡死：原图整份读进 UI isolate + 同步 WebP 编码）。
-      picked = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        allowMultiple: true,
-        withData: false,
-      );
+      // 13.x 的 pickFiles 只返回文件句柄（不预读 bytes）：真正的转码仍由
+      // QuestionImageService.fromFileAsync 在后台 isolate 做，UI 不会卡死
+      // （见 question_edit_dialog._addImage 的同款修复，v1.35 卡死问题）。
+      picked = await FilePicker.pickFiles(type: FileType.image);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('打开文件选择器失败：$e')));
       return;
     }
-    if (picked == null || picked.files.isEmpty) return;
+    if (picked.isEmpty) return;
     setState(() => _addingImage = true);
 
     final question = questions[index];
@@ -597,7 +594,7 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
     }
     slot++;
     var title = question.title;
-    for (final file in picked.files) {
+    for (final file in picked) {
       final path = file.path;
       if (path == null) continue;
       final image =

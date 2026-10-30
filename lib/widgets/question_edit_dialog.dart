@@ -200,23 +200,21 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
   ///     解码 + 纯 Dart WebP 编码再重也不占 UI 线程，转圈动画照常动。
   Future<void> _addImage() async {
     if (_addingImage) return;
-    FilePickerResult? picked;
+    List<PlatformFile> picked;
     try {
-      picked = await FilePicker.platform.pickFiles(
-        type: FileType.image,
-        allowMultiple: true,
-        withData: false,
-      );
+      // 13.x 的 pickFiles 只返回句柄（bytes 不预读），卡死问题的根因直接消失；
+      // 转码依旧走后台 isolate，见 [QuestionImageService.fromFileAsync]。
+      picked = await FilePicker.pickFiles(type: FileType.image);
     } catch (e) {
       _snack('打开文件选择器失败：$e');
       return;
     }
-    if (picked == null || picked.files.isEmpty) return;
+    if (picked.isEmpty) return;
     setState(() => _addingImage = true);
 
     final added = <QuestionImage>[];
     var slot = _nextImageSlot();
-    for (final file in picked.files) {
+    for (final file in picked) {
       final path = file.path;
       if (path == null) continue;
       final image =
