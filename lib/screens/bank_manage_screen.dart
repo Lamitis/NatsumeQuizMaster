@@ -1,0 +1,350 @@
+import '../utils/design_tokens.dart';
+import '../services/theme_service.dart';
+import '../widgets/kit/natsume_kit.dart';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
+import '../services/app_state.dart';
+import '../services/bank_file_service.dart';
+import '../models/question_bank.dart';
+import '../utils/responsive.dart';
+import 'bank_questions_screen.dart';
+import 'import_screen.dart';
+
+class BankManageScreen extends StatefulWidget {
+  const BankManageScreen({super.key});
+
+  @override
+  State<BankManageScreen> createState() => _BankManageScreenState();
+}
+
+class _BankManageScreenState extends State<BankManageScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    return Scaffold(
+      backgroundColor: ac.background,
+      appBar: AppBar(
+        title: const Text('题库管理'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const ImportScreen()),
+            ),
+          ),
+        ],
+      ),
+      // 平板适配：内容限宽居中（手机无影响）
+      body: ResponsivePage(
+        child: Consumer<AppState>(
+          builder: (context, appState, _) {
+            if (appState.banks.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.library_books_outlined,
+                        size: 64, color: ac.border),
+                    const SizedBox(height: 16),
+                    Text('还没有题库',
+                        style: TextStyle(
+                            fontSize: NatsumeType.h3, color: ac.textSecondary)),
+                    const SizedBox(height: 8),
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('导入题库'),
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const ImportScreen()),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return Column(
+              children: [
+                _buildQuizSettings(appState, ac),
+                const Divider(height: 1),
+                Expanded(
+                  // v1.0.3 宽屏重设计：宽屏题库卡 2 列网格，窄屏维持单列
+                  child: Builder(builder: (context) {
+                    Widget buildCard(int index) {
+                      final bank = appState.banks[index];
+                      final isSelected =
+                          appState.selectedBankIds.contains(bank.id);
+                      return _BankCard(
+                        bank: bank,
+                        isSelected: isSelected,
+                        onTap: () => appState.toggleBankSelection(bank.id!),
+                        onDelete: () => _confirmDelete(context, appState, bank),
+                        onExport: () => _exportBank(bank),
+                        onOpenQuestions: () => _openQuestions(appState, bank),
+                      );
+                    }
+
+                    if (isWideLayout(context)) {
+                      return GridView.builder(
+                        padding: const EdgeInsets.all(16),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 2,
+                          crossAxisSpacing: 12,
+                          mainAxisSpacing: 0,
+                          childAspectRatio: 5.2,
+                        ),
+                        itemCount: appState.banks.length,
+                        itemBuilder: (context, index) => buildCard(index),
+                      );
+                    }
+                    return ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: appState.banks.length,
+                      itemBuilder: (context, index) => buildCard(index),
+                    );
+                  }),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuizSettings(AppState appState, AppThemeColors ac) {
+    final ac = AppThemeColors.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: ac.surfaceAlt,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tune, size: 18, color: ac.accent),
+              const SizedBox(width: 6),
+              Text('刷题设置',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: NatsumeType.h3,
+                      color: ac.textPrimary)),
+              const Spacer(),
+              Text(
+                appState.selectedBankIds.isEmpty
+                    ? '点击题目前方选择框'
+                    : '已选 ${appState.selectedBankIds.length} 个题库',
+                style:
+                    TextStyle(fontSize: NatsumeType.body, color: ac.textSecondary),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Text('刷题模式: ',
+                  style: TextStyle(
+                      fontSize: NatsumeType.body, color: ac.textSecondary)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (appState.selectedBankIds.length > 1
+                          ? ac.textSecondary
+                          : ac.accent)
+                      .withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(NatsumeRadius.chip),
+                ),
+                child: Text(
+                  appState.selectedBankIds.length > 1 ? '混合刷题' : '单题库刷题',
+                  style: TextStyle(
+                    fontSize: NatsumeType.body,
+                    color: appState.selectedBankIds.length > 1
+                        ? ac.textSecondary
+                        : ac.accent,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _confirmDelete(
+      BuildContext context, AppState appState, QuestionBank bank) {
+    final ac = AppThemeColors.of(context);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除题库"${bank.name}"吗？\n该题库下的所有题目也将被删除，此操作不可恢复。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+          TextButton(
+            onPressed: () {
+              appState.deleteBank(bank.id!);
+              Navigator.pop(ctx);
+            },
+            style: TextButton.styleFrom(foregroundColor: ac.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// v1.30.2：进入题库内部的题目管理（改 / 删 / 移动 / 新建）。
+  ///
+  /// 用户反馈「导入完毕之后也要能进管理题库编辑已导入的题目」。返回时
+  /// 刷新一次题库列表，避免卡片上的题数还是进页面前的旧值。
+  Future<void> _openQuestions(AppState appState, QuestionBank bank) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => BankQuestionsScreen(bank: bank)),
+    );
+    if (!mounted) return;
+    await appState.refreshBanks();
+  }
+
+  /// v1.0.2 扩展：导出题库（含打标签/解析的整理后字段）为 .json 并分享
+  Future<void> _exportBank(QuestionBank bank) async {
+    final dir = Directory.systemTemp.createTempSync('bank_export');
+    final path =
+        '${dir.path}/${bank.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')}.json';
+    final result = await BankFileService.exportBank(bank.id!, bank.name, path);
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (result == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('该题库没有题目，无法导出')),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('已导出 ${bank.questionCount} 道题目为 .json 文件'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+    try {
+      await Share.shareXFiles([XFile(result)], subject: 'NatsumeQuizMaster题库导出');
+    } catch (e) {
+      // v1.0.2 设计审查修复：分享失败不再静默
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('分享失败：$e')),
+      );
+    }
+  }
+}
+
+class _BankCard extends StatelessWidget {
+  final QuestionBank bank;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final VoidCallback onDelete;
+  final VoidCallback onExport;
+  final VoidCallback onOpenQuestions;
+
+  const _BankCard({
+    required this.bank,
+    required this.isSelected,
+    required this.onTap,
+    required this.onDelete,
+    required this.onExport,
+    required this.onOpenQuestions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label:
+          '${bank.name}，${bank.questionCount} 道题目${isSelected ? '，已选中' : '，未选中'}',
+      child: GestureDetector(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: NatsumeSpace.xs),
+          child: NatsumeSurface(
+            onTap: onTap,
+            padding: const EdgeInsets.all(NatsumeSpace.sm),
+            child: Row(
+              children: [
+                // Linear 式小方块选择器（与答题页选项一致）
+                Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: isSelected ? ac.accent : Colors.transparent,
+                    border: Border.all(
+                      color: isSelected ? ac.accent : ac.border,
+                      width: 1.2,
+                    ),
+                    borderRadius: NatsumeRadius.chipBorder,
+                  ),
+                  child: isSelected
+                      ? Icon(Icons.check, size: 12, color: ac.onAccent)
+                      : null,
+                ),
+                const SizedBox(width: NatsumeSpace.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(bank.name,
+                          style: TextStyle(
+                              fontSize: NatsumeType.h3,
+                              fontWeight: FontWeight.w600,
+                              color: ac.textPrimary)),
+                      const SizedBox(height: 4),
+                      Text('${bank.questionCount} 道题目',
+                          style: TextStyle(
+                              fontSize: NatsumeType.body, color: ac.textSecondary)),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  tooltip: '查看 / 编辑题目',
+                  icon: Icon(Icons.edit_note, color: ac.textSecondary, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                  onPressed: onOpenQuestions,
+                ),
+                IconButton(
+                  tooltip: '导出题库',
+                  icon: Icon(Icons.file_download_outlined,
+                      color: ac.textSecondary, size: 20),
+                  padding: EdgeInsets.zero,
+                  // 触达目标 ≥40×40（与预览页同一图标按钮口径）
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                  onPressed: onExport,
+                ),
+                IconButton(
+                  tooltip: '删除题库',
+                  icon: Icon(Icons.delete_outline,
+                      color: ac.textSecondary, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints:
+                      const BoxConstraints(minWidth: 40, minHeight: 40),
+                  onPressed: onDelete,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

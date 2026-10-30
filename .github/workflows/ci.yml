@@ -1,0 +1,72 @@
+# ============================================================
+# NatsumeQuizMaster · 持续集成（最小版）
+# 放置位置：.github/workflows/ci.yml
+#
+# 作用：每次推送 / PR 自动执行静态分析与全量测试，
+#       把「0 error/0 warning」「244 项测试全绿」从本地声明变成外部可验证的事实。
+#       徽章见 README 首屏（badge.svg 直连本文件）。
+#
+# 不需要任何 Secrets。
+# Flutter 版本与本地开发保持一致（当前 3.47.8，见 .fvmrc；标准工具链 Dart 3.13.7）。
+#
+# 关于 analyze 的判定标准：仓库有若干 info 级 lint 提示，而 `flutter analyze`
+# 对任何级别的 issue 都返回非零退出码。这里用 --no-fatal-infos 与项目既有标准
+# 对齐（tools/publish_release.ps1 同样是「error/warning 才算失败」）——
+# warning 及以上仍然会让 CI 变红。
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  analyze-and-test:
+    name: 静态分析 + 全量测试
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.8'   # 与 .fvmrc / 本地开发版本保持一致
+          channel: stable
+          cache: true
+
+      # 测试用 sqflite_common_ffi 跑真实 SQLite；Ubuntu runner 自带
+      # libsqlite3.so.0，装上 dev 包是为了拿到无版本号的 .so 软链，避免
+      # 个别镜像上 DynamicLibrary.open 失败。
+      - name: 安装 SQLite 运行库
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: 拉取依赖
+        run: flutter pub get
+
+      - name: 静态分析（要求 0 error / 0 warning；info 级提示不计）
+        run: flutter analyze --no-fatal-infos
+
+      - name: 全量测试
+        # 为什么不用一句 `flutter test`：失败的**用例名**必须能被看到。
+        # Actions 的原始日志要仓库管理员权限才能下载（403），而 `::error::`
+        # 注解任何人（含 API）都能读——否则失败页只显示「N passed, M failed」，
+        # 定位不到是哪条挂的，只能本地反复重跑碰运气。
+        run: |
+          set +e
+          flutter test --reporter expanded > test_output.log 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            grep -nE "\[E\]$|\[E\] |Expected:|Actual:|Which:|Test failed" test_output.log \
+              | head -30 | sed 's/^/[failed] /' | while IFS= read -r line; do
+                echo "::error::$line"
+              done
+            echo "----- 尾部输出 -----"
+            tail -60 test_output.log
+          else
+            tail -3 test_output.log
+          fi
+          exit "$code"
