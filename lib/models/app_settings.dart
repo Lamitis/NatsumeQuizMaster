@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../services/key_crypto.dart';
 
 /// 预设供应商（v1.28）：一键填入端点 + 模型，降低第三方接入门槛。
@@ -113,6 +115,10 @@ class AppSettings {
   /// 或检索没命中时不会注入，行为与旧版完全一致。
   bool analysisGrounding;
 
+  /// v1.35：用户自定义的「知识点体系」。空列表 = 交给 AI 自行判断（旧行为）；
+  /// 非空时打标签 / 导入解析都只在这个清单里选，保证全库标签口径统一。
+  List<String> knowledgePointTypes;
+
   AppSettings({
     this.apiKey = '',
     this.apiEndpoint = defaultApiEndpoint,
@@ -127,6 +133,7 @@ class AppSettings {
     this.mineruEnabled = false,
     this.mineruToken = '',
     this.analysisGrounding = true,
+    this.knowledgePointTypes = const [],
   });
 
   bool get isConfigured => apiKey.isNotEmpty;
@@ -147,6 +154,8 @@ class AppSettings {
       // 与 api_key 同口径加密：Token 也是凭据，不能明文躺在备份里
       'mineru_token': KeyCrypto.encrypt(mineruToken),
       'analysis_grounding': analysisGrounding ? '1' : '0',
+      // 知识点体系：JSON 数组（不是凭据，明文存，备份可携带）
+      'knowledge_point_types': jsonEncode(knowledgePointTypes),
     };
   }
 
@@ -174,8 +183,28 @@ class AppSettings {
       mineruToken: KeyCrypto.decrypt(map['mineru_token'] ?? ''),
       // 老用户 / 老备份没有这个键：默认开启（软约束，命中不到就不注入）
       analysisGrounding: map['analysis_grounding'] != '0',
+      // 老用户没有知识点体系：空列表 = 沿用 AI 自行判断
+      knowledgePointTypes: decodeKnowledgePointTypes(map['knowledge_point_types']),
     );
   }
+
+  /// 解析「知识点体系」JSON；坏数据一律当空列表（老备份 / 手改过的值）。
+  static List<String> decodeKnowledgePointTypes(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return [
+        for (final e in decoded)
+          if (e is String && e.trim().isNotEmpty) e.trim(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 是否有用户自定义的知识点体系
+  bool get hasKnowledgePointTypes => knowledgePointTypes.isNotEmpty;
 
   AppSettings copyWith({
     String? apiKey,
@@ -191,6 +220,7 @@ class AppSettings {
     bool? mineruEnabled,
     String? mineruToken,
     bool? analysisGrounding,
+    List<String>? knowledgePointTypes,
   }) {
     return AppSettings(
       apiKey: apiKey ?? this.apiKey,
@@ -206,6 +236,7 @@ class AppSettings {
       mineruEnabled: mineruEnabled ?? this.mineruEnabled,
       mineruToken: mineruToken ?? this.mineruToken,
       analysisGrounding: analysisGrounding ?? this.analysisGrounding,
+      knowledgePointTypes: knowledgePointTypes ?? this.knowledgePointTypes,
     );
   }
 }

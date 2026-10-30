@@ -29,6 +29,41 @@ New-Item -ItemType Directory -Path $pkgDir | Out-Null
 
 Copy-Item "$buildDir\*" $pkgDir -Recurse
 
+# 剔除非必要文件（一）：Flutter 不会清理上一次构建留在 Release 目录里的旧 DLL。
+# 插件被移除后（例如 share_plus → 导出改「另存为」），它的 *_plugin.dll 仍躺在那里，
+# 会被原样打进绿色版和安装包，白占体积、还会让人以为功能还在。
+# 判据取 pubspec.lock：DLL 名去掉 _plugin（或 _windows_plugin）后缀后，
+# 在 lock 里找不到同名包 → 视为陈旧，删除。
+# 不带 _plugin 后缀的（pdfium.dll / pdfrx.dll / flutter_windows.dll）一律不动——
+# 它们不是插件产物，删了应用就起不来。
+$lockText = Get-Content (Join-Path $root 'pubspec.lock') -Raw
+$staleDlls = @()
+foreach ($dll in @(Get-ChildItem -LiteralPath $pkgDir -Filter '*_plugin.dll' -File)) {
+    $baseName = $dll.BaseName
+    $candidates = @($baseName -replace '_plugin$', '')
+    if ($baseName -like '*_windows_plugin') {
+        $candidates += ($baseName -replace '_windows_plugin$', '')
+    }
+    $stillUsed = @($candidates | Where-Object {
+        $lockText -match ('(?m)^  ' + [regex]::Escape($_) + ':\s*$')
+    }).Count -gt 0
+    if (-not $stillUsed) {
+        Remove-Item -LiteralPath $dll.FullName -Force
+        $staleDlls += $dll.Name
+    }
+}
+if ($staleDlls.Count -gt 0) {
+    Write-Host "  剔除陈旧插件 DLL（pubspec.lock 已无对应包）：$($staleDlls -join ', ')" -ForegroundColor Yellow
+}
+
+# 剔除非必要文件（二）：调试符号与链接中间产物不随包分发
+# （Release 正常没有，历史 Debug 产物残留时兜底）。
+$junk = @(Get-ChildItem -LiteralPath $pkgDir -Recurse -File -Include '*.pdb', '*.ilk', '*.exp', '*.lib')
+if ($junk.Count -gt 0) {
+    $junk | Remove-Item -Force
+    Write-Host "  剔除非分发文件：$((@($junk | ForEach-Object { $_.Name })) -join ', ')" -ForegroundColor Yellow
+}
+
 # 额外生成中文名启动器（同目录依赖不受影响）
 Copy-Item "$pkgDir\natsume_quiz_master.exe" "$pkgDir\NatsumeQuizMaster.exe"
 

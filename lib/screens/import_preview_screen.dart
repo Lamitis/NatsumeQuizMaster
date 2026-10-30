@@ -549,10 +549,12 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
 
     FilePickerResult? picked;
     try {
+      // withData: false + 后台 isolate 转码：见 question_edit_dialog._addImage
+      // 的同款修复（v1.35 卡死：原图整份读进 UI isolate + 同步 WebP 编码）。
       picked = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: true,
-        withData: true,
+        withData: false,
       );
     } catch (e) {
       if (!mounted) return;
@@ -572,14 +574,10 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
     slot++;
     var title = question.title;
     for (final file in picked.files) {
-      QuestionImage? image;
-      final bytes = file.bytes;
-      if (bytes != null) {
-        image = QuestionImageService.fromEncoded(bytes, position: slot);
-      } else if (file.path != null) {
-        image =
-            await QuestionImageService.fromFile(file.path!, position: slot);
-      }
+      final path = file.path;
+      if (path == null) continue;
+      final image =
+          await QuestionImageService.fromFileAsync(path, position: slot);
       if (image == null) continue;
       added.add(image);
       title = title.isEmpty ? '{{img:$slot}}' : '$title\n{{img:$slot}}';

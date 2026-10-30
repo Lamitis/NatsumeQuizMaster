@@ -271,6 +271,15 @@ class AIService {
   Future<(List<Question>, String?)> _parseChunkOnce(
       String chunk, int bankId, String now,
       {int maxTokens = 8192}) async {
+    // v1.35：用户在设置里定义了知识点体系时，让 AI 直接按体系归类；
+    // 没定义就沿用「教材章节级知识点 + AI 自行判断」的旧口径。
+    final kpTypes = _settings.knowledgePointTypes;
+    final kpSchema = kpTypes.isEmpty
+        ? "\"该题所属的教材章节级知识点，如'解剖学'\""
+        : '"必须严格取自用户的知识点体系：${kpTypes.join(' / ')}"';
+    final kpRule = kpTypes.isEmpty
+        ? '8. knowledge_point 命名规范：统一用教材章节式命名（如"解剖学""生理学""病理学"），不要用自由短语或长句，控制在10字以内'
+        : '8. knowledge_point 只能从下列用户定义的知识点体系中选一个，逐字照抄，不得自创新名：${kpTypes.join('、')}；确实无法归类时留空字符串';
     final prompt = '''你是一个专业的题目解析器。请从以下文本中提取所有题目，返回严格的 JSON 格式。
 
 文本内容：
@@ -285,7 +294,7 @@ $chunk
       "correct_answer": "A/B/C/D/对/错/填空答案",
       "question_type": "single_choice/multi_choice/true_false/fill_blank/ming_jie/jian_da/jie_da",
       "analysis": "如果原文有解析则提取，否则留空",
-      "knowledge_point": "该题所属的教材章节级知识点，如'解剖学'"
+      "knowledge_point": $kpSchema
     }
   ]
 }
@@ -298,14 +307,13 @@ $chunk
 5. 名词解释：question_type="ming_jie"，options 为空 []，correct_answer 为完整释义段落
 6. 简答题：question_type="jian_da"，options 为空 []，correct_answer 为参考答案段落
 7. 问答题：question_type="jie_da"，options 为空 []，correct_answer 为参考答案段落
-8. knowledge_point 命名规范：统一用教材章节式命名（如"解剖学""生理学""病理学"），不要用自由短语或长句，控制在10字以内
+$kpRule
 9. 原文中的解析内容请保留到 analysis 字段。
 10. 只返回 JSON，不要任何其他文字。
 11. 控制输出长度：题干/选项/答案如实提取即可，不要添加原文没有的冗余描述
 12. 文中形如 {{img:N}} 的图片占位符必须原样保留在对应题目的对应字段（题干/选项/解析）的对应位置，不得删改、翻译、重排或补全
 
 请直接返回 JSON：''';
-
     try {
       final response = await _client.post(
         ApiEndpoint.resolve(_settings.apiEndpoint),
@@ -400,6 +408,15 @@ $chunk
   List<Question> _questionsFromJson(
       Map<String, dynamic> parsed, int bankId, String now) {
     final questionsList = parsed['questions'] as List? ?? const [];
+    // v1.35：用户定义了知识点体系时，AI 的 knowledge_point 一律归一化到体系内；
+    // 归不进去就留空（未分类），避免同一题在错题本里出现「体系外」的野标签。
+    final taxonomy = _settings.knowledgePointTypes;
+    String? kpOf(Object? raw) {
+      final rawText = raw?.toString().trim();
+      if (taxonomy.isEmpty) return _nullIfEmpty(rawText);
+      return _nullIfEmpty(normalizeToTaxonomy(rawText, taxonomy));
+    }
+
     return questionsList.map((q) {
       final opts = (q['options'] as List?)
               ?.map((o) => o.toString().trim())
@@ -413,7 +430,7 @@ $chunk
         correctAnswer: (q['correct_answer'] ?? '').toString().trim().toUpperCase(),
         analysis: _nullIfEmpty(q['analysis']?.toString().trim()),
         questionType: _detectType(q),
-        knowledgePoint: _nullIfEmpty(q['knowledge_point']?.toString().trim()),
+        knowledgePoint: kpOf(q['knowledge_point']),
         createdAt: now,
       );
     }).toList();
@@ -430,7 +447,7 @@ $chunk
   // ════════════════════════════════════════════════════════════
 
   /// 视觉切题提示词：把一页「题库文档」扫描图切题入库——只提取，不出题
-  static const String _visionPrompt = '''
+  static const String _visionPromptBase = '''
 你是一个专业的题目解析器。下面是一张题库文档（扫描件）的页面图片，请把页面上的所有题目切出来，返回严格的 JSON，只返回 JSON，不要任何其他文字。
 要求：
 1. 逐字提取题干、选项、答案、解析，不要改写、补写或翻译；题号可省略
@@ -440,6 +457,17 @@ $chunk
 5. 文中形如 {{img:N}} 的占位符原样保留（若有）
 6. 页面上没有题目时返回 {"questions": []}
 ''';
+
+  /// v1.35：用户定义了知识点体系时，把清单追加到视觉切题提示词后面。
+  /// 不追加的话，视觉模型仍会自由起名，而归一化那步只能「事后补救」——名字
+  /// 对不上就整库变未分类。提示词先说清楚，归一化只当兜底。
+  String get _visionPrompt {
+    final types = _settings.knowledgePointTypes;
+    if (types.isEmpty) return _visionPromptBase;
+    return '$_visionPromptBase\n'
+        '7. knowledge_point 只能从下列用户知识点体系中选一个，逐字照抄，不得自创新名：'
+        '${types.join('、')}；确实无法归类时留空字符串\n';
+  }
 
   /// 扫描页逐页视觉切题。错误聚合形如「第 N 页：…」，与文本切题的
   /// 「第 N 块」同口径；进度按页回调。
@@ -1179,16 +1207,60 @@ $detail$marking
   ///
   /// 轻量级方案（v13）：优先 HTTP 调用通义等极速模型；失败（断网/Key 异常）
   /// 时回退到本地关键词分类，保证离线也能分学科。
+  ///
+  /// v1.35：新增 [options]——用户自定义的知识点体系。传空（默认）时行为与
+  /// 旧版完全一致（AI 自由判断）；非空时 AI **只能在体系内选**，返回前再按
+  /// 体系归一化一次（模型偶尔会加「（炎症）」这类后缀），归不进体系就返回
+  /// 空串（＝未分类），绝不往库里塞体系外的标签。
+  ///
   /// 返回知识点名（≤10字）；失败时返回失败标记：
   /// 'AI请求失败' / 'AI服务返回错误' / 'AI解析生成失败'（与里程碑分组口径一致）
-  Future<String> tagKnowledgePoint(Question question) async {
+  Future<String> tagKnowledgePoint(Question question,
+      {List<String> options = const []}) async {
     final text = _questionTextForTag(question);
-    final httpResult = await _tagViaHttp(question);
-    if (isAiError(httpResult) || httpResult == '其他') {
-      final local = KeywordSubjectClassifier.classifySync(text);
-      if (local != null) return local;
+    final httpResult = await _tagViaHttp(question, options: options);
+    final local = KeywordSubjectClassifier.classifySync(text);
+    if (options.isEmpty) {
+      if (isAiError(httpResult) || httpResult == '其他') {
+        if (local != null) return local;
+      }
+      return httpResult;
     }
-    return httpResult;
+    // 有体系：AI 的答案必须落在体系内
+    final fromAi = normalizeToTaxonomy(httpResult, options);
+    if (fromAi != null) return fromAi;
+    // AI 失败 / 出圈 → 本地关键词分类，同样要落进体系
+    final fromLocal = normalizeToTaxonomy(local, options);
+    if (fromLocal != null) return fromLocal;
+    // 都归不进体系：AI 真失败就把失败标记抛给上层（上层会跳过不入库），
+    // 否则留空 = 未分类，比塞一个体系外的标签更好收拾。
+    if (isAiError(httpResult)) return httpResult;
+    return '';
+  }
+
+  /// 把一个标签归一到用户的 [options] 体系里；归不进返回 null。
+  ///
+  /// 三步：完全相等 → 忽略大小写/空白后相等 → 互相包含（模型常输出
+  /// 「病理学（炎症）」「呼吸系统疾病-肺炎」这种带上下文的答案）。
+  /// 包含匹配只在**唯一命中**时采纳，多个候选就放弃，避免乱贴。
+  static String? normalizeToTaxonomy(String? raw, List<String> options) {
+    if (raw == null || options.isEmpty) return null;
+    final tag = _cleanTag(raw);
+    if (tag.isEmpty || tag == '其他') return null;
+    for (final o in options) {
+      if (o == tag) return o;
+    }
+    final lowerTag = tag.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+    for (final o in options) {
+      if (o.toLowerCase().replaceAll(RegExp(r'\s+'), '') == lowerTag) return o;
+    }
+    final fuzzy = <String>[];
+    for (final o in options) {
+      final lo = o.toLowerCase();
+      if (lo.isEmpty) continue;
+      if (lowerTag.contains(lo) || lo.contains(lowerTag)) fuzzy.add(o);
+    }
+    return fuzzy.length == 1 ? fuzzy.first : null;
   }
 
   String _questionTextForTag(Question question) {
@@ -1198,12 +1270,27 @@ $detail$marking
     return '${question.title}$opts\n正确答案：${question.correctAnswer}';
   }
 
-  Future<String> _tagViaHttp(Question question) async {
-    final prompt = '''请判断下面这道题属于哪个教材章节级知识点。
+  Future<String> _tagViaHttp(Question question,
+      {List<String> options = const []}) async {
+    // v1.35：用户定义了知识点体系时，把清单塞进提示词并禁止自由命名；
+    // 否则沿用原来的「教材章节级」开放题。
+    final taxonomy = options.isEmpty ? '' : '\n可选知识点体系（只能从中选一个）：\n'
+        '${[for (var i = 0; i < options.length; i++) '${i + 1}. ${options[i]}'].join('\n')}\n';
+    final prompt = taxonomy.isEmpty
+        ? '''请判断下面这道题属于哪个教材章节级知识点。
 按以下格式回复（直接说知识点名，不说题库名）：
 1. 只输出一个章节级知识点名称（如"解剖学""生理学""病理学"）
 2. 控制在10字以内，不要加引号、标点或解释
 3. 若无法判断，输出"其他"
+
+题目：${question.title}
+${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\n')}' : ''}
+正确答案：${question.correctAnswer}'''
+        : '''请判断下面这道题属于哪个知识点。用户已经定义了自己的知识点体系，你只能从中选一个。
+$taxonomy
+回复要求（直接说知识点名，不说题库名）：
+1. 只输出上面清单里的一个名称，逐字照抄，不要编号、引号、标点或解释
+2. 若都不合适，输出"其他"
 
 题目：${question.title}
 ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\n')}' : ''}
@@ -1217,7 +1304,9 @@ ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\
           'messages': [
             {
               'role': 'system',
-              'content': '你是医学教材章节分类助手。请判断下面这道题属于哪个教材章节级知识点。'
+              'content': taxonomy.isEmpty
+                  ? '你是医学教材章节分类助手。请判断下面这道题属于哪个教材章节级知识点。'
+                  : '你是医学知识点分类助手。请把题目归类到用户给定的知识点体系中的某一项。'
             },
             {'role': 'user', 'content': prompt},
           ],
@@ -1235,7 +1324,7 @@ ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\
         if (kp.isEmpty) return 'AI解析生成失败';
         return kp;
       }
-      return 'AI服务返回错误 ($response.statusCode)';
+      return 'AI服务返回错误 (${response.statusCode})';
     } catch (_) {
       return 'AI请求失败';
     }

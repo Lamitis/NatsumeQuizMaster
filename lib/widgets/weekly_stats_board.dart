@@ -27,6 +27,7 @@ class WeeklyStatsBoard extends StatefulWidget {
     this.vacationDays = const {},
     this.onHistoryReport,
     this.maxHeight,
+    this.onDayTap,
   });
 
   final Map<String, int> dailyTotals;
@@ -35,6 +36,10 @@ class WeeklyStatsBoard extends StatefulWidget {
   final double weekAccuracy;
   final Set<String> vacationDays;
   final VoidCallback? onHistoryReport;
+
+  /// 点击日历某一天（v1.35）。首页用它打开「当日待办」弹层：既能看流量，
+  /// 也能当场加/勾待办——未来日期就是「提前规划」，过去日期就是补记。
+  final ValueChanged<DateTime>? onDayTap;
 
   /// 可用高度预算（首页一屏布局下传入）。有值时卡片会据此选择日历行数，
   /// 优先保证「完整可见」；为 null（如统计页复用）时按月份实际行数渲染。
@@ -265,6 +270,11 @@ class _WeeklyStatsBoardState extends State<WeeklyStatsBoard> {
                 todayKey: todayKey,
                 cellHeight: cellH,
                 rows: _visibleRows,
+                // v1.35：点某天 → 回调年月日（日历本身只知道「几号」）
+                onDayTap: widget.onDayTap == null
+                    ? null
+                    : (day) =>
+                        widget.onDayTap!(DateTime(year, month, day)),
                 heatColors: [
                   Colors.transparent, // 空：不铺底（精密化的关键）
                   levelShade(ac.accent, ac.surface, 0.22), // 少 <50

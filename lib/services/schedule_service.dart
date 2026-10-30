@@ -70,6 +70,21 @@ class ScheduleService {
     return count;
   }
 
+  /// 某一天到期的待办（v1.35 日历点选某天用）。
+  ///
+  /// 只比年月日：日历点的是「哪一天」，具体几点由列表自己显示；
+  /// 无期限待办不落在任何一天，所以不算进来。
+  static List<ScheduleItem> dueOnDay(List<ScheduleItem> items, DateTime day) {
+    return [
+      for (final item in items)
+        if (item.dueAt != null &&
+            item.dueAt!.year == day.year &&
+            item.dueAt!.month == day.month &&
+            item.dueAt!.day == day.day)
+          item
+    ];
+  }
+
   /// 列表排序：未完成在前（到期近的优先，无期限沉底），已完成按更新时间倒序
   static List<ScheduleItem> sorted(List<ScheduleItem> items, {DateTime? now}) {
     final list = List<ScheduleItem>.of(items);

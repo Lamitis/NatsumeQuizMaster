@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -57,6 +58,28 @@ class QuestionImageService {
       return null;
     }
   }
+
+  /// 字节 → 配图的**后台线程版**（界面入口一律走这条）。
+  ///
+  /// 为什么必须换线程：解码 + 本项目自研的纯 Dart WebP 编码是**同步重活**
+  /// （逐像素循环 + 建 Huffman 树 + 体积超限时反复缩放重编，一张手机原图
+  /// 轻松几秒到几十秒）。直接在 UI isolate 上调用，界面会整段冻结——
+  /// 用户看到的就是「点了加图，转圈没反应，只能强制关掉」。
+  /// [Isolate.run] 把这段计算挪到独立 isolate，界面照常刷新（转圈动画不卡）。
+  static Future<QuestionImage?> fromEncodedAsync(
+    Uint8List raw, {
+    int position = 0,
+    String? anchor,
+  }) =>
+      Isolate.run(() => fromEncoded(raw, position: position, anchor: anchor));
+
+  /// 本地文件 → 配图的**后台线程版**（连读文件一起挪走，避免大图 IO 也占 UI）。
+  static Future<QuestionImage?> fromFileAsync(
+    String path, {
+    int position = 0,
+    String? anchor,
+  }) =>
+      Isolate.run(() => fromFile(path, position: position, anchor: anchor));
 
   /// 已解码位图 → 配图（PDF 光栅化后直接走这条，免得再编一次码）。
   static QuestionImage? fromImage(

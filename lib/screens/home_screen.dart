@@ -9,10 +9,12 @@ import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/format_utils.dart';
 import '../utils/responsive.dart';
+import '../widgets/calendar_day_sheet.dart';
 import '../widgets/guide/guide_anchor.dart';
 import '../widgets/guide/guide_steps.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../widgets/kit/natsume_logo.dart';
+import '../widgets/monthly_calendar.dart';
 import '../widgets/sync_conflict_banner.dart';
 import '../widgets/weekly_stats_board.dart';
 import 'import_preview_screen.dart';
@@ -199,6 +201,17 @@ class _HomeScreenState extends State<HomeScreen> {
                             vacationDays: _vacationDays,
                             maxHeight: cardAvail,
                             onHistoryReport: () => _showHistoryReport(appState),
+                            // v1.35：点日历任意一天 → 当日待办弹层（未来日期可提前
+                            // 安排，过去日期可补记/勾掉），不再只有「看」。
+                            onDayTap: (day) {
+                              final key = MonthCalendar.dateKeyOf(day);
+                              showCalendarDaySheet(
+                                context,
+                                day: day,
+                                total: _yearlyTotals[key] ?? 0,
+                                isVacation: _vacationDays.contains(key),
+                              );
+                            },
                           ),
                         ),
                       ],

@@ -772,6 +772,9 @@ class AppState extends ChangeNotifier {
     // v1.34 解析接地：默认开启（软约束，没命中就不注入，行为与旧版一致）
     final analysisGrounding =
         (await _db.getSetting('analysis_grounding') ?? '1') == '1';
+    // v1.35 用户自定义知识点体系（空 = AI 自行判断，旧行为）
+    final knowledgePointTypes = AppSettings.decodeKnowledgePointTypes(
+        await _db.getSetting('knowledge_point_types'));
     _settings = AppSettings(
       apiKey: apiKey,
       apiEndpoint: apiEndpoint,
@@ -787,6 +790,7 @@ class AppState extends ChangeNotifier {
       mineruEnabled: mineruEnabled,
       mineruToken: mineruToken,
       analysisGrounding: analysisGrounding,
+      knowledgePointTypes: knowledgePointTypes,
     );
     // v1.0.2 新增设置
     _vacationModeEnabled =
@@ -827,6 +831,9 @@ class AppState extends ChangeNotifier {
     // v1.34 解析 / 追问引用知识库（软约束，见 AppState._resolveGrounding）
     await _db.setSetting(
         'analysis_grounding', newSettings.analysisGrounding ? '1' : '0');
+    // v1.35 知识点体系：JSON 数组，空列表 = 交回 AI 自行判断
+    await _db.setSetting('knowledge_point_types',
+        jsonEncode(newSettings.knowledgePointTypes));
     _initAIService();
     notifyListeners();
   }
@@ -1090,7 +1097,8 @@ class AppState extends ChangeNotifier {
         for (final row in rows) {
           final id = row.id;
           if (id == null) continue;
-          final converted = QuestionImageService.fromEncoded(
+          // 转码在后台 isolate 里跑：启动阶段批量转码，绝不能让启动画面冻结
+          final converted = await QuestionImageService.fromEncodedAsync(
             row.content,
             position: row.position,
             anchor: row.anchor,
@@ -2300,6 +2308,24 @@ class AppState extends ChangeNotifier {
   /// 更新题目知识点标签
   Future<void> updateQuestionKnowledgePoint(int questionId, String kp) =>
       _db.updateQuestionKnowledgePoint(questionId, kp);
+
+  // ======================== v1.35：用户自定义知识点体系 ========================
+
+  /// 保存用户自定义的知识点体系。空列表 = 清空（回到「AI 自行判断」的旧行为）。
+  Future<void> setKnowledgePointTypes(List<String> types) =>
+      updateSettings(_settings.copyWith(knowledgePointTypes: types));
+
+  /// 可被重打标签的题目总数（一键重导按**整库**口径走）
+  Future<int> getQuestionCountForRetag() => _db.getTotalQuestionCount();
+
+  /// 按页取题目（重打标签用：分批读，别把大库一次读进内存）
+  Future<List<Question>> getQuestionsForRetag(
+          {int limit = 200, int offset = 0}) =>
+      _db.getQuestionsForRetag(limit: limit, offset: offset);
+
+  /// 全库已出现过的知识点标签（「知识点体系」编辑页：把现有标签收编成体系）
+  Future<List<String>> getDistinctKnowledgePoints() =>
+      _db.getDistinctKnowledgePoints();
 
   /// 改判一条作答记录（会话统计 + FSRS 同步修正）
   Future<void> rejudgeAnswerRecord(int recordId, bool isCorrect) async {

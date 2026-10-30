@@ -192,6 +192,12 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
   /// 用户选的原图可能是 JPEG/PNG/HEIC 等任意格式：统一交给
   /// [QuestionImageService] 转成 WebP 并压到「长边 ≤1280、≤512KB」，
   /// 库里因此永远只存 WebP，做题页也只需一条解码路径。
+  ///
+  /// v1.35 修复「加图片卡死」：
+  ///   · `withData: false`——不再把原图整份读进 UI isolate（选 5 张手机照片
+  ///     就是几十上百 MB，读进来那一刻就已经定住了）；
+  ///   · 转码走 [QuestionImageService.fromFileAsync]（独立 isolate），
+  ///     解码 + 纯 Dart WebP 编码再重也不占 UI 线程，转圈动画照常动。
   Future<void> _addImage() async {
     if (_addingImage) return;
     FilePickerResult? picked;
@@ -199,7 +205,7 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
       picked = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: true,
-        withData: true,
+        withData: false,
       );
     } catch (e) {
       _snack('打开文件选择器失败：$e');
@@ -211,14 +217,10 @@ class _QuestionEditDialogState extends State<QuestionEditDialog> {
     final added = <QuestionImage>[];
     var slot = _nextImageSlot();
     for (final file in picked.files) {
-      QuestionImage? image;
-      final bytes = file.bytes;
-      if (bytes != null) {
-        image = QuestionImageService.fromEncoded(bytes, position: slot);
-      } else if (file.path != null) {
-        image = await QuestionImageService.fromFile(file.path!,
-            position: slot);
-      }
+      final path = file.path;
+      if (path == null) continue;
+      final image =
+          await QuestionImageService.fromFileAsync(path, position: slot);
       if (image == null) continue;
       added.add(image);
       _insertImageToken(slot);

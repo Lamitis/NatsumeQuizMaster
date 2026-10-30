@@ -23,6 +23,7 @@ import '../services/sync/sync_code.dart';
 import '../services/sync/sync_pair_payload.dart';
 import '../widgets/sync_qr_view.dart';
 import 'backup_screen.dart';
+import 'knowledge_point_types_screen.dart';
 import 'sync_scan_screen.dart';
 
 /// 设置分组：设置页按组拆成多个子页，由 [SettingsHubScreen] 分发。
@@ -1217,6 +1218,56 @@ class _SettingsScreenState extends State<SettingsScreen>
                                       .settings
                                       .isConfigured)
                               ? () => _startTagging()
+                              : null,
+                        ),
+                      ),
+
+                      // ===== v1.35 知识点体系 + 一键重导 =====
+                      const SizedBox(height: 12),
+                      Divider(height: 1, color: ac.border),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Icon(Icons.category_outlined,
+                              size: 18, color: ac.textTertiary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              settings.hasKnowledgePointTypes
+                                  ? '知识点体系：${settings.knowledgePointTypes.length} 类'
+                                  : '知识点体系：未设置（AI 自行判断）',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  fontWeight: FontWeight.w500,
+                                  color: ac.textPrimary),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: _openKnowledgePointTypes,
+                            child: const Text('设计体系'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '自己定一套知识点口径（如「呼吸系统 / 循环系统」），'
+                        '导入解析和打标签都会只在这套口径里选；'
+                        '定好后可一键把全库题目按新体系重打标签。',
+                        style: TextStyle(
+                            fontSize: NatsumeType.caption,
+                            color: ac.textSecondary,
+                            height: 1.5),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.sync_alt_rounded, size: 16),
+                          label: const Text('一键重导知识点',
+                              style: TextStyle(fontSize: NatsumeType.body)),
+                          onPressed: (settings.hasKnowledgePointTypes &&
+                                  settings.isConfigured)
+                              ? () => _startRetagAll()
                               : null,
                         ),
                       ),
@@ -2491,8 +2542,13 @@ class _SettingsScreenState extends State<SettingsScreen>
     final applied = await showDialog<({int applied, int skipped})>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          _TaggingDialog(questions: questions, ai: ai, appState: appState),
+      builder: (_) => _TaggingDialog(
+        questions: questions,
+        ai: ai,
+        appState: appState,
+        // v1.35：用户定义了知识点体系时，打标签只能在这套体系里选
+        options: appState.settings.knowledgePointTypes,
+      ),
     );
     if (!mounted) return;
     if (applied != null && applied.applied > 0) {
@@ -2510,19 +2566,116 @@ class _SettingsScreenState extends State<SettingsScreen>
     }
     await _loadUntaggedCount();
   }
+
+  /// v1.35 一键重导：按用户自定义的知识点体系，把**全库**题目重新打标签。
+  ///
+  /// 与「为剩余题目打标签」不同：这里不看有没有标签，整库逐题过一遍（已有标签
+  /// 会被覆盖成体系内的新标签），边打边写库，可暂停/取消。几千题会消耗不少额度，
+  /// 所以先弹确认框报题数。
+  Future<void> _startRetagAll() async {
+    final appState = context.read<AppState>();
+    final ai = appState.aiService;
+    if (ai == null) return;
+    final options = appState.settings.knowledgePointTypes;
+    if (options.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先设置知识点体系，再一键重导')),
+      );
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    final tertiaryColor = Theme.of(context).colorScheme.tertiary;
+    final total = await appState.getQuestionCountForRetag();
+    if (!mounted) return;
+    if (total == 0) {
+      messenger.showSnackBar(const SnackBar(content: Text('题库里还没有题目')));
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('一键重导知识点'),
+        content: Text('将按你的知识点体系（${options.length} 类）重新标注全库 '
+            '$total 道题。\n\n已有标签会被覆盖，过程可暂停/取消，'
+            '每道题都会调用一次 AI，题多时耗时较长。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('开始重导')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final result = await showDialog<({int applied, int skipped})>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _TaggingDialog(
+        questions: const [],
+        ai: ai,
+        appState: appState,
+        options: options,
+        retagAll: true,
+        total: total,
+      ),
+    );
+    if (!mounted) return;
+    if (result != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(result.skipped > 0
+              ? '重导完成：更新 ${result.applied} 道，跳过 ${result.skipped} 道（AI 失败）'
+              : '重导完成：更新 ${result.applied} 道'),
+          backgroundColor: tertiaryColor,
+        ),
+      );
+    }
+    await _loadUntaggedCount();
+  }
+
+  /// v1.35 打开「知识点体系」编辑页，返回后刷新未打标签计数
+  Future<void> _openKnowledgePointTypes() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const KnowledgePointTypesScreen(),
+      ),
+    );
+    if (!mounted) return;
+    await _loadUntaggedCount();
+  }
 }
 
-/// 打标签进度对话框：逐题调用 AI，支持暂停/继续，完成后预览确认应用
+/// 打标签进度对话框：逐题调用 AI，支持暂停/继续。
+///
+/// 两种模式（v1.35）：
+///   · 默认 —— 只处理 [questions]，跑完在弹窗里**预览**，确认后才写库；
+///   · [retagAll] —— 一键重导：按页读**全库**，边打标签边写库（几万题不可能
+///     让人先看一遍预览），弹窗只做进度 + 最近结果回显。暂停/取消都即时生效，
+///     已写入的部分保留（进度不会白跑，再点一次会按新体系覆盖剩下的）。
 class _TaggingDialog extends StatefulWidget {
   final List<Question> questions;
   final AIService ai;
   final AppState appState;
 
+  /// v1.35 用户知识点体系：非空时 AI 只能在这套体系里选
+  final List<String> options;
+
+  /// v1.35 一键重导：按页重打全库标签并立即写库
+  final bool retagAll;
+
+  /// 总题数（重导模式由调用方先查全库计数传入，用于进度分母）
+  final int total;
+
   const _TaggingDialog({
     required this.questions,
     required this.ai,
     required this.appState,
-  });
+    this.options = const [],
+    this.retagAll = false,
+    int? total,
+  }) : total = total ?? 0;
 
   @override
   State<_TaggingDialog> createState() => _TaggingDialogState();
@@ -2534,8 +2687,16 @@ class _TaggingDialogState extends State<_TaggingDialog> {
   bool _finished = false;
   bool _applying = false;
   bool _cancelled = false;
+  int _applied = 0;
+  int _failed = 0;
   Completer<void>? _resumeCompleter;
+
+  /// 最近打出的标签（只留最后 [_maxLog] 条，重导几万题不能全存内存）
   final List<(Question, String)> _labels = [];
+  static const int _maxLog = 80;
+
+  int get _total =>
+      widget.retagAll ? widget.total : widget.questions.length;
 
   @override
   void initState() {
@@ -2543,22 +2704,69 @@ class _TaggingDialogState extends State<_TaggingDialog> {
     _run();
   }
 
+  /// 暂停时挂起；取消后立刻返回 true（调用方据此跳出循环）
+  Future<bool> _gate() async {
+    while (_paused && !_cancelled) {
+      final c = _resumeCompleter;
+      if (c == null) break;
+      await c.future;
+    }
+    return !_cancelled;
+  }
+
   Future<void> _run() async {
+    if (widget.retagAll) {
+      await _runRetagAll();
+      return;
+    }
     for (final q in widget.questions) {
-      if (_cancelled) break;
-      while (_paused) {
-        final c = _resumeCompleter;
-        if (c == null) break;
-        await c.future;
-      }
-      if (_cancelled) break;
-      final kp = await widget.ai.tagKnowledgePoint(q);
+      if (!await _gate()) break;
+      final kp =
+          await widget.ai.tagKnowledgePoint(q, options: widget.options);
       if (_cancelled) break;
       _labels.add((q, kp));
       if (mounted) setState(() => _done++);
     }
     if (!mounted) return;
     setState(() => _finished = true);
+  }
+
+  /// 一键重导：分页读全库 → 逐题打标签 → 立即写库。
+  ///
+  /// 分页只依赖 `ORDER BY id`（标签更新不改变顺序），所以边写边翻页是安全的；
+  /// 每页 50 题，避免把几万题一次读进内存。
+  Future<void> _runRetagAll() async {
+    const pageSize = 50;
+    var offset = 0;
+    while (!_cancelled) {
+      if (!await _gate()) break;
+      final page = await widget.appState
+          .getQuestionsForRetag(limit: pageSize, offset: offset);
+      if (page.isEmpty) break;
+      for (final q in page) {
+        if (!await _gate()) break;
+        final kp =
+            await widget.ai.tagKnowledgePoint(q, options: widget.options);
+        if (_cancelled) break;
+        if (kp.startsWith('AI')) {
+          // 失败标记不写库，避免污染知识点统计
+          _failed++;
+        } else if (q.id != null && kp != (q.knowledgePoint ?? '')) {
+          await widget.appState.updateQuestionKnowledgePoint(q.id!, kp);
+          _applied++;
+          _labels.add((q, kp));
+          if (_labels.length > _maxLog) _labels.removeAt(0);
+        }
+        _done++;
+        if (mounted) setState(() {});
+      }
+      offset += page.length;
+      if (page.length < pageSize) break;
+    }
+    if (!mounted) return;
+    setState(() {
+      _finished = true;
+    });
   }
 
   void _togglePause() {
@@ -2574,6 +2782,11 @@ class _TaggingDialogState extends State<_TaggingDialog> {
 
   Future<void> _apply() async {
     setState(() => _applying = true);
+    // 重导模式下标签已经落库，这里无需再写一遍
+    if (widget.retagAll) {
+      Navigator.pop(context, (applied: _applied, skipped: _failed));
+      return;
+    }
     var skipped = 0;
     for (final (q, kp) in _labels) {
       if (kp.startsWith('AI')) {
@@ -2600,43 +2813,35 @@ class _TaggingDialogState extends State<_TaggingDialog> {
         if (didPop) return;
         _cancelled = true;
         _resumeCompleter?.complete();
-        Navigator.pop(context, (applied: 0, skipped: 0));
+        Navigator.pop(context, (applied: _applied, skipped: _failed));
       },
       child: AlertDialog(
         title: Text(_finished
-            ? '预览确认'
+            ? (widget.retagAll ? '重导完成' : '预览确认')
             : _paused
                 ? '打标签已暂停，可随时继续'
-                : '正在翻阅脑海中的知识库：已打 $_done/${widget.questions.length} 道题目'),
+                : '正在翻阅脑海中的知识库：已打 $_done/$_total 道题目'),
         content: SizedBox(
           // 写死 340 在 360dp 手机上会溢出（对话框内边距另算）
           width: dialogContentWidth(context, max: 340),
           height: 340,
           child: _finished
-              ? ListView.builder(
-                  itemCount: _labels.length,
-                  itemBuilder: (context, i) {
-                    final (q, kp) = _labels[i];
-                    final failed = kp.startsWith('AI');
-                    return ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                          failed ? Icons.warning_amber : Icons.label_outline,
-                          size: 16,
-                          color: failed ? ac.danger : ac.accent),
-                      title: Text(q.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: NatsumeType.caption)),
-                      trailing: Text(kp,
+              ? (widget.retagAll
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '已更新 $_applied 道，跳过 $_failed 道（AI 失败不写库）。'
+                          '下面是最新的打标结果。',
                           style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w600,
-                              color: failed ? ac.danger : ac.accent)),
-                    );
-                  },
-                )
+                              fontSize: NatsumeType.caption,
+                              color: ac.textSecondary),
+                        ),
+                        const SizedBox(height: 8),
+                        Expanded(child: _buildLabelList(ac)),
+                      ],
+                    )
+                  : _buildLabelList(ac))
               : Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -2646,7 +2851,12 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                         child: CircularProgressIndicator(strokeWidth: 3)),
                     const SizedBox(height: 16),
                     Text(
-                      _paused ? '已暂停，可随时继续' : '正在逐题识别知识点...',
+                      _paused
+                          ? '已暂停，可随时继续'
+                          : widget.retagAll
+                              ? '正在按你的知识点体系重导：已更新 $_applied 道'
+                              : '正在逐题识别知识点...',
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                           fontSize: NatsumeType.body, color: ac.textSecondary),
                     ),
@@ -2655,19 +2865,25 @@ class _TaggingDialogState extends State<_TaggingDialog> {
         ),
         actions: _finished
             ? [
+                if (!widget.retagAll)
+                  TextButton(
+                    onPressed: () =>
+                        Navigator.pop(context, (applied: 0, skipped: 0)),
+                    child: const Text('放弃'),
+                  ),
                 TextButton(
-                  onPressed: () =>
-                      Navigator.pop(context, (applied: 0, skipped: 0)),
-                  child: const Text('放弃'),
-                ),
-                TextButton(
-                  onPressed: _applying ? null : _apply,
+                  onPressed: _applying
+                      ? null
+                      : (widget.retagAll
+                          ? () => Navigator.pop(context,
+                              (applied: _applied, skipped: _failed))
+                          : _apply),
                   child: _applying
                       ? const SizedBox(
                           width: 16,
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('确认应用'),
+                      : Text(widget.retagAll ? '完成' : '确认应用'),
                 ),
               ]
             : [
@@ -2675,7 +2891,7 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                   onPressed: () {
                     _cancelled = true;
                     _resumeCompleter?.complete();
-                    Navigator.pop(context, (applied: 0, skipped: 0));
+                    Navigator.pop(context, (applied: _applied, skipped: _failed));
                   },
                   child: const Text('取消'),
                 ),
@@ -2685,6 +2901,42 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                 ),
               ],
       ),
+    );
+  }
+
+  Widget _buildLabelList(AppThemeColors ac) {
+    return ListView.builder(
+      itemCount: _labels.length,
+      itemBuilder: (context, i) {
+        final (q, kp) = _labels[i];
+        final failed = kp.startsWith('AI');
+        final unclassified = kp.isEmpty;
+        return ListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(
+              failed
+                  ? Icons.warning_amber
+                  : unclassified
+                      ? Icons.label_off_outlined
+                      : Icons.label_outline,
+              size: 16,
+              color: failed ? ac.danger : ac.accent),
+          title: Text(q.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: NatsumeType.caption)),
+          trailing: Text(unclassified ? '未分类' : kp,
+              style: TextStyle(
+                  fontSize: NatsumeType.body,
+                  fontWeight: FontWeight.w600,
+                  color: failed
+                      ? ac.danger
+                      : unclassified
+                          ? ac.textTertiary
+                          : ac.accent)),
+        );
+      },
     );
   }
 }

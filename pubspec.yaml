@@ -1,7 +1,7 @@
 name: natsume_quiz_master
 description: NatsumeQuizMaster —— 本地优先、知识库约束 AI、可插件化的备考刷题工具（Android / Windows）
 publish_to: 'none'
-version: 1.33.0+26
+version: 1.34.0+27
 
 environment:
   # 标准工具链：Flutter 3.47.8 / Dart 3.13.7（见 .fvmrc），依赖锁定 pdfrx 1.3.5

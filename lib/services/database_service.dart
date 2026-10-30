@@ -93,6 +93,10 @@ class DatabaseService {
     String dbPath;
     if (overrideDbPath != null) {
       dbPath = overrideDbPath!;
+      // 测试自建的路径可能落在还不存在的目录里（CI Linux 上
+      // `/tmp/natsume_quiz_master/xxx.db` 就是这样），不建目录直接 open
+      // 会抛「unable to open database file」。与下面正式分支口径一致。
+      await Directory(dirname(dbPath)).create(recursive: true);
     } else if (Platform.isAndroid) {
       dbPath = join(await getDatabasesPath(), 'natsume.db');
     } else {
@@ -2275,6 +2279,29 @@ class DatabaseService {
     return rows.map((m) => Question.fromMap(m)).toList();
   }
 
+  /// 全库题目总数（v1.35 一键重导知识点：先取总数，分批处理）
+  Future<int> getTotalQuestionCount() async {
+    final db = await database;
+    final rows = await db.rawQuery('SELECT COUNT(*) AS cnt FROM questions');
+    return (rows.first['cnt'] as int?) ?? 0;
+  }
+
+  /// 按 id 顺序分页取题目（v1.35 一键重导知识点）。
+  ///
+  /// 用 `LIMIT/OFFSET` 而不是一次 `SELECT *`：几万题的库一次读进来
+  /// 既占内存又拖慢首帧，AI 逐题打标签本来就是慢流程。
+  Future<List<Question>> getQuestionsForRetag(
+      {int limit = 200, int offset = 0}) async {
+    final db = await database;
+    final rows = await db.query(
+      'questions',
+      orderBy: 'id ASC',
+      limit: limit,
+      offset: offset,
+    );
+    return rows.map((m) => Question.fromMap(m)).toList();
+  }
+
   /// 更新题目知识点标签（v11 同步：同步刷新 updated_at）
   Future<void> updateQuestionKnowledgePoint(int questionId, String kp) async {
     final db = await database;
@@ -2286,6 +2313,30 @@ class DatabaseService {
         },
         where: 'id = ?',
         whereArgs: [questionId]);
+  }
+
+  /// 全库已出现过的知识点标签（v1.35 「知识点体系」编辑页：一键把现有标签
+  /// 收编成体系）。
+  ///
+  /// 排除空标签与 AI 失败标记（与 [getKnowledgePointsByBanks] 同一口径），
+  /// 按出现次数倒序——用户最关心的口径排前面。
+  Future<List<String>> getDistinctKnowledgePoints() async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT knowledge_point AS kp, COUNT(*) AS cnt
+      FROM questions
+      WHERE knowledge_point IS NOT NULL AND knowledge_point != ''
+        AND knowledge_point NOT LIKE 'AI请求失败%'
+        AND knowledge_point NOT LIKE 'AI服务返回错误%'
+        AND knowledge_point NOT LIKE 'AI解析生成失败%'
+      GROUP BY knowledge_point
+      ORDER BY cnt DESC, kp ASC
+    ''');
+    return [
+      for (final r in rows)
+        if ((r['kp'] as String?)?.trim().isNotEmpty ?? false)
+          (r['kp'] as String).trim()
+    ];
   }
 
   // ======================== v1.0.2 对齐里程碑：改判 / 隐藏今日记录 ========================
