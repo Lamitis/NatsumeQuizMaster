@@ -22,7 +22,7 @@ dependencies:
   # 文件处理
   file_picker: ^6.1.1
   archive: ^3.4.9
-  xml: ^6.3.0
+  xml: ^6.6.1
   
   # 网络请求
   http: ^1.1.2
