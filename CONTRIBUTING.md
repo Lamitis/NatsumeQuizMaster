@@ -31,7 +31,8 @@
    flutter test      # 全量测试通过
    ```
    Windows 上可以直接 `powershell -ExecutionPolicy Bypass -File tools\run_tests.ps1`：
-   它会用一次性隔离的 `LOCALAPPDATA` 跑 analyze + test，避免旧测试库残留导致假红。
+   它会用一次性隔离的 `LOCALAPPDATA` 跑 analyze + test，避免旧测试库残留导致假红
+   （开头还会自动跑 `dart tools\patch_pub_cache.dart`，补上 pdfrx 1.3.5 漏掉的空安全 `!`）。
 4. 发起 Pull Request，描述清楚「改了什么、为什么改、怎么验证」
 
 > 推送后 GitHub Actions 会自动再跑一遍 `analyze` + `test`，见 PR 上的 CI 状态。

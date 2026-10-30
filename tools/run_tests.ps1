@@ -16,8 +16,11 @@
 #   ... -AnalyzeOnly    # 只跑分析
 #   ... -Keep           # 保留本次临时目录（排查用）
 #   ... -TotalShards 3 -ShardIndex 0   # 只跑 CI 的第 0/3 片（复现 CI 红用）
-#   （CI 把全量测试拆成 3 片 + 每片 --concurrency=1：Linux runner 上用单个常驻
-#     编译器编译 60+ 个套件会被 OOM 杀掉，见 .github/workflows/ci.yml 顶部注释）
+#   （CI 把全量测试拆成 3 片 + 每片 --concurrency=1：既是真 OOM 的防护，也让失败
+#     能定位到具体分片。v1.34 那次「一大批套件 loading [E]」的真因其实是依赖侧
+#     编译失败，见 .github/workflows/ci.yml 顶部注释与 tools/patch_pub_cache.dart）
+#
+# 脚本开头会先跑 tools/patch_pub_cache.dart（pdfrx 1.3.5 的空安全补丁，幂等）。
 
 param(
     [switch]$AnalyzeOnly,
@@ -32,13 +35,22 @@ $ErrorActionPreference = 'Continue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $root
 
+$failed = @()
+
+# pdfrx 1.3.5 的原版源码漏了两个 `!`（详见 tools/patch_pub_cache.dart 头部）：不补的话
+# analyze / test 在编译 pdfrx 时就会失败，而且报错会伪装成「一堆套件 loading [E]」。
+# 必须在下面对 LOCALAPPDATA 做隔离之前跑——这个脚本按 LOCALAPPDATA / PUB_CACHE 找缓存。
+Write-Host '=== dart tools/patch_pub_cache.dart ===' -ForegroundColor Cyan
+& dart tools/patch_pub_cache.dart
+if ($LASTEXITCODE -ne 0) { $failed += ('patch_pub_cache exit ' + $LASTEXITCODE) }
+Write-Host ''
+
 $envDir = Join-Path ([System.IO.Path]::GetTempPath()) ('natsume_test_env_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
 New-Item -ItemType Directory -Path $envDir -Force | Out-Null
 $saved = $env:LOCALAPPDATA
 $env:LOCALAPPDATA = $envDir
 Write-Host ("test data dir : {0}" -f $envDir) -ForegroundColor Cyan
 
-$failed = @()
 try {
     Write-Host ''
     Write-Host '=== flutter analyze --no-fatal-infos ===' -ForegroundColor Cyan

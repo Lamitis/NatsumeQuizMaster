@@ -98,17 +98,22 @@
   内存，以及纯 Dart 的 WebP 编码与解码都跑在 UI 线程上（大图动辄几百毫秒到几秒）。
   现在选图后只取路径，解码与转码交给 `QuestionImageService.fromFileAsync` 在 isolate 里做；
   启动时的存量图片归一化同样改成 `fromEncodedAsync`，主线程只负责把结果贴到界面
-- **CI（Linux）上的「假红」：Dart 编译器被 OOM 杀掉，一批用例报 `loading … [E]`**：
-  原来一个 `flutter test` 跑完 60+ 个测试文件，而它用**一个常驻前端编译器**
-  （frontend_server）按序编译所有套件；套件多到一定程度后编译器在 4 核 / 16G 的
-  ubuntu-latest 上被杀，日志里写的是 `Error: The Dart compiler exited unexpectedly.`，
-  之后所有还没编译完的套件一律记成 `loading /home/runner/…/xxx_test.dart [E]`，
-  看上去像「随手挑了一批文件挂掉」（`+170 -16`，更早的 main 上是 462 通过 / 41 个
-  loading 失败），其实与被测代码无关——同一条命令在本地一次全绿。现在 CI 把全量
-  测试拆成 **3 个分片**（`--total-shards 3 --shard-index N`，各自独立进程与编译器）
-  且每分片 `--concurrency=1`，编译器内存从「60 个套件累积」降到「20 个」；
-  失败日志逐条带 `[E]` 后 8 行上下文、命中编译器崩溃时单独标 `[cause]`，
-  并以 artifact 形式上传 `test_output.log`（Actions 原始日志要管理员权限，403）
+- **CI（Linux）上一批用例报 `loading … [E]`（v1.34 假红，真因在依赖侧）**：
+  一开始的失败长这样——一个 `flutter test` 跑完 60+ 个测试文件，一大批套件记成
+  `loading /home/runner/…/xxx_test.dart [E]`（`+170 -16`，更早的 main 上是
+  462 通过 / 41 个 loading 失败），既不是断言失败、也和被测代码无关，同一条命令在
+  本地一次全绿。先按「单个常驻前端编译器被 OOM」处理：全量测试拆成 **3 个分片**
+  （`--total-shards 3 --shard-index N`，各自独立进程与编译器）且每分片
+  `--concurrency=1`，失败日志逐条带 `[E]` 后 8 行上下文、命中编译器崩溃时单独标
+  `[cause]`，并以 artifact 上传 `test_output.log`（Actions 原始日志要管理员权限）。
+  但拆片后依旧全红，最终靠 `::error::` 注解里的编译器原始输出读到真因：
+  **`pdfrx 1.3.5` 原版源码漏了两个 `!`**（`lib/src/pdfium/pdf_file_cache.dart` 351/353，
+  可空参数在闭包内不享受类型提升），编译器一编到 pdfrx 就失败，后面没编完的套件便
+  统统记成 `loading [E]`。本地从不复现，是因为 pub 缓存里那份曾被手工补过 `!`，
+  而缓存不进版本控制。现在这两个字符的补丁固化成 `tools/patch_pub_cache.dart`
+  （幂等、支持 `--check`、校验 `pubspec.lock` 的版本、文本对不上就报错而不是乱写），
+  CI 的分析 / 测试 / 构建任务与 `tools\run_tests.ps1` 都会先跑它；
+  同类问题下次会直接指名道姓地红，不会再伪装成测试基础设施故障
 - **CI（Linux）上数据库打不开 / 用例整批失败**：`DatabaseService.overrideDbPath` 指向的
   父目录可能还不存在（`/tmp/xxx/…`），直接 `openDatabase` 会抛「unable to open database
   file」。现在 `_initDatabase` 对 override 路径也 `create(recursive: true)` 建好父目录，

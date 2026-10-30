@@ -299,7 +299,8 @@ flutter pub get
 ```
 
 依赖版本由 `pubspec.lock` 锁定（其中 `pdfrx` 固定 **1.3.5**）。请勿随手 `flutter pub upgrade` 后提交新的 lock：
-pdfrx 降到 1.0.x 会触发 `PdfFileCache?` 等空安全编译错误。
+pdfrx 2.x 是破坏性 API 变更（`PdfViewer` 等参数整体重写），1.0.x 的空安全更不完整；
+而 **1.3.5 自身也漏了两处 `!`**，由下一步的 `tools/patch_pub_cache.dart` 补齐。
 
 ### 5. 给 pub 缓存里的插件打补丁（必做）
 
@@ -315,6 +316,24 @@ powershell -ExecutionPolicy Bypass -File tools\patch_windows_plugin_deps.ps1
 - 输出里没有 `[未匹配]` / `[缺失]`，退出码为 0 → 已就绪。
 - 何时需要重跑：首次克隆后、`flutter pub cache repair`、升级/重装这三个插件之后。
 - 原因与逐条改动见 [docs/Windows构建说明.md](docs/Windows构建说明.md) 第 6 节。
+
+此外还有一处**与平台无关**的补丁（本地、CI、Android / Windows 构建都要），打的是
+`pdfrx 1.3.5` 自己漏掉的两个 `!`：
+
+```powershell
+dart tools\patch_pub_cache.dart
+# 只检查是否已就绪、不写文件：加 --check
+```
+
+- 补的位置是 `pdfrx-1.3.5/lib/src/pdfium/pdf_file_cache.dart` 的 351 / 353 行
+  （`PdfFileCache?` 类型的参数在闭包内不享受类型提升）。不补的话，**任何干净环境**
+  （新克隆、CI、`flutter pub cache repair` 之后）编译 pdfrx 必然失败，报
+  `Property 'blockSize' cannot be accessed on 'PdfFileCache?'...`；
+  在 CI 侧它还会伪装成「一批测试套件 `loading … [E]`」，看起来像测试基础设施坏了。
+- 何时需要重跑：与上面几个插件相同（每次 `flutter pub get` 重新解包依赖之后）。
+  CI 的分析 / 测试 / 构建任务与 `tools\run_tests.ps1` 都会自动先跑一遍。
+- 为什么不直接升级 pdfrx：2.0.0 起 API 破坏性变更（整套 `PdfViewer` 参数重写），
+  1.3.5 之后没有 1.3.6 / 1.4.x 这类只修 bug 的版本。细节见脚本头部注释。
 
 ### 6. 启动（开发模式，支持热重载）
 

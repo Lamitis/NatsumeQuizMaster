@@ -35,13 +35,34 @@ fvm flutter build windows --debug
 
 ## 已知问题与处理
 
-### 1. pdfrx 版本与 Dart SDK 的匹配
+### 1. pdfrx 的空安全漏补（1.3.5 原版也中招）
 
-症状：`PdfFileCache?` 的空安全访问错误、`PdfTextRenderer` 缺少实现等。
-原因：早期 pdfrx 1.x（1.0.x）源码不兼容较新的 Dart。
-处理：`pubspec.lock` 固定在 **pdfrx 1.3.5**，实测在 Dart 3.13.7（Flutter 3.47.8）
-下可以正常编译，无需降到 Dart 3.5。`pubspec.yaml` 的 SDK 约束为
-`>=3.2.0 <4.0.0`，Dart 3.5 与 3.13 都满足；若把 pdfrx 降级到 1.0.x 才会出现上述错误。
+症状：编译 pdfrx 时报
+
+```
+pdf_file_cache.dart:351:63: Error: Property 'blockSize' cannot be accessed on
+    'PdfFileCache?' because it is potentially null.
+pdf_file_cache.dart:353:23: Error: Method 'read' cannot be called on 'PdfFileCache?' ...
+```
+
+原因：`pdfDocumentFromUri` 的 `cache` 是**可空参数**（`PdfFileCache?`），
+`cache ??= await PdfFileCache.fromUri(uri)` 之后在 `openCustom(read: …)` 的闭包里读它
+——可变参数 + 被闭包捕获 + 中间隔着 `await`，Dart 的类型提升在闭包内失效。
+上游只给 346 / 366 行补了 `!`，351 / 353 这两处漏了；1.0.x 的空安全更不完整，
+直到 2.0.0 整体重写才消失（那已是破坏性 API 变更，不能为发一次版本随手升）。
+
+处理：`pubspec.lock` 固定在 **pdfrx 1.3.5**，并用幂等脚本补上这两个 `!`：
+
+```powershell
+dart tools\patch_pub_cache.dart
+# 只检查是否已就绪、不写文件：加 --check
+```
+
+干净环境（新克隆 / CI / `flutter pub cache repair` 之后）**必须先跑这一步**，
+否则编译 pdfrx 必然失败；在 CI 上它还会伪装成「一批测试套件 `loading … [E]`」
+——编译器在编 pdfrx 时先挂掉，后面没编完的套件全部连带失败，看起来像测试基础设施坏了。
+`pubspec.yaml` 的 SDK 约束为 `>=3.2.0 <4.0.0`，Dart 3.5 与 3.13 都满足；
+实测 Dart 3.13.7（Flutter 3.47.8）打好补丁后编译正常，无需降 Dart 版本。
 
 ### 2. flutter_local_notifications_windows 需要 C++20
 

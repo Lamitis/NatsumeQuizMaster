@@ -126,6 +126,8 @@ jobs:
       - name: 拉取依赖并测试
         run: |
           flutter pub get
+          # pdfrx 1.3.5 的原版源码有空安全漏补，不修就编不过（见 tools/patch_pub_cache.dart）
+          dart tools/patch_pub_cache.dart
           flutter test
 
       - name: 构建通用版 APK（含全部 CPU 架构）
@@ -183,6 +185,8 @@ jobs:
       - name: 拉取依赖并构建
         run: |
           flutter pub get
+          # pdfrx 1.3.5 的原版源码有空安全漏补，不修就编不过（见 tools/patch_pub_cache.dart）
+          dart tools/patch_pub_cache.dart
           flutter build windows --release --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
 
       - name: 安装 Inno Setup
