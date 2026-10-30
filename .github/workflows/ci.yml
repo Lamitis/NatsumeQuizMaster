@@ -153,7 +153,7 @@ jobs:
       # 失败时把它挂到 artifact 上，有 repo 读权限的人都能取回全文。
       - name: 上传本分片的测试日志（仅失败时）
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-output-shard-${{ matrix.shard }}
           path: test_output.log
