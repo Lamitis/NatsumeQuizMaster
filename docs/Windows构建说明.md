@@ -120,31 +120,47 @@ PowerShell 的 `Set-Content` 默认可能使用 ANSI，导致中文注释乱码�
 [IO.File]::WriteAllLines($path, $lines, (New-Object System.Text.UTF8Encoding($false)))
 ```
 
-### 6. 新版 MSVC 下几个插件源码需要小改（一键脚本）
+### 6. flutter_local_notifications_windows 3.1.1 的 `ATL::CW2A` 隐式转换（C2440）
 
-新版 Visual Studio / MSVC（本机为 VS 2026 Build Tools 18.10，MSVC 14.51.36231）
-对 C++ 更严格，以下插件的 Windows 端源码会编译失败。它们都在 **pub 缓存**里，
-升级依赖或 `flutter pub cache repair` 后会恢复成有问题的版本，因此仓库提供了
-幂等脚本：
+症状：
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\patch_windows_plugin_deps.ps1
-# 只检查不写入：加 -WhatIfOnly
+```
+error C2440: 'initializing': cannot convert from 'ATL::CW2A' to 'std::basic_string<...>'
 ```
 
-脚本处理的四处问题：
+`flutter_local_notifications` 22.3.3 的 Windows 实现虽然已经是 ffiPlugin，但仍会编译
+一小段 C++（点击通知的激活回调，`src/plugin.cpp`），里面写的是：
 
-| 插件 | 症状 | 处理 |
-|---|---|---|
-| `share_plus 10.1.4` `windows/vector.h` | `error C2065: 'ElementType': undeclared identifier`、`error C2955: 'std::vector': use of class template requires template argument list` | `DefaultVectorTraits` 里显式 `typedef typename ElementTraits<T>::ElementType ElementType;`，并把 `Wrap` / `CopyTo` 写成 `ElementTraits<T>::...`。C++20 下 MSVC 隐含 `/permissive-` 并做两阶段名字查找，派生类看不到依赖基类的成员，所以必须显式限定。 |
-| `flutter_secure_storage_windows 3.1.2` `windows/flutter_secure_storage_windows_plugin.cpp` | `error C2355: 'this': can only be referenced inside non-static member functions`、`error C3536: 'key': cannot be used before it is initialized` | `GetValueKey` 的**定义**漏了类名限定符，被当成 namespace 级自由函数，函数体里的 `this` 非法；补成 `FlutterSecureStorageWindowsPlugin::GetValueKey`。 |
-| 同上 | `error C2440`（`std::string target_name(CW2A(pcred->TargetName));`） | 该写法需要两次用户自定义转换；显式写 `static_cast<LPCSTR>(CW2A(...))`。 |
-| `flutter_local_notifications_windows 1.0.3` `src/plugin.cpp` | `error C2440`（`CW2A(item.Key, CP_UTF8)` 转 `std::string`） | 显式写 `static_cast<LPCSTR>(CW2A(...))`。 |
+```cpp
+const std::string key = CW2A(item.Key, CP_UTF8);
+```
 
-判断脚本是否跑成功：输出里没有 `[未匹配]` / `[缺失]` 行，退出码为 0。
-若某个插件升级后行号、写法变了，脚本会明确报「未匹配」而不是静默改错文件。
+新版 ATL 把 `CW2A` 的转换运算符改成显式之后，`CW2A → LPSTR → std::string` 属于两次
+用户自定义转换，直接报 C2440。**这与 runner 镜像无关**：`windows-latest` 与
+`windows-2022`（VS 17.14 起）一样报；pub 上也没有已修复的稳定版（只有 4.0.0-dev.x），
+所以只能就地改。处理脚本受版本控制，和 pdfrx 的补丁是同一条命令：
 
-### 7. share_plus 的 Windows 插件要单独退回 C++17
+```powershell
+dart tools\patch_pub_cache.dart
+# 只检查是否已就绪、不写文件：加 --check
+```
+
+改动是把三处（`item.Key` / `item.Value` / `args`）写成
+`static_cast<LPCSTR>(CW2A(...))` 再构造 `std::string`，语义完全不变。
+
+> 不要用「把 `CMAKE_CXX_STANDARD` 降回 17 / 加 `CXXFLAGS=/std:c++17`」来绕：这个报错是
+> 转换运算符的隐式性问题，跟语言标准无关；反而会触发上面第 2 条的 C2338
+> （C++/WinRT 协程需要 C++20）。
+
+补充：`share_plus 10.1.4`（旧 C++/WinRT 头）与 `flutter_secure_storage_windows 3.1.2`
+（`GetValueKey` 漏类名限定、`CW2A` 隐式转换）当年也要打补丁，v1.35.1 已经把依赖升到
+不再有这些写法的版本（前者已移除、后者 4.x 重写），无需再处理。
+
+### 7. share_plus 的 Windows 插件要单独退回 C++17（历史，当前依赖里没有）
+
+> v1.34 导出改「另存为」后 `share_plus` 已从依赖里移除，本节只在将来重新引入
+> `share_plus 10.x` 时才需要；`windows/CMakeLists.txt` 里的
+> `if(TARGET share_plus_plugin)` 仍保留，重新引入后会自动继续生效。
 
 `windows/CMakeLists.txt` 在 `include(flutter/generated_plugins.cmake)` 之后加了：
 

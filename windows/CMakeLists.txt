@@ -57,6 +57,12 @@ add_subdirectory("runner")
 # （C++/WinRT 在新标准下才会使用 <coroutine> 而不是已废弃的
 # <experimental/coroutine>，否则 MSVC 会报 C2338）。
 # 必须在 generated_plugins.cmake 之前设置，才会传递给插件目标。
+#
+# 不要为了绕开插件的 C++ 报错而把它降回 17：像
+# flutter_local_notifications_windows 3.1.1 的
+#   error C2440: cannot convert from 'ATL::CW2A' to 'std::basic_string<...>'
+# 是 ATL 转换运算符隐式性的问题，跟语言标准无关（降标准只会换来 C2338）。
+# 那处由 tools/patch_pub_cache.dart 在 pub get 之后改源码解决。
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 

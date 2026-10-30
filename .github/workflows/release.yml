@@ -126,7 +126,8 @@ jobs:
       - name: 拉取依赖并测试
         run: |
           flutter pub get
-          # pdfrx 1.3.5 的原版源码有空安全漏补，不修就编不过（见 tools/patch_pub_cache.dart）
+          # 修补 pub 缓存里的第三方源码（pdfrx 空安全漏补、通知插件的 ATL::CW2A），
+          # 详见 tools/patch_pub_cache.dart 头部说明
           dart tools/patch_pub_cache.dart
           flutter test
 
@@ -171,10 +172,10 @@ jobs:
   build-windows:
     name: 构建 Windows
     needs: verify
-    # v1.35.1：windows-latest 已切到 Windows Server 2025 + 更新版 MSVC 工具链，
-    # 第三方插件里的旧 C++ 写法在上面会直接编译失败（C2440 / C4596）。
-    # 依赖侧已相应升级（flutter_local_notifications 22.x / flutter_secure_storage 11.x），
-    # 这里再把系统镜像钉住，避免 runner 镜像滚动带来「昨天能编、今天不能编」。
+    # 镜像钉在 windows-2022：与 windows-latest 的滚动升级解耦，避免「昨天能编、
+    # 今天不能编」。注意 C2440（ATL::CW2A 隐式转换）**不是**换镜像能解决的——
+    # windows-2022 的 VS 17.14+ 一样报，真正的修法在下一步的
+    # tools/patch_pub_cache.dart 里，原因见该脚本头部说明。
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -186,12 +187,23 @@ jobs:
           channel: stable
           cache: true
 
-      - name: 拉取依赖并构建
-        run: |
-          flutter pub get
-          # pdfrx 1.3.5 的原版源码有空安全漏补，不修就编不过（见 tools/patch_pub_cache.dart）
-          dart tools/patch_pub_cache.dart
-          flutter build windows --release --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
+      - name: 拉取依赖
+        run: flutter pub get
+
+      # 两个必须打的原版补丁（见 tools/patch_pub_cache.dart 头部）：
+      #   ① pdfrx 1.3.5 空安全漏补 `!`；
+      #   ② flutter_local_notifications_windows 3.1.1 的 ATL::CW2A 隐式转换——
+      #      新版 MSVC（windows-2022 的 VS 17.14 起）直接报 C2440，且 pub 上
+      #      没有任何已修复的稳定版，只能就地改 C++。
+      # 不要试图用「降 C++ 标准 / 加 CXXFLAGS」绕过：跟语言标准无关，反而会
+      # 破坏这些插件需要的 C++20 协程（windows/CMakeLists.txt 有说明）。
+      - name: 修补 pub 缓存里的第三方源码
+        run: dart tools/patch_pub_cache.dart
+
+      - name: 构建 Windows 发布版
+        run: >
+          flutter build windows --release
+          --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
 
       - name: 安装 Inno Setup
         shell: pwsh

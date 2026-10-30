@@ -302,38 +302,29 @@ flutter pub get
 pdfrx 2.x 是破坏性 API 变更（`PdfViewer` 等参数整体重写），1.0.x 的空安全更不完整；
 而 **1.3.5 自身也漏了两处 `!`**，由下一步的 `tools/patch_pub_cache.dart` 补齐。
 
-### 5. 给 pub 缓存里的插件打补丁（必做）
+### 5. 给 pub 缓存里的依赖打补丁（必做）
 
-新版 MSVC 会拒绝三个插件的 Windows 端源码（`share_plus` 的旧 C++/WinRT 头、
-`flutter_secure_storage_windows` 的类名限定、`flutter_local_notifications_windows`
-的 `CW2A` 隐式转换）。这些源码在 pub 缓存里，装依赖时会被还原，所以用幂等脚本就地修：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\patch_windows_plugin_deps.ps1
-# 只检查是否已就绪、不写文件：加 -WhatIfOnly
-```
-
-- 输出里没有 `[未匹配]` / `[缺失]`，退出码为 0 → 已就绪。
-- 何时需要重跑：首次克隆后、`flutter pub cache repair`、升级/重装这三个插件之后。
-- 原因与逐条改动见 [docs/Windows构建说明.md](docs/Windows构建说明.md) 第 6 节。
-
-此外还有一处**与平台无关**的补丁（本地、CI、Android / Windows 构建都要），打的是
-`pdfrx 1.3.5` 自己漏掉的两个 `!`：
+pub 缓存里存的是「原版」依赖，其中两处在干净环境下编不过。用幂等脚本就地修
+（脚本受版本控制；CI 的分析 / 测试 / 构建任务与 `tools\run_tests.ps1` 都会先跑一遍）：
 
 ```powershell
 dart tools\patch_pub_cache.dart
 # 只检查是否已就绪、不写文件：加 --check
 ```
 
-- 补的位置是 `pdfrx-1.3.5/lib/src/pdfium/pdf_file_cache.dart` 的 351 / 353 行
-  （`PdfFileCache?` 类型的参数在闭包内不享受类型提升）。不补的话，**任何干净环境**
-  （新克隆、CI、`flutter pub cache repair` 之后）编译 pdfrx 必然失败，报
-  `Property 'blockSize' cannot be accessed on 'PdfFileCache?'...`；
-  在 CI 侧它还会伪装成「一批测试套件 `loading … [E]`」，看起来像测试基础设施坏了。
-- 何时需要重跑：与上面几个插件相同（每次 `flutter pub get` 重新解包依赖之后）。
-  CI 的分析 / 测试 / 构建任务与 `tools\run_tests.ps1` 都会自动先跑一遍。
+| 目标 | 症状 | 处理 |
+|---|---|---|
+| `pdfrx 1.3.5` 的 `lib/src/pdfium/pdf_file_cache.dart` | `Property 'blockSize' cannot be accessed on 'PdfFileCache?' because it is potentially null.` | 351 / 353 两处漏了 `!`（可空参数在闭包内不享受类型提升），补上即可。 |
+| `flutter_local_notifications_windows 3.1.1` 的 `src/plugin.cpp` | `error C2440: ... cannot convert from 'ATL::CW2A' to 'std::basic_string<...>'` | 三处 `CW2A(...)` 隐式转 `std::string`，改成 `static_cast<LPCSTR>(...)`；只有 Windows 构建才会编到。 |
+
+- 输出里没有 `[未匹配]` / `[缺失]`，退出码为 0 → 已就绪。
+- 何时需要重跑：首次克隆后、`flutter pub get` 重新解包依赖之后、`flutter pub cache repair` 之后。
 - 为什么不直接升级 pdfrx：2.0.0 起 API 破坏性变更（整套 `PdfViewer` 参数重写），
-  1.3.5 之后没有 1.3.6 / 1.4.x 这类只修 bug 的版本。细节见脚本头部注释。
+  1.3.5 之后没有 1.3.6 / 1.4.x 这类只修 bug 的版本。
+- 为什么不用「降 C++ 标准」规避通知插件的报错：那是 ATL 转换运算符的隐式性问题，
+  跟语言标准无关；降标准反而会让这些插件需要的 C++20 协程报 C2338。
+- 「本地绿、CI 红」的成因与逐条原因详见脚本头部注释，以及
+  [docs/Windows构建说明.md](docs/Windows构建说明.md) 第 6 节。
 
 ### 6. 启动（开发模式，支持热重载）
 

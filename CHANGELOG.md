@@ -20,6 +20,16 @@
   `flutter_secure_storage_windows` 3.1.2 的 C++ 里 `ATL::CW2A` 隐式转换、
   `CW2A::GetValueKey` 旧写法直接 C2440 / C4596 报错。CI 把系统镜像钉到
   `windows-2022`，同时从依赖侧根治（见「升级说明」），不再依赖 runner 镜像的新旧。
+- **升级后 Windows 仍报 C2440（`ATL::CW2A` → `std::string`）**：`flutter_local_notifications`
+  22.3.3 的 Windows 实现 `flutter_local_notifications_windows` 3.1.1 虽已是 ffiPlugin，
+  但仍编译一小段 C++（点击通知的激活回调），里面是
+  `const std::string key = CW2A(item.Key, CP_UTF8);` 这类隐式转换。新版 ATL 把转换
+  运算符改成显式后，`CW2A → LPSTR → std::string` 属于两次用户自定义转换，任何 runner
+  镜像（`windows-2022` 的 VS 17.14 起也一样）都会报错，而 pub 上没有已修复的稳定版。
+  现由 `tools/patch_pub_cache.dart` 在 `flutter pub get` 之后把它改成
+  `static_cast<LPCSTR>(...)` 再构造（语义不变），本机构建与 CI 共用同一条命令。
+  这次**没有**采用「把 CMake 标准降回 C++17 / 加 `CXXFLAGS`」的绕法：那是转换运算符的
+  隐式性问题，与语言标准无关，反而会让这些插件需要的 C++20 协程报 C2338。
 - **`ExportStorage.saveFileAs` 适配 file_picker 13.x**：13.x 的 `saveFile()` 自己把
   bytes 写入目标并返回 `Uri`（桌面 `file://`、Android `content://`），所以删掉原先
   「按源文件名补扩展名 + `File.writeAsBytes`」的逻辑，改为把 `Uri` 转成用户可见路径；
@@ -30,7 +40,8 @@
 
 ### 升级说明
 - `flutter_local_notifications` 19.x → **22.x**：Windows 实现换成 FFI 插件
-  （`flutter_local_notifications_windows` 3.x），旧 ATL C++ 消失；连带
+  （`flutter_local_notifications_windows` 3.x），旧的整套 ATL 通知代码消失（只剩
+  一小段激活回调 C++，需按上面那条打 `CW2A` 补丁）；连带
   `timezone` → ^0.11.0（22.x 硬约束）、`flutter_timezone` → ^4.1.1。
   代码迁移到 22.x 的命名参数 API：`initialize(settings:)`、
   `zonedSchedule(id:/title:/body:/scheduledDate:/notificationDetails:)`、
