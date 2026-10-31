@@ -107,6 +107,9 @@ class SyncEngine extends ChangeNotifier {
   /// 本次同步是被取消结束的（用于文案区分「取消」与「失败」）
   bool _syncCancelled = false;
 
+  /// 本次同步是看门狗判超时后中止的（文案要说「超时」而不是「取消」）
+  bool _syncTimedOut = false;
+
   /// 进行中的同步专用 HTTP 客户端：`close()` 能立刻断掉在途请求
   http.Client? _activeClient;
 
@@ -769,6 +772,7 @@ class SyncEngine extends ChangeNotifier {
     _syncing = true;
     _syncCancelRequested = false;
     _syncCancelled = false;
+    _syncTimedOut = false;
     _lastError = null;
     _statusMessage = '正在与 ${peer.deviceName} 同步...';
     notifyListeners();
@@ -904,7 +908,7 @@ class SyncEngine extends ChangeNotifier {
       return true;
     } on SyncException catch (e) {
       _lastError = e;
-      _syncCancelled = e.code == SyncErrorCode.cancelled;
+      _syncCancelled = _syncCancelled || e.code == SyncErrorCode.cancelled;
       _statusMessage = _syncCancelled
           ? '同步已取消：${peer.deviceName}'
           : '同步失败：${peer.deviceName}（${e.message}）';
@@ -915,7 +919,9 @@ class SyncEngine extends ChangeNotifier {
       // 兜底：底层任何异常都翻成业务错误，绝不把 TimeoutException 甩给界面
       final ex = SyncException.wrap(e, action: '同步');
       _lastError = ex;
-      _syncCancelled = ex.code == SyncErrorCode.cancelled;
+      // 用户主动取消时连接是**我们自己关掉**的，异常形态是「连接中断」；
+      // 已置位的取消标记不能在这里被覆盖，否则文案会从「已取消」变成「失败」
+      _syncCancelled = _syncCancelled || ex.code == SyncErrorCode.cancelled;
       _statusMessage = _syncCancelled
           ? '同步已取消：${peer.deviceName}'
           : '同步失败：${peer.deviceName}（${ex.message}）';
@@ -947,6 +953,14 @@ class SyncEngine extends ChangeNotifier {
   /// 取消标记已置位时立刻抛业务异常（不再等下一个网络往返）
   void _throwIfCancelled() {
     if (!_syncCancelRequested) return;
+    // 看门狗判的超时要说「超时」，用户点的取消要说「取消」——两者都走中止路径，
+    // 但给用户的下一步动作不一样（前者重试/排查网络，后者什么都不用做）。
+    if (_syncTimedOut) {
+      throw const SyncException(
+        SyncErrorCode.timeout,
+        '同步超时：对端在限定时间内没有响应，已中止本次同步（可稍后重试）',
+      );
+    }
     throw SyncException(
       SyncErrorCode.cancelled,
       _syncCancelled ? '已取消同步' : '同步被中止（超时或连接被断开）',
@@ -991,6 +1005,7 @@ class SyncEngine extends ChangeNotifier {
     }
     _syncCancelRequested = true;
     _syncCancelled = true;
+    _syncTimedOut = false;
     _lastError = const SyncException(SyncErrorCode.cancelled, '已取消同步');
     _statusMessage = '正在中止同步…';
     DebugLogService.instance.log('SYNC', '用户点击「取消同步」');
@@ -1036,6 +1051,7 @@ class SyncEngine extends ChangeNotifier {
       DebugLogService.instance.log('SYNC',
           '同步看门狗触发（${syncWatchdogTimeout.inSeconds}s 无结果），强制中止');
       _syncCancelRequested = true;
+      _syncTimedOut = true;
       _abortActiveClient();
       _syncWatchdog = Timer(const Duration(seconds: 5), () {
         if (!_syncing) return;
