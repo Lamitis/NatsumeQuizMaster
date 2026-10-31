@@ -15,9 +15,17 @@ import 'package:natsume_quiz_master/services/theme_service.dart';
 /// ④ 新建弹窗在窄屏也不溢出，标题为空时不能创建。
 void main() {
   setUp(() async {
-    await DatabaseService.instance.close();
+    // 先把路径指到临时库，再关上一个用例的残留连接：`close()` 在内部
+    // `_database` 为空时会顺手 open 一次**当前路径**的库，先设好 overrideDbPath
+    // 才能保证它不会去碰用户真正的 natsume.db。
     final dir = Directory.systemTemp.createTempSync('natsume_schedule_ui_');
     DatabaseService.overrideDbPath = '${dir.path}/schedule_ui.db';
+    await DatabaseService.instance.close();
+
+    // 建库 + 迁移（`openDatabase(onCreate:)` 是一个事务，几十条 execute）
+    // 放在 setUp 里跑：setUp 走的是**真实异步**，不受 testWidgets 的假时钟
+    // 影响。留在用例里做的话，慢机器上首屏会一直转圈——见 waitUntil 的注释。
+    await DatabaseService.instance.database;
   });
 
   tearDown(() async {
@@ -54,6 +62,56 @@ void main() {
     }
   }
 
+  /// 等**真实异步**（sqflite 的 isolate）推进到某个界面状态为止。
+  ///
+  /// 为什么不靠固定帧数：`_load()` 走真库，`openDatabase` 的建表/迁移是一个
+  /// 事务，要在独立 isolate 上跑几十条 `execute`，只有 `runAsync` 给的真实时间
+  /// 才会推进它；`settleFrames` 的 150ms 在本机够用，在慢机器（CI）上不够。
+  ///
+  /// 为什么更不能用 `pumpAndSettle()`：它只推进**假时钟**，并且要求「没有帧被
+  /// 调度」才返回。首屏还停在 `CircularProgressIndicator` 时，转圈动画永远在
+  /// 调度帧，它就空转到 10 分钟假时间后抛「pumpAndSettle timed out」；而这期间
+  /// 真库那边拿不到真实时间、事务一直不结束，于是刷屏
+  /// 「database has been locked for 0:00:10」——「pumpAndSettle timed out」+
+  /// 那把锁就是这么来的，不是弹窗里有死循环动画。
+  ///
+  /// 所以这里「真实时间 20ms + 假时钟 10ms」交替推进，并且**允许页面上有动画
+  /// 在跑**。超时前顺带把 `tester.takeException()` 捞出来，比只报「没等到」好查。
+  Future<void> waitUntil(
+    WidgetTester tester,
+    bool Function() done, {
+    Duration timeout = const Duration(seconds: 30),
+    String? reason,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (!done()) {
+      if (DateTime.now().isAfter(deadline)) {
+        final err = tester.takeException();
+        fail('等待超时（${timeout.inSeconds}s）：${reason ?? '目标状态未出现'}'
+            '${err == null ? '' : '\n期间捕获到的异常：$err'}');
+      }
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 10));
+    }
+  }
+
+  /// 首屏读完（真库查询 + setState 都收尾，转圈消失）。
+  ///
+  /// 所有「点开页面后马上断言/马上点开弹窗」的用例都先过这一关：转圈没消失就
+  /// 去交互，等于踩上面那个 pumpAndSettle 的坑。
+  Future<void> waitLoaded(WidgetTester tester) async {
+    await waitUntil(
+      tester,
+      () =>
+          find.byType(CircularProgressIndicator).evaluate().isEmpty ||
+          find.text('读取失败').evaluate().isNotEmpty,
+      reason: '首屏一直停在加载转圈（真库 open/建表没跑完，或查询卡住）',
+    );
+    expect(find.text('读取失败'), findsNothing,
+        reason: '首屏读取待办时抛异常了（看 _error 文案）');
+  }
+
   Future<void> teardownTree(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await settleFrames(tester);
@@ -78,7 +136,7 @@ void main() {
     });
 
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    await waitLoaded(tester);
 
     expect(find.text('日程待办'), findsOneWidget);
     expect(find.textContaining('随局域网同步'), findsWidgets);
@@ -98,7 +156,7 @@ void main() {
     });
 
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    await waitLoaded(tester);
 
     await tester.tap(find.byIcon(Icons.radio_button_unchecked_rounded).first);
     await settleFrames(tester);
@@ -125,7 +183,7 @@ void main() {
     });
 
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    await waitLoaded(tester);
     expect(find.text('还没做的事'), findsOneWidget);
     expect(find.text('已经做完的事'), findsOneWidget);
 
@@ -145,11 +203,20 @@ void main() {
   testWidgets('新建弹窗：窄屏不溢出，标题为空时不能创建', (tester) async {
     setPhoneSurface(tester);
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    // 先等首屏读完再开弹窗：还在转圈时开，弹窗底下那个转圈动画会让
+    // 「等界面静下来」永远等不到（原因见 waitUntil 注释）。
+    await waitLoaded(tester);
 
     // 空状态与工具栏都有「新建待办」，点工具栏那个（带 + 图标）
     await tester.tap(find.byIcon(Icons.add_rounded).first);
-    await tester.pumpAndSettle();
+    // 不用 pumpAndSettle()：它只推假时钟、要求「没有帧被调度」，一旦页面上
+    // 还有转圈就会空转到超时；这里直接等弹窗内容出现（弹窗只是纯表单，
+    // 开弹窗不碰数据库，见 _ScheduleEditorDialog 的注释）。
+    await waitUntil(
+      tester,
+      () => find.text('要做什么').evaluate().isNotEmpty,
+      reason: '点了「新建待办」后弹窗没出现',
+    );
 
     expect(find.text('要做什么'), findsOneWidget);
     final createBtn =
@@ -161,7 +228,14 @@ void main() {
     await tester.tap(find.text('无期限'));
     await tester.pump();
     await tester.tap(find.widgetWithText(FilledButton, '创建'));
-    await settleFrames(tester);
+    // 落库（insert）+ 重新 `_load()`（open 之后的 query）都是真异步，
+    // 固定帧数在慢机器上不够：等列表里真的出现这条再说。
+    await waitUntil(
+      tester,
+      () => find.text('背诵 20 个生化酶').evaluate().isNotEmpty,
+      reason: '新建后列表里没出现「背诵 20 个生化酶」'
+          '（落库或新建后的重新加载没完成）',
+    );
 
     // 标题两端空白被去掉，且作为「无期限」进列表
     expect(find.text('背诵 20 个生化酶'), findsOneWidget);
@@ -179,7 +253,7 @@ void main() {
   testWidgets('一条都没有时给「今天没有待办」和一键新建', (tester) async {
     setPhoneSurface(tester);
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    await waitLoaded(tester);
 
     expect(find.text('今天没有待办'), findsOneWidget);
     expect(find.text('暂无待办 · 随局域网同步（可在设置里关掉）'), findsOneWidget);
@@ -200,7 +274,7 @@ void main() {
     });
 
     await tester.pumpWidget(host());
-    await settleFrames(tester);
+    await waitLoaded(tester);
     expect(find.text('宽屏也要显示'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
