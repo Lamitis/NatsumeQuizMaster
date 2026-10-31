@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -17,11 +19,18 @@ class SyncScanScreen extends StatefulWidget {
 }
 
 class _SyncScanScreenState extends State<SyncScanScreen> {
-  final MobileScannerController _controller = MobileScannerController(
-    // 只认二维码，避免把条形码也当配对码
-    formats: const [BarcodeFormat.qrCode],
-    detectionSpeed: DetectionSpeed.noDuplicates,
-  );
+  /// 只有手机/平板才有摄像头（2026-10-30 真机反馈：Windows 端不该出现扫码）。
+  /// 桌面端连控制器都不创建——mobile_scanner 在 Windows 上没有实现，
+  /// 构造或销毁都可能抛 MissingPluginException。
+  static bool get _canScan => Platform.isAndroid || Platform.isIOS;
+
+  final MobileScannerController? _controller = _canScan
+      ? MobileScannerController(
+          // 只认二维码，避免把条形码也当配对码
+          formats: const [BarcodeFormat.qrCode],
+          detectionSpeed: DetectionSpeed.noDuplicates,
+        )
+      : null;
 
   /// 命中一次就停：连续回调会让 Navigator.pop 触发多次
   bool _handled = false;
@@ -29,7 +38,7 @@ class _SyncScanScreenState extends State<SyncScanScreen> {
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
@@ -55,13 +64,15 @@ class _SyncScanScreenState extends State<SyncScanScreen> {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
+    // 桌面端没有摄像头：给出说明 + 返回按钮，而不是黑屏或插件异常
+    if (!_canScan) return _noCamera(ac);
     return Scaffold(
       backgroundColor: ac.background,
       appBar: AppBar(title: const Text('扫码配对')),
       body: Stack(
         children: [
           MobileScanner(
-            controller: _controller,
+            controller: _controller!,
             onDetect: _onDetect,
             errorBuilder: (context, error, child) => Center(
               child: Padding(
@@ -124,4 +135,45 @@ class _SyncScanScreenState extends State<SyncScanScreen> {
       ),
     );
   }
+
+  /// 桌面端兜底页：说明为什么不能扫、以及该怎么做。
+  ///
+  /// 电脑没有摄像头，硬进这个页面只会看到黑框和 `MissingPluginException`，
+  /// 所以直接把「该怎么做」讲清楚：用手机扫电脑，或回设置页手输识别码。
+  Widget _noCamera(AppThemeColors ac) => Scaffold(
+        backgroundColor: ac.background,
+        appBar: AppBar(title: const Text('扫码配对')),
+        body: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(NatsumeSpace.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.desktop_windows_outlined,
+                    size: 44, color: ac.textTertiary),
+                const SizedBox(height: NatsumeSpace.md),
+                Text('电脑端没有摄像头，无法扫码',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        fontSize: NatsumeType.h3, color: ac.textPrimary)),
+                const SizedBox(height: NatsumeSpace.sm),
+                Text(
+                  '请用手机扫描电脑上显示的配对二维码；\n'
+                  '或回到设置页，把手机上的本机识别码填进「对端识别码」输入框。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: NatsumeType.body,
+                      color: ac.textSecondary,
+                      height: 1.5),
+                ),
+                const SizedBox(height: NatsumeSpace.lg),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('返回设置'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
 }

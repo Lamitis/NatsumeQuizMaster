@@ -5,7 +5,66 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
+import 'lan_address.dart';
 import 'sync_models.dart';
+
+/// 发现通道的运行统计：用户看不到包，就永远查不出「为什么发现不了设备」。
+///
+/// 真机反馈（2026-10-30）暴露的正是这一点：socket 被静默打死、所有异常都被
+/// `catch (_) {}` 吞掉，界面上只剩一句「未发现设备」，无从判断是「没发出」
+/// 「没收到」还是「被防火墙挡了」。
+class SyncDiscoveryStats {
+  const SyncDiscoveryStats({
+    required this.sent,
+    required this.sendFailures,
+    required this.received,
+    required this.ignored,
+    required this.lastSentAt,
+    required this.lastReceivedAt,
+    required this.lastError,
+    required this.boundPort,
+    required this.heals,
+    required this.interfaces,
+  });
+
+  /// 成功发出的信标包数（广播 / 多播 / 单播扫描 / 应答 全部计入）
+  final int sent;
+
+  /// 发送失败次数（多为权限或网卡问题，见 [lastError]）
+  final int sendFailures;
+
+  /// 收到并识别为本应用的信标数
+  final int received;
+
+  /// 收到但不是本应用的包数（区分「没收到」与「收到了但解析不了」）
+  final int ignored;
+
+  final DateTime? lastSentAt;
+  final DateTime? lastReceivedAt;
+
+  /// 最近一次发送异常的一句话描述
+  final String? lastError;
+
+  /// 信标监听端口（0 = 没绑定成功）
+  final int boundPort;
+
+  /// socket 被系统关闭后自动重建的次数
+  final int heals;
+
+  /// 参与广播 / 扫描的网卡（“名字 (地址)”）
+  final List<String> interfaces;
+
+  bool get healthy => boundPort > 0;
+
+  /// 一句话诊断（设置页「网络诊断」直接展示）
+  String get summary {
+    final parts = <String>['已发 $sent · 已收 $received'];
+    if (sendFailures > 0) parts.add('发送失败 $sendFailures');
+    if (heals > 0) parts.add('socket 重建 $heals');
+    return parts.join(' · ');
+  }
+}
+
 
 /// 局域网设备发现（纯 `dart:io` RawDatagramSocket）——三通道：
 ///
@@ -33,6 +92,20 @@ class SyncDiscovery {
   /// 收到信标后的应答节流：同一设备最近一次应答时间（防扫描风暴）
   final Map<String, DateTime> _lastReplyAt = {};
   static const Duration replyCooldown = Duration(seconds: 3);
+
+  // ── 运行统计（只读，供设置页「网络诊断」展示）──
+  int _sent = 0;
+  int _sendFailures = 0;
+  int _received = 0;
+  int _ignored = 0;
+  int _heals = 0;
+  DateTime? _lastSentAt;
+  DateTime? _lastReceivedAt;
+  String? _lastError;
+  bool _healing = false;
+  List<String> _scanInterfaces = const [];
+  List<LanInterface>? _ifaceCache;
+  DateTime _ifaceCacheAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   RawDatagramSocket? _socket;
   RawDatagramSocket? _mcastSocket;
@@ -78,27 +151,23 @@ class SyncDiscovery {
     _selfDeviceId = deviceId;
     buildBeacon = beacon;
 
-    RawDatagramSocket? socket;
-    // 绑定第一个可用端口监听；收发都同时覆盖主/备两个端口，
-    // 兼容对端降级绑定到另一端口的情形
-    for (final port in [primaryPort, fallbackPort]) {
-      try {
-        socket = await RawDatagramSocket.bind(
-          InternetAddress.anyIPv4,
-          port,
-          reuseAddress: true,
-        );
-        _boundPorts.add(port);
-        break;
-      } on SocketException {
-        // 该端口不可用，继续尝试下一个
-      }
-    }
+    final socket = await _bindBeaconSocket();
     if (socket == null) {
       throw const SocketException('局域网发现：无法绑定信标端口');
     }
     _socket = socket;
-    _subscription = socket.listen(_onSocketEvent, onError: (_) {});
+    _sent = 0;
+    _sendFailures = 0;
+    _received = 0;
+    _ignored = 0;
+    _heals = 0;
+    _lastSentAt = null;
+    _lastReceivedAt = null;
+    _lastError = null;
+    _subscription = socket.listen(_onSocketEvent, onError: (Object e) {
+      _lastError = '接收异常：${_brief(e)}';
+      if (_looksClosed(e)) unawaited(_healSocket());
+    });
 
     // 多播通道（辅助）：绑定失败/加组失败降级跳过，不影响单播主力
     try {
@@ -117,6 +186,115 @@ class SyncDiscovery {
 
     await setBroadcasting(broadcast);
   }
+  /// 绑定信标端口，并**立刻打开 SO_BROADCAST**。
+  ///
+  /// 这是 2026-10-30 真机「同 Wi-Fi 下永远发现不了设备」的直接根因：
+  /// 未开启广播权限时，`dart:io` 向 `255.255.255.255` 发送会让系统异步报错并
+  /// **销毁这个 UDP socket**——`send` 看起来成功、包其实没发出，之后所有
+  /// send/receive 全部抛 `Socket has been closed`。旧实现在 bind 后从未设置
+  /// `broadcastEnabled`，而 `_sendBeacon()` 又把 `255.255.255.255` 排在
+  /// 目标列表第一位，于是服务启动后第一个信标周期就把自己打死：`running`
+  /// 仍是 true、HTTP 服务也在，但发现通道彻底哑掉。
+  ///
+  /// 实测（Windows + Dart 3.x）：
+  /// - 不设 `broadcastEnabled`：发 255.255.255.255 → socket 立即失效、收包 0；
+  /// - 先设 `broadcastEnabled = true`：连续 21 次广播全部送达、socket 正常。
+  Future<RawDatagramSocket?> _bindBeaconSocket() async {
+    for (final port in [primaryPort, fallbackPort]) {
+      try {
+        final socket = await RawDatagramSocket.bind(
+          InternetAddress.anyIPv4,
+          port,
+          reuseAddress: true,
+        );
+        try {
+          socket.broadcastEnabled = true;
+        } catch (_) {
+          // 个别平台/沙箱不允许改该选项；此时广播会失败，由单播扫描兜底，
+          // 失败次数会记进 stats 供「网络诊断」显示
+        }
+        _boundPorts
+          ..clear()
+          ..add(port);
+        return socket;
+      } on SocketException {
+        // 该端口不可用，继续尝试下一个
+      }
+    }
+    return null;
+  }
+
+  /// 发送信标：所有调用点统一走这里，失败计数 + socket 自愈
+  void _safeSend(RawDatagramSocket socket, Uint8List data,
+      InternetAddress target, int port) {
+    try {
+      socket.send(data, target, port);
+      _sent++;
+      _lastSentAt = DateTime.now();
+    } catch (e) {
+      _sendFailures++;
+      _lastError = '发送 ${target.address}:$port 失败：${_brief(e)}';
+      if (_looksClosed(e)) unawaited(_healSocket());
+    }
+  }
+
+  bool _looksClosed(Object e) {
+    final s = '$e'.toLowerCase();
+    return s.contains('closed') || s.contains('bad file descriptor');
+  }
+
+  String _brief(Object e) {
+    final s = '$e'.split('\n').first;
+    return s.length > 80 ? '${s.substring(0, 80)}…' : s;
+  }
+
+  /// socket 自愈：被系统关闭后重新绑定端口并恢复监听。
+  ///
+  /// 真机教训：socket 静默死亡时 `running` 仍为 true，不重建的话表面上
+  /// 「服务在跑」，实际永远收不到也发不出任何包。
+  Future<void> _healSocket() async {
+    if (_healing || _socket == null) return;
+    _healing = true;
+    try {
+      await _subscription?.cancel();
+      _subscription = null;
+      _socket?.close();
+      _socket = null;
+      final socket = await _bindBeaconSocket();
+      if (socket == null) {
+        _lastError = '信标 socket 重建失败：端口被占用';
+        return;
+      }
+      _socket = socket;
+      _heals++;
+      _subscription = socket.listen(_onSocketEvent, onError: (Object e) {
+        _lastError = '接收异常：${_brief(e)}';
+        if (_looksClosed(e)) unawaited(_healSocket());
+      });
+      // 重建后立刻补发一次信标，不必等下一个周期
+      if (_broadcasting) unawaited(_sendBeacon());
+    } catch (e) {
+      _lastError = '信标 socket 重建异常：${_brief(e)}';
+    } finally {
+      _healing = false;
+    }
+  }
+
+  /// 运行统计快照（设置页「网络诊断」）
+  SyncDiscoveryStats get stats => SyncDiscoveryStats(
+        sent: _sent,
+        sendFailures: _sendFailures,
+        received: _received,
+        ignored: _ignored,
+        lastSentAt: _lastSentAt,
+        lastReceivedAt: _lastReceivedAt,
+        lastError: _lastError,
+        boundPort: _boundPorts.isEmpty ? 0 : _boundPorts.first,
+        heals: _heals,
+        interfaces: List<String>.unmodifiable(_scanInterfaces),
+      );
+
+
 
   Future<void> _onSocketEvent(RawSocketEvent event) async {
     final socket = _socket;
@@ -151,11 +329,17 @@ class SyncDiscovery {
     try {
       raw = utf8.decode(data);
     } catch (_) {
+      _ignored++;
       return;
     }
     final beacon = SyncBeacon.decode(raw);
-    if (beacon == null) return; // 他应用/非法包
+    if (beacon == null) {
+      _ignored++; // 他应用/非法包：单独计数，便于区分「没收到」与「解析不了」
+      return;
+    }
     if (beacon.deviceId == _selfDeviceId) return; // 忽略自己的回环
+    _received++;
+    _lastReceivedAt = DateTime.now();
     _mergeBeacon(beacon, address.address);
     // 应答机制：收到他端信标即单播回发自己的信标（节流），
     // 使单向扫描也能双向可见，不依赖双方都在扫描。
@@ -174,11 +358,8 @@ class SyncDiscovery {
     try {
       final beacon = await builder();
       final data = Uint8List.fromList(utf8.encode(beacon.encode()));
-      const ports = [primaryPort, fallbackPort];
-      for (final port in ports) {
-        try {
-          socket.send(data, target, port);
-        } catch (_) {}
+      for (final port in const [primaryPort, fallbackPort]) {
+        _safeSend(socket, data, target, port);
       }
     } catch (_) {
       // 信标构造失败下个周期重试，不影响发现主链路（已合并对端）
@@ -233,6 +414,10 @@ class SyncDiscovery {
   }
 
   /// 广播 + 多播发送（辅助通道；单播扫描见 [_subnetScan]）
+  ///
+  /// 目标顺序按「可靠性」排：先各真实网段的定向广播，最后才是受限广播
+  /// `255.255.255.255`（多网卡机器上它只走默认路由；历史上它还是把 socket
+  /// 打死的那一发，所以永远不排第一）。
   Future<void> _sendBeacon() async {
     final socket = _socket;
     final builder = buildBeacon;
@@ -240,111 +425,87 @@ class SyncDiscovery {
     try {
       final beacon = await builder();
       final data = Uint8List.fromList(utf8.encode(beacon.encode()));
-      // 受限广播 + 各接口子网定向广播，发向主/备两个端口
-      final targets = <InternetAddress>[InternetAddress('255.255.255.255')];
-      targets.addAll(await _subnetBroadcastAddresses());
-      const ports = [primaryPort, fallbackPort];
-      for (final addr in targets) {
-        for (final port in ports) {
-          try {
-            socket.send(data, addr, port);
-          } catch (_) {
-            // 部分平台广播发送被静默拒绝，由单播扫描兜底
-          }
+      final interfaces = await _interfaces();
+      final targets = LanAddress.broadcastTargets(interfaces);
+      var n = 0;
+      for (final target in targets) {
+        for (final port in const [primaryPort, fallbackPort]) {
+          _safeSend(socket, data, InternetAddress(target), port);
+          // 每 8 个包让出事件循环：一口气几百个 UDP 写入会撞上系统发送缓冲上限
+          if (++n % 8 == 0) await Future<void>.delayed(Duration.zero);
         }
+      }
+      // 受限广播兜底（掩码不是 /24 时只有它能覆盖到对端所在网段）
+      for (final port in const [primaryPort, fallbackPort]) {
+        _safeSend(
+            socket, data, InternetAddress('255.255.255.255'), port);
       }
       // 多播通道
       final ms = _mcastSocket;
       if (ms != null) {
         try {
           ms.send(data, multicastGroup, multicastPort);
-        } catch (_) {}
+          _sent++;
+          _lastSentAt = DateTime.now();
+        } catch (e) {
+          _sendFailures++;
+          _lastError = '多播发送失败：${_brief(e)}';
+        }
       }
-    } catch (_) {
+    } catch (e) {
       // 信标构造失败（如设备名读取异常）下个周期重试，不影响监听
+      _lastError = '信标构造失败：${_brief(e)}';
     }
   }
 
-  /// 子网单播扫描（发现主力）：枚举本机各 IPv4 接口的 /24 网段，
-  /// 对每个主机地址单播信标。单播属出站流量，不受入站防火墙限制，
-  /// 也不依赖网络对广播的转发；配合 [handleDatagram] 的应答机制双向可见
+  /// 真实网卡列表（20 秒缓存：枚举网卡在移动端不算便宜）
+  Future<List<LanInterface>> _interfaces() async {
+    final now = DateTime.now();
+    final cached = _ifaceCache;
+    if (cached != null &&
+        now.difference(_ifaceCacheAt) < const Duration(seconds: 20)) {
+      return cached;
+    }
+    final list = await LanAddress.preferred();
+    _ifaceCache = list;
+    _ifaceCacheAt = now;
+    _scanInterfaces = list.map((e) => '${e.name} (${e.address})').toList();
+    return list;
+  }
+
+  /// 子网单播扫描（发现主力）：枚举本机各真实 IPv4 接口的 /24 网段，
+  /// 对每个主机地址单播信标。单播属出站流量，不受入站防火墙规则限制，
+  /// 也不依赖网络对广播的转发；配合 [handleDatagram] 的应答机制双向可见。
+  ///
+  /// 只扫真实网卡：VMware/Hyper-V/Docker 的虚拟网段纯属噪声（每轮多几百个包），
+  /// 还会挤占真实网段的发送带宽。
   Future<void> _subnetScan() async {
     final socket = _socket;
     final builder = buildBeacon;
     if (socket == null || builder == null || _scanning) return;
     _scanning = true;
     try {
-      final peersAddrs = await _subnetPeerAddresses();
-      if (peersAddrs.isEmpty) return;
+      final hosts = LanAddress.scanHosts(await _interfaces());
+      if (hosts.isEmpty) return;
       final beacon = await builder();
       final data = Uint8List.fromList(utf8.encode(beacon.encode()));
-      const ports = [primaryPort, fallbackPort];
       var idx = 0;
-      for (final addr in peersAddrs) {
-        for (final port in ports) {
-          try {
-            socket.send(data, addr, port);
-          } catch (_) {}
+      for (final host in hosts) {
+        for (final port in const [primaryPort, fallbackPort]) {
+          _safeSend(socket, data, InternetAddress(host), port);
         }
-        // 每 32 个地址让出事件循环，避免阻塞 UI/收发（O(1) 计数，非 indexOf）
-        idx++;
-        if (idx % 32 == 0) {
+        // 每 8 个地址让出事件循环，避免阻塞 UI/收发，也避免瞬时打爆发送缓冲
+        if (++idx % 8 == 0) {
           await Future<void>.delayed(Duration.zero);
+          if (_socket == null) return; // 扫描途中 socket 被重建/停止
         }
       }
-    } catch (_) {
+    } catch (e) {
       // 接口枚举/发送异常不阻塞发现（广播/多播通道仍在）
+      _lastError = '单播扫描异常：${_brief(e)}';
     } finally {
       _scanning = false;
     }
-  }
-
-  /// 本机各接口 /24 网段内的全部主机地址（排除网络号/广播号/本机）
-  Future<List<InternetAddress>> _subnetPeerAddresses() async {
-    final result = <InternetAddress>[];
-    final selfIps = <String>{};
-    try {
-      final ifaces = await NetworkInterface.list(
-          includeLoopback: false, type: InternetAddressType.IPv4);
-      for (final iface in ifaces) {
-        for (final addr in iface.addresses) {
-          if (addr.type != InternetAddressType.IPv4) continue;
-          final parts = addr.address.split('.');
-          if (parts.length != 4) continue;
-          selfIps.add(addr.address);
-          final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
-          for (var i = 1; i < 255; i++) {
-            final ip = '$prefix.$i';
-            if (selfIps.contains(ip)) continue;
-            result.add(InternetAddress(ip));
-          }
-        }
-      }
-    } catch (_) {
-      // 枚举失败：仅靠广播/多播通道
-    }
-    return result;
-  }
-
-  /// 各 IPv4 接口的子网定向广播地址（按常见的 /24 掩码推算）
-  Future<List<InternetAddress>> _subnetBroadcastAddresses() async {
-    final result = <InternetAddress>[];
-    try {
-      final ifaces = await NetworkInterface.list(
-          includeLoopback: false, type: InternetAddressType.IPv4);
-      for (final iface in ifaces) {
-        for (final addr in iface.addresses) {
-          if (addr.type != InternetAddressType.IPv4) continue;
-          final parts = addr.address.split('.');
-          if (parts.length != 4) continue;
-          result.add(InternetAddress(
-              '${parts[0]}.${parts[1]}.${parts[2]}.255'));
-        }
-      }
-    } catch (_) {
-      // 枚举失败：仅用受限广播
-    }
-    return result;
   }
 
   void _pruneAndNotify() {

@@ -96,6 +96,19 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; ── Windows 防火墙放行（2026-10-30 真机反馈：同 Wi-Fi 下发现不了设备）──
+; 局域网同步需要三条通道，缺任何一条都会表现为「双方都开着应用却互相看不到」：
+;   TCP 51630-51632  同步服务（/sync/info 握手、/sync/exchange 交换快照）
+;   UDP 51620-51622  设备发现（广播信标 + 多播信标）
+; 规则按「程序」再兜一条：端口只是主用值，对端降级或端口被占用时程序会换端口。
+; 用 cmd 包一层是为了吞掉 netsh 的非零返回码（规则不存在 / 无管理员权限时
+; 不能让安装向导弹错误框），最后统一 exit /b 0。
+; 仅管理员安装时添加：非管理员安装交给应用首次运行时的系统弹窗。
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName} LAN Sync"" dir=in action=allow program=""{app}\{#MyAppExeName}"" enable=yes profile=private >nul & netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync TCP"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName} LAN Sync TCP"" dir=in action=allow protocol=TCP localport=51630-51632 enable=yes profile=private >nul & netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync UDP"" >nul 2>&1 & netsh advfirewall firewall add rule name=""{#MyAppName} LAN Sync UDP"" dir=in action=allow protocol=UDP localport=51620-51622 enable=yes profile=private >nul & exit /b 0"; Flags: runhidden waituntilterminated; StatusMsg: "正在放行 Windows 防火墙（局域网同步）…"; Check: IsAdmin
+
+[UninstallRun]
+; 卸载时清掉防火墙规则（同样是 cmd 包裹，避免非零返回码弹错误框）
+Filename: "{cmd}"; Parameters: "/c netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync"" >nul 2>&1 & netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync TCP"" >nul 2>&1 & netsh advfirewall firewall delete rule name=""{#MyAppName} LAN Sync UDP"" >nul 2>&1 & exit /b 0"; Flags: runhidden; RunOnceId: "RemoveLanSyncFirewallRules"
 
 [UninstallDelete]
 ; 卸载不清理用户数据（题库/记录在 %LOCALAPPDATA%\natsume_quiz_master），如需彻底清除由用户手动删除

@@ -17,6 +17,7 @@ import '../models/app_settings.dart';
 import '../models/plugin_sync_scope.dart';
 import '../services/device_service.dart';
 import '../services/sync/sync_engine.dart';
+import '../services/sync/lan_address.dart';
 import '../services/theme_service.dart';
 import '../utils/responsive.dart';
 import '../widgets/kit/natsume_kit.dart';
@@ -156,6 +157,15 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   /// 临时码倒计时的秒级刷新定时器（仅有效期内运行）
   Timer? _tempCodeTicker;
+
+  /// 桌面端内嵌二维码的载荷缓存（按「设备码 + 端口」失效）
+  Future<SyncPairPayload>? _pairPayloadCache;
+  String _pairPayloadKey = '';
+
+  /// 网络诊断里的网卡枚举缓存（引擎侧本身有 20 秒缓存，这里避免每次 build
+  /// 都新建 Future 让 FutureBuilder 重新走一遍 loading）
+  Future<List<LanInterface>>? _ifaceFuture;
+  DateTime _ifaceFutureAt = DateTime.fromMillisecondsSinceEpoch(0);
   final _endpointFocus = FocusNode();
   bool _obscureKey = true;
   bool _mineruEnabled = false;
@@ -1335,6 +1345,12 @@ class _SettingsScreenState extends State<SettingsScreen>
                     final displayName = syncSettings.deviceName.isEmpty
                         ? DeviceService.instance.defaultDeviceName
                         : syncSettings.deviceName;
+                    // 平台判定（问题二）：电脑端一般没有摄像头，不该把「扫码」
+                    // 当主入口。桌面 = 展示本机二维码 + 识别码 + 手动输入；
+                    // 手机 = 「扫码」按钮 + 手动输入。
+                    final isDesktopPlatform = Platform.isWindows ||
+                        Platform.isLinux ||
+                        Platform.isMacOS;
                     // 临时码倒计时需要秒级刷新：在帧末安排启停，避免 build 期副作用
                     WidgetsBinding.instance.addPostFrameCallback(
                         (_) => _syncTempCodeTicker(sync.tempCodeAlive));
@@ -1445,19 +1461,59 @@ class _SettingsScreenState extends State<SettingsScreen>
                                                 content: Text('本机识别码已复制')));
                                       },
                               ),
-                              IconButton(
-                                tooltip: '显示配对二维码',
-                                icon: const Icon(Icons.qr_code_2, size: 20),
-                                onPressed: sync.deviceCode.isEmpty
-                                    ? null
-                                    : () => _showPairQr(sync),
-                              ),
+                              // 手机端保留「显示二维码」入口（让对方扫本机）
+                              if (!isDesktopPlatform)
+                                IconButton(
+                                  tooltip: '显示配对二维码',
+                                  icon: const Icon(Icons.qr_code_2, size: 20),
+                                  onPressed: sync.deviceCode.isEmpty
+                                      ? null
+                                      : () => _showPairQr(sync),
+                                ),
                             ],
                           ),
                           Text('本机识别码（长期有效，交给要同步的设备）',
                               style: TextStyle(
                                   fontSize: NatsumeType.caption,
                                   color: ac.textSecondary)),
+                          // 桌面端：直接把本机二维码摊在界面上，手机扫一下即可配对。
+                          // 电脑没有摄像头，这里再放「扫码」按钮反而是错的交互。
+                          if (isDesktopPlatform) ...[
+                            const SizedBox(height: 12),
+                            Center(
+                              child: FutureBuilder<SyncPairPayload>(
+                                future: _pairPayloadFuture(sync),
+                                builder: (context, snapshot) {
+                                  final payload = snapshot.data;
+                                  if (payload == null) {
+                                    return const SizedBox(
+                                      height: 120,
+                                      child: Center(
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2),
+                                      ),
+                                    );
+                                  }
+                                  return Column(
+                                    children: [
+                                      SyncQrView(data: payload.encode()),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        payload.hasAddress
+                                            ? '手机在「扫码配对」里扫这个码即可连上'
+                                                '（${payload.ip}:${payload.port}）'
+                                            : '暂无可用的局域网地址：请先连上 Wi-Fi 或网线',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                            fontSize: NatsumeType.caption,
+                                            color: ac.textSecondary),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
                           const SizedBox(height: 8),
                           // 临时码（6 位 / 10 分钟）
                           if (sync.tempCodeAlive)
@@ -1495,7 +1551,43 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 label: const Text('生成 6 位临时码（10 分钟有效）'),
                               ),
                             ),
-                          // 对端码输入
+                          // ── 配对状态（问题三）：只有对端确认过才显示「已配对」──
+                          Row(
+                            children: [
+                              Icon(_pairStateIcon(sync.pairState),
+                                  size: 18,
+                                  color: _pairStateColor(sync.pairState, ac)),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  sync.pairState == SyncPairState.none
+                                      ? '未配对：输入对端识别码后会自动确认连通性'
+                                      : '${sync.pairState.label}'
+                                          '${sync.confirmedPeerName.isEmpty ? '' : ' · ${sync.confirmedPeerName}'}',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.caption,
+                                      fontWeight: FontWeight.w600,
+                                      color: _pairStateColor(
+                                          sync.pairState, ac)),
+                                ),
+                              ),
+                              if (sync.pairState == SyncPairState.awaitingPeer ||
+                                  sync.pairState ==
+                                      SyncPairState.verifying)
+                                TextButton(
+                                  onPressed: () => sync.verifyPairing(),
+                                  child: const Text('重试'),
+                                ),
+                            ],
+                          ),
+                          if (sync.pairDetail.isNotEmpty)
+                            Text(sync.pairDetail,
+                                style: TextStyle(
+                                    fontSize: NatsumeType.caption,
+                                    color: ac.textSecondary,
+                                    height: 1.4)),
+                          const SizedBox(height: 6),
+                          // 对端码输入：手机端多一个「扫码」，桌面端只手动输入
                           Row(
                             children: [
                               Expanded(
@@ -1505,25 +1597,26 @@ class _SettingsScreenState extends State<SettingsScreen>
                                     isDense: true,
                                     labelText: '对端识别码',
                                     hintText: '粘贴长码或输入 6 位临时码',
-                                    helperText: sync.paired
-                                        ? '已配对：${sync.peerCode.length > 8 ? '${sync.peerCode.substring(0, 8)}…' : sync.peerCode}'
-                                        : '未配对，不会自动同步',
+                                    helperText: sync.pairState ==
+                                            SyncPairState.verified
+                                        ? '已确认连通，可自动同步'
+                                        : '保存后会向对端确认，未确认前不算已配对',
                                   ),
+                                  onSubmitted: (_) => _applyPeerCode(sync),
                                 ),
                               ),
                               const SizedBox(width: 8),
-                              IconButton.filledTonal(
-                                tooltip: '扫码配对',
-                                icon:
-                                    const Icon(Icons.qr_code_scanner, size: 20),
-                                onPressed: () => _scanToPair(sync),
-                              ),
-                              const SizedBox(width: 4),
+                              if (!isDesktopPlatform) ...[
+                                IconButton.filledTonal(
+                                  tooltip: '扫码配对',
+                                  icon: const Icon(Icons.qr_code_scanner,
+                                      size: 20),
+                                  onPressed: () => _scanToPair(sync),
+                                ),
+                                const SizedBox(width: 4),
+                              ],
                               FilledButton(
-                                onPressed: () {
-                                  sync.applyPeerCode(_peerCodeController.text);
-                                  _peerCodeController.clear();
-                                },
+                                onPressed: () => _applyPeerCode(sync),
                                 child: const Text('配对'),
                               ),
                               if (sync.paired)
@@ -1537,6 +1630,18 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 ),
                             ],
                           ),
+                          // 桌面端提示：电脑没有摄像头，扫码要在手机侧做
+                          if (isDesktopPlatform)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Text(
+                                '电脑端没有摄像头：用手机扫上面的二维码，'
+                                '或把手机上显示的识别码填进上面的输入框。',
+                                style: TextStyle(
+                                    fontSize: NatsumeType.caption,
+                                    color: ac.textTertiary),
+                              ),
+                            ),
                           const SizedBox(height: 4),
                           // 同步范围：整库 / 仅题库
                           SwitchListTile(
@@ -1582,6 +1687,93 @@ class _SettingsScreenState extends State<SettingsScreen>
                                   style:
                                       const TextStyle(fontSize: NatsumeType.body)),
                               onPressed: sync.syncing ? null : _syncNow,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          // ── 网络诊断（2026-10-30 真机反馈）──
+                          // 「未发现设备」以前是一句毫无信息量的话：包没发出、被防火墙
+                          // 挡了、绑到了虚拟网卡上，界面看起来一模一样。这里把收发计数、
+                          // 监听端口、参与广播的网卡和最近一次错误摊开，让用户能自查。
+                          Theme(
+                            data: Theme.of(context)
+                                .copyWith(dividerColor: Colors.transparent),
+                            child: ExpansionTile(
+                              tilePadding: EdgeInsets.zero,
+                              childrenPadding: EdgeInsets.zero,
+                              leading: Icon(Icons.network_check,
+                                  size: 18, color: ac.textSecondary),
+                              title: Text('网络诊断',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      color: ac.textPrimary)),
+                              subtitle: Text(sync.discoveryStats.summary,
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.caption,
+                                      color: ac.textSecondary)),
+                              children: [
+                                if (!sync.started)
+                                  _diagLine('同步服务', '未启动（打开自动同步或点「立即同步」）',
+                                      ac),
+                                _diagLine('同步服务端口', '${sync.httpPort}', ac),
+                                _diagLine(
+                                    '信标监听端口',
+                                    sync.discoveryStats.boundPort > 0
+                                        ? '${sync.discoveryStats.boundPort}'
+                                        : '未绑定（发现通道不可用，可关闭再开启自动同步重试）',
+                                    ac),
+                                if (sync.discoveryStats.lastError != null)
+                                  _diagLine('最近错误',
+                                      sync.discoveryStats.lastError!, ac),
+                                FutureBuilder<List<LanInterface>>(
+                                  future: _ifaceFutureFor(sync),
+                                  builder: (context, snap) {
+                                    if (snap.connectionState !=
+                                        ConnectionState.done) {
+                                      return _diagLine('局域网网卡', '正在枚举…', ac);
+                                    }
+                                    final list =
+                                        snap.data ?? const <LanInterface>[];
+                                    if (list.isEmpty) {
+                                      return _diagLine('局域网网卡',
+                                          '没有可用的局域网地址：请先连接 Wi-Fi 或网线', ac);
+                                    }
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        _diagLine('局域网网卡',
+                                            '可用地址 ${list.length} 个', ac),
+                                        for (final iface in list)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                left: 8, bottom: 2),
+                                            child: Text(
+                                              '· ${iface.name} (${iface.address})'
+                                              '${iface.virtualAdapter ? ' · 虚拟网卡，不参与发现' : ''}',
+                                              style: TextStyle(
+                                                  fontSize: NatsumeType.caption,
+                                                  color: ac.textSecondary),
+                                            ),
+                                          ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                                // Windows 防火墙是最常见的「包发出去了但对端收不到」
+                                if (Platform.isWindows)
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      'Windows 首次运行请在防火墙弹窗里点「允许访问」。'
+                                      '若误点了「取消」：Windows 安全中心 → 防火墙和网络保护 → '
+                                      '允许应用通过防火墙 → 勾选 NatsumeQuizMaster（专用网络）。',
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.caption,
+                                          color: ac.textTertiary,
+                                          height: 1.4),
+                                    ),
+                                  ),
+                              ],
                             ),
                           ),
                         ],
@@ -2431,6 +2623,82 @@ class _SettingsScreenState extends State<SettingsScreen>
     );
   }
 
+  /// 保存对端识别码。刻意**不清空输入框**：识别码抄错时被对端拒绝，
+  /// 用户需要就地改一个字符，而不是重新粘一遍（旧实现无论成败都清空）。
+  void _applyPeerCode(SyncEngine sync) {
+    final code = _peerCodeController.text.trim();
+    if (code.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('请先输入对端识别码')));
+      return;
+    }
+    sync.applyPeerCode(code);
+  }
+
+  /// 配对状态图标（「已配对」只在握手成功后才出现）
+  IconData _pairStateIcon(SyncPairState state) => switch (state) {
+        SyncPairState.verified => Icons.link,
+        SyncPairState.rejected => Icons.link_off,
+        SyncPairState.verifying ||
+        SyncPairState.awaitingPeer =>
+          Icons.sync_problem,
+        SyncPairState.none => Icons.link_off,
+      };
+
+  Color _pairStateColor(SyncPairState state, AppThemeColors ac) =>
+      switch (state) {
+        SyncPairState.verified => ac.accent,
+        SyncPairState.rejected => ac.danger,
+        SyncPairState.verifying ||
+        SyncPairState.awaitingPeer =>
+          ac.textSecondary,
+        SyncPairState.none => ac.textTertiary,
+      };
+
+  /// 桌面端内嵌二维码载荷（设备码或端口变化时重新生成）
+  Future<SyncPairPayload> _pairPayloadFuture(SyncEngine sync) {
+    final key = '${sync.deviceCode}|${sync.httpPort}';
+    if (_pairPayloadCache == null || _pairPayloadKey != key) {
+      _pairPayloadKey = key;
+      _pairPayloadCache = sync.buildPairPayload();
+    }
+    return _pairPayloadCache!;
+  }
+
+  /// 网络诊断的网卡列表（20 秒内复用同一个 Future）
+  Future<List<LanInterface>> _ifaceFutureFor(SyncEngine sync) {
+    final now = DateTime.now();
+    final stale = now.difference(_ifaceFutureAt) > const Duration(seconds: 20);
+    if (_ifaceFuture == null || stale) {
+      _ifaceFutureAt = now;
+      _ifaceFuture = sync.localInterfaces();
+    }
+    return _ifaceFuture!;
+  }
+
+  /// 网络诊断的一行「标签：值」
+  Widget _diagLine(String label, String value, AppThemeColors ac) => Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 96,
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: NatsumeType.caption, color: ac.textTertiary)),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: TextStyle(
+                      fontSize: NatsumeType.caption,
+                      color: ac.textSecondary,
+                      height: 1.4)),
+            ),
+          ],
+        ),
+      );
+
   String _fmtTime(DateTime? t) {
     if (t == null) return '20:00';
     return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
@@ -2534,10 +2802,20 @@ class _SettingsScreenState extends State<SettingsScreen>
     if (!mounted || payload == null) return;
     final ok = await sync.pairFromScan(payload);
     if (!mounted) return;
+    final name = payload.deviceName.isEmpty ? '对端设备' : payload.deviceName;
+    // 结果按**真实握手结论**分档，不再一律提示「已配对」
+    final message = ok
+        ? '已与「$name」配对并完成一次同步'
+        : switch (sync.pairState) {
+            SyncPairState.rejected =>
+              '识别码不匹配：「$name」拒绝了本机出示的识别码',
+            SyncPairState.awaitingPeer || SyncPairState.none =>
+              '已保存识别码，但还连不上「$name」：${sync.pairDetail}',
+            _ => '已保存识别码，但同步失败：${sync.statusMessage}',
+          };
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(ok
-          ? '已与「${payload.deviceName.isEmpty ? '对端设备' : payload.deviceName}」配对'
-          : '已保存识别码，但首次同步失败：${sync.statusMessage}'),
+      content: Text(message),
+      duration: const Duration(seconds: 6),
     ));
   }
 
@@ -2559,19 +2837,26 @@ class _SettingsScreenState extends State<SettingsScreen>
       );
       return;
     }
-    if (engine.peers.isEmpty) {
+    // 不再「没发现就直接放弃」：引擎会用已确认过的地址直连、再退到握手核实，
+    // 并把具体原因写进 statusMessage（没配对 / 没发现 / 连不上 / 码不对）。
+    final (tried, ok) = await engine.manualSync();
+    if (!mounted) return;
+    if (tried == 0) {
       messenger.showSnackBar(
-        const SnackBar(
-            content: Text('未发现其他设备：请确认双方接入同一局域网，'
-                '且对端应用正在前台运行')),
+        SnackBar(
+          content: Text(engine.statusMessage.isNotEmpty
+              ? engine.statusMessage
+              : '未发现其他设备：请确认双方接入同一局域网，且对端应用正在前台运行'),
+          duration: const Duration(seconds: 6),
+        ),
       );
       return;
     }
-    final (tried, ok) = await engine.manualSync();
-    if (!mounted) return;
     messenger.showSnackBar(
       SnackBar(
-        content: Text(ok > 0 ? '同步完成：$ok/$tried 台设备成功' : '同步失败：请检查对端应用是否在前台运行'),
+        content: Text(ok > 0
+            ? '同步完成：$ok/$tried 台设备成功'
+            : '同步失败：${engine.statusMessage.isNotEmpty ? engine.statusMessage : '请检查对端应用是否在前台运行'}'),
         backgroundColor: ok > 0 ? null : errorColor,
       ),
     );

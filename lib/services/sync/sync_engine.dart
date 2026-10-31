@@ -8,12 +8,52 @@ import 'package:http/http.dart' as http;
 
 import '../debug_log_service.dart';
 import '../device_service.dart';
+import 'lan_address.dart';
 import 'sync_discovery.dart';
 import 'sync_code.dart';
 import 'sync_models.dart';
 import 'sync_pair_payload.dart';
 import 'sync_repository.dart';
 import 'sync_server.dart';
+
+/// 配对状态机。
+///
+/// 真机反馈（2026-10-30）：旧实现只要本地保存了对端识别码就 `paired == true`，
+/// 界面据此显示「已配对」——属于乐观 UI。码抄错了、对端没开、防火墙挡了、
+/// 甚至不在同一网段，界面照样说已配对，用户以为连上了，实际一个包都发不出去。
+///
+/// 现在只有**对端确认之后**（带码握手返回 200，或同步成功）才进入
+/// [SyncPairState.verified]，文案上才允许说「已配对」。
+enum SyncPairState {
+  /// 没有对端识别码
+  none,
+
+  /// 已保存识别码，但还没得到对端确认（等对端出现 / 等握手回执）
+  awaitingPeer,
+
+  /// 正在向对端核实识别码
+  verifying,
+
+  /// 对端已接受本机出示的识别码（握手成功，可正常同步）
+  verified,
+
+  /// 对端明确拒绝（识别码不匹配 / 临时码过期）
+  rejected,
+}
+
+/// 状态的中文短标签（设置页状态行直接用）
+extension SyncPairStateLabel on SyncPairState {
+  String get label => switch (this) {
+        SyncPairState.none => '未配对',
+        SyncPairState.awaitingPeer => '等待对端确认',
+        SyncPairState.verifying => '正在核实…',
+        SyncPairState.verified => '已配对',
+        SyncPairState.rejected => '识别码不匹配',
+      };
+
+  /// 只有核实过才算真的连上了
+  bool get connected => this == SyncPairState.verified;
+}
 
 /// 局域网同步引擎：编排发现、传输与合并。
 ///
@@ -52,6 +92,30 @@ class SyncEngine extends ChangeNotifier {
   /// 用户要求「接入端需要输入识别码才可以与目标设备进行自动同步」。
   String _peerCode = '';
 
+  // ── 配对状态机 ──
+  /// 是否已得到对端确认（未确认前界面不显示「已配对」）
+  SyncPairState _pairState = SyncPairState.none;
+
+  /// 状态的一句话说明（含失败原因，直接展示给用户）
+  String _pairDetail = '';
+
+  /// 已确认对端的名字 / 地址（发现通道失灵时仍可直连同步）
+  String _verifiedPeerName = '';
+  String _verifiedPeerIp = '';
+  int _verifiedPeerPort = 0;
+
+  /// 核实中标记（防重入：定时重试与「发现事件」可能同时触发）
+  bool _verifying = false;
+  Timer? _verifyTimer;
+
+  /// 核实握手超时/重试节奏
+  static const Duration pairVerifyTimeout = Duration(seconds: 3);
+  static const Duration pairRetryInterval = Duration(seconds: 8);
+
+  /// 扫码/确认后记下的对端地址（UDP 发现不到时的直连兜底）
+  String? _scanIp;
+  int? _scanPort;
+
   /// 本机临时码（6 位数字，一次性分享用）
   String _tempCode = '';
   DateTime? _tempExpiry;
@@ -74,7 +138,25 @@ class SyncEngine extends ChangeNotifier {
 
   /// 对端识别码（空 = 尚未配对，不会自动同步）
   String get peerCode => _peerCode;
+
+  /// 是否**已经输入**对端识别码（门禁用：没输码一律不发请求）
   bool get paired => _peerCode.trim().isNotEmpty;
+
+  /// 配对状态：只有对端确认过才是 [SyncPairState.verified]
+  SyncPairState get pairState => _pairState;
+
+  /// 对端是否已确认（UI 只认这个来显示「已配对」）
+  bool get peerConfirmed => _pairState == SyncPairState.verified;
+
+  /// 状态说明（含失败原因，UI 直接展示）
+  String get pairDetail => _pairDetail;
+
+  /// 已确认的对端（名字 + 地址），未确认时为空
+  String get confirmedPeerName => _verifiedPeerName;
+
+  /// 已确认对端地址（发现通道不通时「立即同步」用它直连）
+  String get confirmedPeerAddress =>
+      _verifiedPeerIp.isEmpty ? '' : '$_verifiedPeerIp:$_verifiedPeerPort';
 
   /// 本机当前临时码与是否仍有效
   String get tempCode => _tempCode;
@@ -122,6 +204,10 @@ class SyncEngine extends ChangeNotifier {
       DebugLogService.instance
           .log('SYNC', '发现设备：${peer.deviceName}（${peer.ip}:${peer.port}）');
       notifyListeners();
+      // 有新对端出现：若还在等确认，立刻用它的地址补一次握手
+      if (_peerCode.isNotEmpty && _pairState != SyncPairState.verified) {
+        unawaited(verifyPairing());
+      }
       if (_autoSync) unawaited(_autoSyncWith(peer));
     };
     _discovery.onPeersChanged = () => notifyListeners();
@@ -172,16 +258,199 @@ class SyncEngine extends ChangeNotifier {
   ///
   /// 归一化后存储：去掉连字符/空格、统一大写，并宽容 O→0、I/L→1 的抄写误差。
   /// 6 位数字（临时码）保持数字形式原样。
-  void applyPeerCode(String raw) {
+  ///
+  /// **这里不宣布「已配对」**：只把状态推进到 [SyncPairState.awaitingPeer]，
+  /// 随后异步向对端核实（[verifyPairing]）。旧实现存完码就 `paired = true`，
+  /// 界面于是直接显示「已配对」——正是用户报的「显示已配对但发现不了设备」。
+  void applyPeerCode(String raw, {bool autoVerify = true}) {
     final normalized = SyncCode.normalize(raw);
-    if (_peerCode == normalized) return;
+    if (_peerCode == normalized) {
+      // 同一个码再次提交：已核实过就保持，否则补一次核实（用户可能刚打开对端）
+      if (normalized.isNotEmpty && autoVerify) unawaited(verifyPairing());
+      return;
+    }
     _peerCode = normalized;
-    _statusMessage = normalized.isEmpty
-        ? '已解除配对，将不再自动同步'
-        : '已保存对端识别码（${normalized.length} 位）';
-    DebugLogService.instance
-        .log('SYNC', normalized.isEmpty ? '解除配对' : '已保存对端识别码');
+    _verifiedPeerName = '';
+    _verifiedPeerIp = '';
+    _verifiedPeerPort = 0;
+    if (normalized.isEmpty) {
+      _pairState = SyncPairState.none;
+      _pairDetail = '已解除配对，将不再自动同步';
+      _statusMessage = _pairDetail;
+      _stopVerifyTimer();
+    } else {
+      _pairState = SyncPairState.awaitingPeer;
+      _pairDetail = '已保存识别码，正在等待对端确认…';
+      _statusMessage = _pairDetail;
+    }
+    DebugLogService.instance.log(
+        'SYNC', normalized.isEmpty ? '解除配对' : '已保存对端识别码，等待对端确认');
     notifyListeners();
+    if (normalized.isNotEmpty && autoVerify) unawaited(verifyPairing());
+  }
+
+  /// 向对端核实识别码（握手）：带码请求对端的 `GET /sync/info`。
+  ///
+  /// - 200 → 对端接受了本机出示的码 → [SyncPairState.verified]（这才叫已配对）
+  /// - 403 → 码不对 / 临时码过期 → [SyncPairState.rejected]（明确报错）
+  /// - 连不上 → 保持 [SyncPairState.awaitingPeer]，8 秒后自动重试
+  ///
+  /// 顺带充当连通性探针：能拿到 200 说明 IP、端口、防火墙这条链路是通的，
+  /// 后续 `/sync/exchange` 必然也走得通，不会再出现「界面已配对、实际发不出去」。
+  Future<void> verifyPairing() async {
+    if (_peerCode.isEmpty || _verifying) return;
+    // 候选目标：已发现的对端 + 扫码/历史确认过的地址
+    final targets = <_PairTarget>[];
+    for (final peer in _discovery.peers) {
+      targets.add(
+          _PairTarget(ip: peer.ip, port: peer.port, name: peer.deviceName));
+    }
+    final scanIp = _scanIp;
+    final scanPort = _scanPort;
+    if (scanIp != null &&
+        scanPort != null &&
+        scanPort > 0 &&
+        !targets.any((t) => t.ip == scanIp && t.port == scanPort)) {
+      targets.add(_PairTarget(ip: scanIp, port: scanPort, name: ''));
+    }
+    if (targets.isEmpty) {
+      _pairState = SyncPairState.awaitingPeer;
+      _pairDetail = '已保存识别码，但还没发现对端：请确认两台设备连同一个 Wi-Fi、'
+          '对端应用在前台；Windows 端还需在「网络诊断」里放行防火墙';
+      notifyListeners();
+      _ensureVerifyTimer();
+      return;
+    }
+
+    _verifying = true;
+    if (_pairState != SyncPairState.verified) {
+      _pairState = SyncPairState.verifying;
+      _pairDetail = '正在向对端核实识别码…';
+      notifyListeners();
+    }
+    try {
+      String? lastError;
+      for (final target in targets) {
+        final result = await _handshakeWith(target);
+        if (result.state == SyncPairState.verified) {
+          _pairState = SyncPairState.verified;
+          _verifiedPeerIp = target.ip;
+          _verifiedPeerPort = target.port;
+          _verifiedPeerName = result.deviceName.isNotEmpty
+              ? result.deviceName
+              : (target.name.isNotEmpty
+                  ? target.name
+                  : '${target.ip}:${target.port}');
+          _pairDetail = '已配对：$_verifiedPeerName（${target.ip}:${target.port}）'
+              '已接受本机识别码';
+          _statusMessage = _pairDetail;
+          DebugLogService.instance.log('SYNC', '配对已确认：$_verifiedPeerName');
+          _stopVerifyTimer();
+          return;
+        }
+        if (result.state == SyncPairState.rejected) {
+          _pairState = SyncPairState.rejected;
+          _pairDetail = '识别码不匹配：对端拒绝了本机出示的识别码'
+              '（请核对是否抄错，或临时码已过期）';
+          _statusMessage = _pairDetail;
+          _stopVerifyTimer();
+          return;
+        }
+        lastError = result.error;
+      }
+      _pairState = SyncPairState.awaitingPeer;
+      _pairDetail = '已保存识别码，但连不上对端'
+          '${lastError == null ? '' : '（$lastError）'}'
+          '：请确认对端已启动、在同一 Wi-Fi，且防火墙已放行';
+      _ensureVerifyTimer();
+    } finally {
+      _verifying = false;
+      notifyListeners();
+    }
+  }
+
+  /// 向单个目标做一次带码握手
+  Future<({SyncPairState state, String deviceName, String? error})>
+      _handshakeWith(_PairTarget target) async {
+    try {
+      final uri = Uri.parse('http://${target.ip}:${target.port}/sync/info');
+      final response = await _httpClient
+          .get(uri, headers: {SyncServer.codeHeader: _peerCode})
+          .timeout(pairVerifyTimeout);
+      if (response.statusCode == 200) {
+        var name = '';
+        try {
+          final dynamic body = jsonDecode(utf8.decode(response.bodyBytes));
+          if (body is Map<String, dynamic> && body['device_name'] is String) {
+            name = body['device_name'] as String;
+          }
+        } catch (_) {
+          // 只取名字，解析失败不影响「已确认」这个结论
+        }
+        return (state: SyncPairState.verified, deviceName: name, error: null);
+      }
+      if (response.statusCode == 403) {
+        return (
+          state: SyncPairState.rejected,
+          deviceName: '',
+          error: '识别码被拒绝',
+        );
+      }
+      return (
+        state: SyncPairState.awaitingPeer,
+        deviceName: '',
+        error: 'HTTP ${response.statusCode}',
+      );
+    } catch (e) {
+      return (
+        state: SyncPairState.awaitingPeer,
+        deviceName: '',
+        error: _brief(e),
+      );
+    }
+  }
+
+  /// 未确认前每 [pairRetryInterval] 重试一次握手（对端可能刚启动/刚开码）
+  void _ensureVerifyTimer() {
+    if (_peerCode.isEmpty || _pairState == SyncPairState.verified) {
+      _stopVerifyTimer();
+      return;
+    }
+    _verifyTimer ??= Timer.periodic(pairRetryInterval, (_) {
+      if (_peerCode.isEmpty || _pairState == SyncPairState.verified) {
+        _stopVerifyTimer();
+        return;
+      }
+      unawaited(verifyPairing());
+    });
+  }
+
+  void _stopVerifyTimer() {
+    _verifyTimer?.cancel();
+    _verifyTimer = null;
+  }
+
+  /// 同步成功即等价于握手成功：据此刻下「已配对」与对端地址
+  void _markVerified(DiscoveredPeer peer) {
+    _pairState = SyncPairState.verified;
+    _verifiedPeerName = peer.deviceName;
+    _verifiedPeerIp = peer.ip;
+    _verifiedPeerPort = peer.port;
+    _pairDetail = '已配对：${peer.deviceName}（${peer.ip}:${peer.port}）';
+    _stopVerifyTimer();
+  }
+
+  /// 已确认过的对端（发现通道失灵时用它直连）
+  DiscoveredPeer? _confirmedPeer() {
+    if (_verifiedPeerIp.isEmpty || _verifiedPeerPort <= 0) return null;
+    return DiscoveredPeer(
+      deviceId: 'verified:$_verifiedPeerIp:$_verifiedPeerPort',
+      deviceName:
+          _verifiedPeerName.isEmpty ? _verifiedPeerIp : _verifiedPeerName,
+      ip: _verifiedPeerIp,
+      port: _verifiedPeerPort,
+      lastSeen: DateTime.now(),
+    );
   }
 
   /// 生成 6 位临时码（当面分享题库这种一次性场景），默认 10 分钟有效。
@@ -252,20 +521,21 @@ class SyncEngine extends ChangeNotifier {
   }
 
   /// 本机在局域网里的 IPv4 地址（生成配对二维码时带上，对方扫完可立即同步）
-  Future<String?> localIpv4() async {
-    try {
-      final interfaces = await NetworkInterface.list(
-          type: InternetAddressType.IPv4, includeLoopback: false);
-      for (final ni in interfaces) {
-        for (final addr in ni.addresses) {
-          if (!addr.isLoopback) return addr.address;
-        }
-      }
-    } catch (e) {
-      DebugLogService.instance.log('SYNC', '取本机 IP 失败: $e');
-    }
-    return null;
-  }
+  ///
+  /// 走 [LanAddress]：真实网卡优先，虚拟网卡（VMware/Hyper-V/Docker/VPN）
+  /// 排最后。旧实现取「第一个非回环地址」，在开了 VMware 的机器上可能把
+  /// `192.168.10.1`（VMnet1）写进二维码 —— 手机扫完永远连不上。
+  Future<String?> localIpv4() => LanAddress.primaryIpv4();
+
+  /// 本机全部可用地址及其网卡名（「网络诊断」用：用户可对照路由器确认哪个是真的）
+  Future<List<LanInterface>> localInterfaces() => LanAddress.candidates();
+
+  /// 同步 HTTP 服务端口（0 = 未启动）
+  int get httpPort => _server.port;
+
+  /// 发现通道运行统计（「网络诊断」展示已发/已收包数：
+  /// 已发 > 0 而已收 = 0，基本就是入站被防火墙挡了）
+  SyncDiscoveryStats get discoveryStats => _discovery.stats;
 
   /// 生成配对载荷：识别码 + 设备名 + 当前地址。
   /// 地址只是加速项（DHCP 会变），UDP 发现仍是主力。
@@ -279,15 +549,20 @@ class SyncEngine extends ChangeNotifier {
     );
   }
 
-  /// 扫码配对：保存识别码；若二维码带地址则**立即发起一次同步**，
-  /// 这样用户扫完就能看到数据过来（用户要的「扫码就可以连上」）。
+  /// 扫码配对：保存识别码 → **向对端核实** → 二维码带地址时顺带立即同步一次。
+  ///
+  /// 返回值 = 是否**已确认连得上**。旧实现无条件 return true，UI 于是一路显示
+  /// 「已配对」，而实际上对方可能根本没收到任何东西（用户报的第三个问题）。
   Future<bool> pairFromScan(SyncPairPayload payload) async {
-    applyPeerCode(payload.code);
+    if (payload.hasAddress) {
+      _scanIp = payload.ip;
+      _scanPort = payload.port;
+    }
+    applyPeerCode(payload.code, autoVerify: false);
     if (!payload.hasAddress) {
-      // 没带地址：等 UDP 发现后自动同步（已配对即会触发）
-      _statusMessage = '已配对，等对端被发现后自动同步';
-      notifyListeners();
-      return true;
+      // 没带地址：只能靠发现（或此前确认过的地址）
+      await verifyPairing();
+      return _pairState == SyncPairState.verified;
     }
     final peer = DiscoveredPeer(
       deviceId: 'scan:${payload.ip}:${payload.port}',
@@ -296,7 +571,12 @@ class SyncEngine extends ChangeNotifier {
       port: payload.port!,
       lastSeen: DateTime.now(),
     );
-    return syncWith(peer, source: '扫码');
+    final ok = await syncWith(peer, source: '扫码');
+    if (!ok) {
+      // 同步失败也要把状态摆正（拒绝 / 连不上 / 等待确认），别留在「乐观已配对」
+      await verifyPairing();
+    }
+    return ok || _pairState == SyncPairState.verified;
   }
 
   Future<void> _autoSyncWith(DiscoveredPeer peer) async {
@@ -312,6 +592,10 @@ class SyncEngine extends ChangeNotifier {
   }
 
   /// 手动「立即同步」：对已发现设备逐一同步。
+  ///
+  /// 一个都没发现时不再干巴巴返回 (0,0)：先用已确认过的地址直连试一次
+  /// （发现通道可能被防火墙挡住，但直连仍可能通），再退回到握手核实行，
+  /// 让用户看到**具体原因**（没发现 / 连不上 / 码不对）。
   /// 返回 (尝试数, 成功数)
   Future<(int, int)> manualSync() async {
     // 未配对时明确提示，而不是静默什么都不做
@@ -320,8 +604,18 @@ class SyncEngine extends ChangeNotifier {
       notifyListeners();
       return (0, 0);
     }
-    final targets = _discovery.peers;
-    if (targets.isEmpty) return (0, 0);
+    var targets = _discovery.peers;
+    if (targets.isEmpty) {
+      final confirmed = _confirmedPeer();
+      if (confirmed != null) {
+        final ok = await syncWith(confirmed, source: '手动');
+        return (1, ok ? 1 : 0);
+      }
+      await verifyPairing();
+      _statusMessage = _pairDetail.isEmpty ? '未发现其他设备' : _pairDetail;
+      notifyListeners();
+      return (0, 0);
+    }
     var ok = 0;
     for (final peer in targets) {
       final success = await syncWith(peer, source: '手动');
@@ -366,6 +660,11 @@ class SyncEngine extends ChangeNotifier {
               body: payload)
           .timeout(exchangeTimeout);
       if (response.statusCode == 403) {
+        // 对端明确拒绝：状态直接判为「不匹配」，不再假装已配对
+        _pairState = SyncPairState.rejected;
+        _pairDetail = '识别码不匹配：对端拒绝了本次同步'
+            '（请核对识别码是否抄错，或临时码已过期）';
+        _stopVerifyTimer();
         throw Exception('识别码不匹配，对端拒绝了本次同步');
       }
       if (response.statusCode != 200) {
@@ -380,6 +679,10 @@ class SyncEngine extends ChangeNotifier {
         if (merged > 0) onSyncApplied?.call();
       }
       _lastSyncAt = DateTime.now();
+      // 同步成功 = 对端已接受本机识别码：这时才允许显示「已配对」
+      _markVerified(peer);
+      _scanIp = peer.ip;
+      _scanPort = peer.port;
       _statusMessage = '$source同步完成：${peer.deviceName}';
       DebugLogService.instance.log('SYNC', '与 ${peer.deviceName} 同步成功');
       return true;
@@ -409,7 +712,19 @@ class SyncEngine extends ChangeNotifier {
     }
     await _discovery.stop();
     await _server.stop();
+    _stopVerifyTimer();
     _httpClient.close();
     _started = false;
   }
+}
+
+/// 握手目标：已发现的对端，或二维码/历史确认里的地址
+class _PairTarget {
+  const _PairTarget({required this.ip, required this.port, required this.name});
+
+  final String ip;
+  final int port;
+
+  /// 已知的对端名（发现得到的）；只有地址时为空
+  final String name;
 }

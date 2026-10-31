@@ -4,8 +4,11 @@ import 'package:provider/provider.dart';
 import 'package:natsume_quiz_master/models/app_settings.dart';
 import 'package:natsume_quiz_master/screens/settings_screen.dart';
 import 'package:natsume_quiz_master/services/app_state.dart';
+import 'package:natsume_quiz_master/services/sync/lan_address.dart';
+import 'package:natsume_quiz_master/services/sync/sync_discovery.dart';
 import 'package:natsume_quiz_master/services/sync/sync_engine.dart';
 import 'package:natsume_quiz_master/services/sync/sync_models.dart';
+import 'package:natsume_quiz_master/services/sync/sync_pair_payload.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
 
 class FakeSettingsState extends AppState {
@@ -81,13 +84,47 @@ class FailingSync extends ChangeNotifier implements SyncEngine {
   @override
   bool get banksOnly => false;
   @override
-  void applyPeerCode(String raw) {}
+  void applyPeerCode(String raw, {bool autoVerify = true}) {}
   @override
   void generateTempCode() {}
   @override
   void clearTempCode() {}
   @override
   void applyBanksOnly(bool banksOnly) {}
+
+  // ── 配对状态机与网络诊断（2026-10-30 新增的 SyncEngine API）──
+  // 设置页无条件读取这些 getter（配对状态行 + 「网络诊断」标题摘要），
+  // 若不显式实现，noSuchMethod 会抛错使整个同步区块渲染失败。
+  @override
+  SyncPairState get pairState => SyncPairState.none;
+  @override
+  String get pairDetail => '';
+  @override
+  String get confirmedPeerName => '';
+  @override
+  Future<void> verifyPairing() async {}
+  @override
+  int get httpPort => 0;
+  @override
+  SyncDiscoveryStats get discoveryStats => const SyncDiscoveryStats(
+        sent: 0,
+        sendFailures: 0,
+        received: 0,
+        ignored: 0,
+        lastSentAt: null,
+        lastReceivedAt: null,
+        lastError: null,
+        boundPort: 0,
+        heals: 0,
+        interfaces: <String>[],
+      );
+  @override
+  Future<List<LanInterface>> localInterfaces() async => const <LanInterface>[];
+  @override
+  Future<SyncPairPayload> buildPairPayload() async =>
+      const SyncPairPayload(code: 'TESTCODE0000AAAA');
+  @override
+  Future<bool> pairFromScan(SyncPairPayload payload) async => false;
 }
 
 class FakeReminderActions extends SettingsReminderActions {
