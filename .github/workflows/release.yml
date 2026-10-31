@@ -18,9 +18,9 @@
 # 字段是唯一来源，tag 必须与之匹配（不一致直接终止）。应用内展示的版本号由
 # --dart-define=APP_VERSION 注入，不需要改任何 Dart 文件。
 #
-# 说明：本地发布用 tools/publish_release.ps1（构建+校验+发布一条龙，
-# 含四维基线对照与签名校验）；本流水线是**不依赖本地环境**的等价通道，
-# 便于外部核验与无本地环境时发版。
+# 说明：本地发布用 tools/publish_release.ps1（版本双向校验 + CHANGELOG 小节核对
+# + APK 签名核验 + SHA256 清单 + gh release 一条龙）；本流水线是**不依赖本地环境**
+# 的等价通道，便于外部核验与无本地环境时发版。
 # ============================================================
 name: Release
 
@@ -31,7 +31,8 @@ name: Release
 #        （windows-latest 上实测报 "could not find any instance of Visual Studio"，回退到 VS 2019 名称）。
 #   另外 publish 用的是 gh release create：若本地已用 tools/publish_release.ps1 发过同名
 #   Release，这条通道再跑会因同名冲突而失败。
-#   结论：日常发版走 tools/publish_release.ps1（本地一条龙，含四维基线与签名核验）；
+#   结论：日常发版走 tools/publish_release.ps1（本地一条龙，同样做版本双向校验、
+#   CHANGELOG 小节核对与 APK 签名核验）；
 #   需要无本地环境发版时，先补齐上面两项，再到 Actions 页面手动运行本 workflow。
 on:
   workflow_dispatch:
