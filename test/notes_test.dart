@@ -10,7 +10,7 @@ import 'package:natsume_quiz_master/services/plugins/builtin_plugins.dart';
 
 /// 笔记插件（v1.31）：双链格式解析 + 数据层 + 分组/反向链接/图谱。
 ///
-/// 用户要求：刷题看解析时能写笔记，笔记在我的→学习工具里按题库名称分类出现，
+/// 刷题看解析时能写笔记，笔记在我的→学习工具里按题库名称分类出现，
 /// 支持 `[[双链]]` 与 Graph，可编辑；插件数据同步不了就要明示。
 void main() {
   group('双链格式解析（Logseq 风格）', () {

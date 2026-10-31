@@ -161,7 +161,7 @@ void main() {
 
     final afterScroll = tester.getTopLeft(header).dy;
     expect(afterScroll, lessThan(beforeScroll),
-        reason: '表头在滚动视图之外时位置不会变——那正是用户反馈「翻不动整页」的原因');
+        reason: '表头在滚动视图之外时位置不会变——那正是「翻不动整页」的原因');
 
     // 底部主按钮不随内容滚走，始终固定在底部
     expect(find.textContaining('全题库重刷'), findsOneWidget);

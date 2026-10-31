@@ -74,7 +74,7 @@ class PluginLoader {
 
   static const String manifestFileName = 'plugin.json';
 
-  /// 清单文件名的兼容别名（2026-10-30，见根目录 `PLUGIN_DEVELOPMENT.md`）。
+  /// 清单文件名的兼容别名（见根目录 `PLUGIN_DEVELOPMENT.md`）。
   ///
   /// 早期实现只认 `plugin.json`，而对外文档与社区习惯多写 `manifest.json`。
   /// 现在两个名字等价：先找 `plugin.json`，找不到再找 `manifest.json`——

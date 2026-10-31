@@ -162,7 +162,7 @@ class _MainShellState extends State<MainShell>
 
   void _select(int i) {
     if (i == _index) return;
-    // 2026-10-09 用户要求：「切入其他页面的时候就不要显示这个提示了」。
+    // 切入其他页面时，这提示不该跟过去。
     // SnackBar 挂在 root ScaffoldMessenger 上，切 Tab 不会自己消失——而它讲的
     // 往往是上一个页面的上下文（例如开始页的「先勾选要刷的题库」），跟到别的
     // 页面只会让人莫名其妙。这里连同排队中的一起清掉。

@@ -1124,7 +1124,6 @@ class _SettingsScreenState extends State<SettingsScreen>
 
                 const SizedBox(height: 16),
 
-                // 保存按钮
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
@@ -1411,8 +1410,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                             onTap: () => _editDeviceName(displayName),
                           ),
                           const Divider(height: 24),
-                          // ── 识别码（2026-10-08）──
-                          // 用户要求：识别码分两种——6 位数字用于临时分享；
+                          // ── 识别码 ──
+                          // 识别码分两种——6 位数字用于临时分享；
                           // 长字符串由设备码派生，可复制/生成二维码，另一台设备
                           // 扫码或输入后才能与本机同步。避免同步到不想同步的设备。
                           Text('识别码',
@@ -1711,7 +1710,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                               ),
                             ),
                           const SizedBox(height: 8),
-                          // ── 网络诊断（2026-10-30 真机反馈）──
+                          // ── 网络诊断 ──
                           // 「未发现设备」以前是一句毫无信息量的话：包没发出、被防火墙
                           // 挡了、绑到了虚拟网卡上，界面看起来一模一样。这里把收发计数、
                           // 监听端口、参与广播的网卡和最近一次错误摊开，让用户能自查。
@@ -2422,8 +2421,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                 ),
 
-                // 数据库备份（2026-10-08：从开发者选项移入普通设置——整库备份/恢复
-                // 是常规数据管理能力，不该藏在开发者模式里）
+                // 数据库备份（不放开发者选项——整库备份/恢复是常规数据管理能力）
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2656,7 +2654,7 @@ class _SettingsScreenState extends State<SettingsScreen>
   }
 
   /// 保存对端识别码。刻意**不清空输入框**：识别码抄错时被对端拒绝，
-  /// 用户需要就地改一个字符，而不是重新粘一遍（旧实现无论成败都清空）。
+  /// 允许就地改一个字符，不必重新粘一遍（旧实现无论成败都清空）。
   void _applyPeerCode(SyncEngine sync) {
     final code = _peerCodeController.text.trim();
     if (code.isEmpty) {

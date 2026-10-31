@@ -164,7 +164,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // 同名题库冲突提示（2026-10-09 用户要求「挂在首页就好了」）：
+                        // 同名题库冲突提示（挂首页：同步可能在后台发生，弹不出对话框）：
                         // 同步时遇到同名但内容不同的题库会挂起，等用户在这里决定
                         // 覆盖还是增添。没有冲突时这块完全不占位。
                         const SyncConflictBanner(),
@@ -174,8 +174,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           key: _fixedBlockKey,
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            // 用户要求去掉首页这栏标题（此前加回的「学习状态」标题+副标题
-                            // 属于回归，已移除）；卡片本身保留。
+                            // 首页不设栏标题（「学习状态」标题+副标题属于回归，已移除）；
+                            // 卡片本身保留。
                             _buildHeroCard(appState, ac),
                             if (_unfinished != null) ...[
                               const SizedBox(height: NatsumeSpace.sm),

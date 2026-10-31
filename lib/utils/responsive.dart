@@ -77,7 +77,7 @@ class AdaptivePair extends StatelessWidget {
   final double gap;
 
   /// v1.28：并排时是否让两卡片等高。
-  /// 用于「年度坚持」与「近一年趋势」持平（用户反馈）。
+  /// 用于「年度坚持」与「近一年趋势」持平。
   final bool equalHeight;
 
   /// 并排等高的目标高度（>0 时生效）。

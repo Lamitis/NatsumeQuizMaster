@@ -14,7 +14,7 @@ import 'package:natsume_quiz_master/models/question_bank.dart';
 import 'package:natsume_quiz_master/models/quiz_session.dart';
 import 'package:natsume_quiz_master/models/answer_record.dart';
 
-/// 排查用户反馈「最大化窗口统计页交互无反应/历史详情打不开」：
+/// 排查「最大化窗口统计页交互无反应/历史详情打不开」：
 /// 1. 根因修复验证——多实例争抢 SQLite 已由 main.dart 单实例锁解决（此处不再覆盖）；
 /// 2. 高 DPI 最大化（1080p@150%/125%）下统计页渲染与核心交互回归。
 /// 注：统计页数据加载在测试假异步区会挂起，统一用 runAsync 直驱加载。

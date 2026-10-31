@@ -985,8 +985,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                       icon: const Icon(Icons.bolt),
                       label: const Text('去刷题'),
                       onPressed: () {
-                        // 2026-10-09 用户反馈「没有错题时点『去刷题』会出现快速
-                        // 开始页套娃」。原因：这里原本 pushReplacement 一份新的
+                        // 没有错题时点「去刷题」会出现「快速开始页套娃」，原因：
+                        // 这里原本 pushReplacement 一份新的
                         // QuickStartScreen，而它本身就是主壳的一级「开始」Tab
                         // 页——主壳还留在栈底、显示的正是同一页，于是栈里出现
                         // 两份快速开始页，返回时就成了「自己套自己」。

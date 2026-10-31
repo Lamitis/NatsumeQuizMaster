@@ -49,7 +49,7 @@ class CompanionService {
   static const String memoryKey = 'companion_memory_v1';
 
   /// 悬浮头像的**默认**图片：复用 App 图标，不引入第三方素材
-  /// （v1.33 用户原话：「用软件的图标也可以」）。
+  /// （用软件自身的图标也作为默认项）。
   ///
   /// v1.35 起用户可在「助教设置 → 助教形象」换成官方插件自带的三张角色图，
   /// 真实取值请用 [CompanionSettings.avatarAsset]；这个常量保留给

@@ -127,7 +127,7 @@ void main() {
     await tester.pumpWidget(host(appState, const CompanionSettingsScreen()));
     await settleFrames(tester);
 
-    // v1.35：形象选择排在最前（用户反馈在 AI 设置里找不到换头像的地方）
+    // 形象选择排在最前（换头像的入口要在 AI 设置里一眼看到）
     expect(find.text('助教形象'), findsOneWidget);
     expect(find.byKey(const ValueKey('companionAvatarChoice-navy')),
         findsOneWidget);

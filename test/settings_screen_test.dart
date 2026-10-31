@@ -67,7 +67,7 @@ class FailingSync extends ChangeNotifier implements SyncEngine {
     if (fail && enabled) throw StateError('apply unavailable');
   }
 
-  // ── 识别码与同步范围（2026-10-08 新增的 SyncEngine API）──
+  // ── 识别码与同步范围（假引擎必须提供这些 API）──
   // mock 必须显式实现，否则 noSuchMethod 抛错会让整个同步区块渲染失败
   @override
   String get deviceCode => 'TESTCODE0000AAAA';
@@ -92,7 +92,7 @@ class FailingSync extends ChangeNotifier implements SyncEngine {
   @override
   void applyBanksOnly(bool banksOnly) {}
 
-  // ── 配对状态机与网络诊断（2026-10-30 新增的 SyncEngine API）──
+  // ── 配对状态机与网络诊断（假引擎必须提供这些 getter）──
   // 设置页无条件读取这些 getter（配对状态行 + 「网络诊断」标题摘要），
   // 若不显式实现，noSuchMethod 会抛错使整个同步区块渲染失败。
   @override
@@ -126,7 +126,7 @@ class FailingSync extends ChangeNotifier implements SyncEngine {
   @override
   Future<bool> pairFromScan(SyncPairPayload payload) async => false;
 
-  // ── 双向配对 / 取消 / 增量重置（2026-10-30 新增的 SyncEngine API）──
+  // ── 双向配对 / 取消 / 增量重置（假引擎必须提供这些成员）──
   // 设置页会读 peerConfirmed（同步按钮门禁）与 lastSyncCancelled，
   // 并取 cancelSync / resetSyncProgress 的方法引用——mock 不实现就会抛。
   @override

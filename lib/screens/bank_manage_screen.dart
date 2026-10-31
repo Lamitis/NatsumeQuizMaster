@@ -546,7 +546,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
 
   /// v1.30.2：进入题库内部的题目管理（改 / 删 / 移动 / 新建）。
   ///
-  /// 用户反馈「导入完毕之后也要能进管理题库编辑已导入的题目」。返回时
+  /// 导入完毕之后也要能进管理题库编辑已导入的题目。返回时
   /// 刷新一次题库列表，避免卡片上的题数还是进页面前的旧值。
   Future<void> _openQuestions(AppState appState, QuestionBank bank) async {
     await Navigator.push(

@@ -51,9 +51,8 @@ enum CompanionTone {
 
 /// AI 接口来源：跟随软件设置 / 独立配置。
 ///
-/// 用户原话是「可以填入自己的模型选择和 API，或者选择直接调用软件本身
-/// 填的 API 避免重复填写」，所以默认 [followApp]：装好 App 的人不用再填
-/// 第二遍 Key，插件也不会偷偷多烧一份额度。
+/// 默认 [followApp]：装好 App 的人不用再填第二遍 Key（也可选独立填写模型与
+/// API），插件也不会偷偷多烧一份额度。
 enum CompanionApiMode {
   /// 跟随「设置 → AI 接口」，与解析/追问共用同一份配置
   followApp,

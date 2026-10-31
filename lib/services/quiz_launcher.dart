@@ -12,8 +12,8 @@ import 'app_state.dart';
 /// - [practice] 练习：不落库，进 [PracticeEntryScreen] 选限时/不限时；
 /// - [memorize] 背题：不落库、保持题库原序、只高亮正确选项。
 ///
-/// 2026-10-29 用户要求：题库题号网格里的模式选择「复用自由选题的代码」，
-/// 因此把这些分支从 `quick_start_screen.dart` 抽到这里，两处只保留一次实现。
+/// 题库题号网格的模式选择与自由选题共用同一份代码：这些分支从
+/// `quick_start_screen.dart` 抽到这里，两处只保留一次实现。
 enum QuizLaunchMode { quiz, practice, memorize }
 
 extension QuizLaunchModeX on QuizLaunchMode {

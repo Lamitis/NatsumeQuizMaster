@@ -14,7 +14,7 @@ import 'package:natsume_quiz_master/models/question_bank.dart';
 import 'package:natsume_quiz_master/models/quiz_session.dart';
 import 'package:natsume_quiz_master/models/answer_record.dart';
 
-/// v1.0.3 宽屏统计页交互验证（用户反馈排查）：
+/// 宽屏统计页交互验证：
 /// 侧边导航进入统计页 → 数据加载 → 周期切换（本周/本月/全部）→ 排行维度切换
 /// → 历史记录点击进入会话详情。全路径无异常/无白屏。
 /// 注：统计页数据加载在测试假异步区会挂起，统一用 runAsync 直驱。

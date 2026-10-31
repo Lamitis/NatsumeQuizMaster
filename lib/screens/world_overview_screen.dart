@@ -306,7 +306,7 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
                 ),
         ),
         const SizedBox(height: NatsumeSpace.sm),
-        // disclaimer 必须能看见（用户要求：列表旁边显示，或安装前弹一次）
+        // disclaimer 必须能看见（列表旁直接显示，或安装前弹一次）
         if (snapshot != null && snapshot.disclaimer.isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(bottom: NatsumeSpace.xs),

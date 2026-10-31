@@ -382,9 +382,8 @@ class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen> {
             await _checkKeepalive();
           },
         ),
-        // 数据库导入/导出已迁至 设置 → 同步与提醒 → 数据库备份
-        // （2026-10-08 用户要求：整库备份是常规数据管理能力，不该藏在开发者模式里）。
-        // 这里不再保留任何入口，避免两处重复。
+        // 数据库导入/导出已迁至 设置 → 同步与提醒 → 数据库备份：整库备份是常规
+        // 数据管理能力，不该藏在开发者模式里。这里不再保留任何入口，避免两处重复。
         if (_status != null)
           Padding(
             padding: const EdgeInsets.only(top: 12),

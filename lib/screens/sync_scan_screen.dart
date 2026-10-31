@@ -9,7 +9,7 @@ import '../utils/design_tokens.dart';
 
 /// 扫码配对页：扫对方NatsumeQuizMaster的配对二维码即可连上。
 ///
-/// 用户要求：「另一台设备只要通过NatsumeQuizMaster扫码就可以连上」。
+/// 另一台设备扫码即可连上本机。
 /// 返回 [SyncPairPayload]（取消则返回 null）。
 class SyncScanScreen extends StatefulWidget {
   const SyncScanScreen({super.key});

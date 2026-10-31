@@ -19,8 +19,8 @@ import 'companion_settings_screen.dart';
 
 /// 「小鲸助教」陪伴页（v1.32 · 内置插件 `natsume.companion`）。
 ///
-/// 用户要求：第二个插件做成 AI bot，参考 Coopanion 的陪伴感，用鲸鱼娘形象，
-/// 能鼓励学习。落地时的三条自我约束：
+/// 第二个插件是 AI bot：参考 Coopanion 的陪伴感，用鲸鱼娘形象鼓励学习。
+/// 落地时的三条自我约束：
 ///
 /// 1. **数字必须是真的**：连胜 / 今日题量 / 本周正确率 / 错题到期全部来自
 ///    本机统计，AI 只被允许复述这些数字（`CompanionService.buildPrompt`），

@@ -175,7 +175,6 @@ class _SessionSummaryScreenState extends State<SessionSummaryScreen> {
 
             const SizedBox(height: 24),
 
-            // 返回首页按钮
             NatsumeButton(
               label: '返回首页',
               expand: true,

@@ -56,11 +56,11 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
 
   /// 统一的轻提示：**先收起上一条再显示**。
   ///
-  /// 2026-10-08 真机反馈：连点「自由选题」会连弹多条提示叠在一起。
+  /// 连点「自由选题」会连弹多条提示叠在一起。
   /// ScaffoldMessenger 默认把 SnackBar 排队逐条播，快速连点就会叠成一片；
   /// 这里统一收敛入口，保证同一时刻只有一条提示。
   ///
-  /// 2026-10-09 用户要求：「提示需要在 2s 内消散」。
+  /// 提示必须在 2s 内从画面上消失。
   /// 只传 `duration` **在这台真机上不够**——设备开着无障碍服务
   /// （accessibility_enabled=1），此时 Flutter 会让 SnackBar 常驻、忽略 duration
   /// （实测点击后 3.8 秒仍在，只有切页才消失）。所以这里再挂一个定时器兜底，
@@ -120,7 +120,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
 
   Future<void> _navigateAndRefresh(
       BuildContext context, AppState appState, Widget page) async {
-    // 2026-10-09 用户要求：「切入其他页面的时候就不要显示这个提示了」。
+    // 切到其他页面时这提示不该跟着过去。
     // 点提示里的「去选择 / 去导入」会进二级页，提示不该跟着过去。
     // 同时要把兜底定时器一起取消：否则它会在 1.5s 时触发，去清掉**新页面**上
     // 刚弹出的提示（提示没跟过去，但清提示的定时器跟过去了）。
@@ -255,9 +255,9 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
                     id: GuideAnchorIds.quickPrimary,
                     child: _QuickActionTile(
                       icon: Icons.tune_rounded,
-                      // 2026-10-29 用户要求：功能改名「自由选题」，图标就是
-                      // 「框里一个『自』字」。卡片自带描边方框，这里只放字，
-                      // 不再挂 assets/burst_icon_ui.png 那张「爆」字素材。
+                      // 图标是「框里一个『自』字」（对应功能名「自由选题」）。
+                      // 卡片自带描边方框，这里只放字，不再挂 assets/burst_icon_ui.png
+                      // 那张「爆」字素材。
                       iconWidget: Center(
                         child: Text(
                           '自',
@@ -354,7 +354,7 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
 
   /// 唤起「自由选题」面板。
   ///
-  /// 2026-10-29 用户反馈：题库范围此前只能回「管理题库」提前勾好。现在面板里
+  /// 题库范围此前只能回「管理题库」提前勾好。现在面板里
   /// 可改范围与知识点（见 [QuizSetupSheet]），勾选结果只作用于本次抽题，
   /// 不写回 [AppState.selectedBankIds]。
   void _showStartQuizSheet(BuildContext context, AppState appState) {

@@ -10,8 +10,8 @@ import 'package:natsume_quiz_master/widgets/question_image_viewer.dart';
 
 /// 题干配图缩略尺寸（v1.34.1）：
 ///
-/// 用户反馈「题目的图片框过大，一般合适在 3 行字 × 3 行字大小，点击后
-/// 才是放大查看」。此前 `Image.memory(width: double.infinity)` 会把长图
+/// 图片框不宜过大：3 行字 × 3 行字见方合适，点击后才放大查看。
+/// 此前 `Image.memory(width: double.infinity)` 会把长图
 /// 按整宽铺开，一道题被一张图顶到屏幕外。契约：
 /// 1. 默认缩略图尺寸 = 3 行正文见方（与字号/行高同一来源，不写死像素）；
 /// 2. 图片仍出现在占位符所在的阅读位置（不是外挂列表）；

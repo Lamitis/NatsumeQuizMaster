@@ -1330,7 +1330,7 @@ class _QuizScreenState extends State<QuizScreen> {
   void _showAnswerSheet(
       BuildContext context, AppState appState, AppThemeColors ac) {
     _modalOpen = true;
-    // 用户反馈两件事，一起处理：
+    // 两件事一起处理：
     //   ① 「答题卡页面应该折叠，只有用户点开才展示完整答题卡」——默认只占屏幕
     //      下半部分（折叠态），可上拖展开；
     //   ② 「无法上下滑动来选择题目」——此前弹层里直接放 AnswerSheetWidget

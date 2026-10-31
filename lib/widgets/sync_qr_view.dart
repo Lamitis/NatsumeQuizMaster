@@ -3,7 +3,7 @@ import 'package:qr/qr.dart';
 
 /// 同步配对二维码（纯 Dart 绘制，不依赖图片编码/平台插件）。
 ///
-/// 用户要求「直接生成一个二维码，另一台设备只要通过NatsumeQuizMaster扫码就可以连上」。
+/// 直接生成二维码，另一台设备扫码即可连上本机。
 /// 这里用 qr 包算出模块矩阵，再用 CustomPainter 画成方块——省掉一次
 /// 位图编码，也让二维码跟着主题色走。
 class SyncQrView extends StatelessWidget {

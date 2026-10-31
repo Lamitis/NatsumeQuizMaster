@@ -300,7 +300,7 @@ class ThemeService extends ChangeNotifier {
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleSpacing: NatsumeSpace.lg,
-        // v1.35：56 → 60，顶栏更舒展（用户要求「最上面的栏宽一点」）。
+        // 顶栏 56 → 60，更舒展。
         // 只加 4px 而不是 64：64 会让「题目编辑」这类高弹窗在 600px 高的窗口里
         // 把底部按钮顶出可点区域（widget 测试实测点击落空），60 是兼顾观感与
         // 小窗口可用性的上限。

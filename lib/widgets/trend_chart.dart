@@ -353,7 +353,7 @@ double latestWindowStart(int dayCount, double span) {
 }
 
 /// 行情图配色：参考主流加密货币 K 线（涨青绿、跌玫红、平灰），
-/// 正确率曲线改用金色——用户反馈原来的虚线（主题色）和柱体在色相上太接近，
+/// 正确率曲线用金色——原来的虚线（主题色）和柱体在色相上太接近，
 /// 盯久了视觉疲劳，两条数据线要"一眼分得开"。
 class TrendPalette {
   const TrendPalette._();
@@ -372,7 +372,7 @@ class TrendPalette {
 }
 
 /// 柱体宽度：始终取「一天所占宽度」的固定比例，所以无论放大缩小，
-/// 柱与柱的间距都是等比恒定的（用户反馈放大后柱子孤零零、间距忽大忽小）。
+/// 柱与柱的间距都是等比恒定的（否则放大后柱子孤零零、间距忽大忽小）。
 double candleWidthFor(double slotWidth) =>
     slotWidth <= 0 ? 1.0 : math.max(1.0, slotWidth * 0.62);
 
@@ -462,7 +462,7 @@ class _TrendChartState extends State<TrendChart> {
   /// 单指拖动与双指缩放共用一个识别器。
   ///
   /// 之前同时挂了 onScale* 和 onHorizontalDrag*，两个识别器在手势竞技场里互抢：
-  /// 捏合经常被判成横向拖动，用户反馈"缩放非常不灵敏、容易误触成左右滑动"。
+  /// 捏合经常被判成横向拖动：缩放非常不灵敏、容易误触成左右滑动。
   /// 现在只留 onScale*，用「焦点锚定的同一个数据点」同时表达缩放与平移。
   void _onScaleStart(ScaleStartDetails d) {
     _gestureStart = _start;

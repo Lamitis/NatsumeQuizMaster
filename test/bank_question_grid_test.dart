@@ -13,7 +13,7 @@ import 'package:natsume_quiz_master/services/app_state.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
 
-/// 2026-10-29 用户要求：从「管理题库」点进某个题库后，先看到**日历式题号方块**
+/// 从「管理题库」点进某个题库后，先看到**日历式题号方块**
 /// （方框里只有题号），上方可选「正常刷题 / 练习 / 背题」，点题号即以该模式
 /// 从这道题开始刷这个题库；这套「选题量/模式再开刷」的逻辑与自由选题共用。
 ///

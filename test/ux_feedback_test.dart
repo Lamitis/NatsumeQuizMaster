@@ -86,7 +86,7 @@ void main() {
     // 修复前：第二次点击只是把提示排进队列，第一条播完还会再播一条，
     //         提示总时长接近翻倍。
     // 实测（250ms 步进推进）：修复后全部消失；修复前约 9900ms。
-    // 2026-10-09 起提示时长改为 NatsumeMotion.toast = 1500ms（用户要求 2 秒内消散；
+    // 提示时长改为 NatsumeMotion.toast = 1500ms（硬指标 2 秒内消散；
     // 1.5s 停留 + 出入场动画约 2s 正好），
     // 所以现在连点两次约 2.5s 就清空，7s 的分界仍能区分「有没有被排队」。
     var elapsed = 100;
@@ -122,7 +122,7 @@ void main() {
     }
     expect(emptyAt, greaterThan(0), reason: '提示最终应当消失');
     expect(emptyAt, lessThanOrEqualTo(2200),
-        reason: '提示存活了 ${emptyAt}ms，超出用户要求的「2 秒内消散」——'
+        reason: '提示存活了 ${emptyAt}ms，超出「2 秒内消散」的硬指标——'
             'SnackBar 默认停留 4 秒，必须显式传 duration: NatsumeMotion.toast');
   });
 

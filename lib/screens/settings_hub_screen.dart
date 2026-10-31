@@ -90,7 +90,7 @@ class SettingsHubScreen extends StatelessWidget {
             ],
             const SizedBox(height: NatsumeSpace.md),
             // AI 助教的独立设置入口（v1.35）：形象 / 语气 / 模型 / 记忆。
-            // 之前只能从浮层右键或「我的 → 学习工具」进，用户反馈在设置里找不到。
+            // 之前只能从浮层右键或「我的 → 学习工具」进，在设置里找不到。
             NatsumeSurface(
               onTap: () => Navigator.push(
                 context,

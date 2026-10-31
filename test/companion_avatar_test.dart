@@ -7,8 +7,8 @@ import 'package:natsume_quiz_master/models/companion_settings.dart';
 
 /// 助教形象（v1.35）：官方插件资产目录 + 设置落盘 + 脏数据回落。
 ///
-/// 用户原话：「可替换 AI 助教角色头像的设置没有在 AI 设置里看见，
-/// 那几张 ico 图片应该放在官方插件文件夹里」——所以这里连**文件位置**一起断言：
+/// 换头像的设置要在 AI 设置里可见，素材放官方插件文件夹——所以这里连
+/// **文件位置**一起断言：
 /// 素材在 `assets/plugins/official/companion/avatars/`（进包体的 PNG），
 /// 原始 `.ico` 母版在 `masters/`（只存档，不注册进 pubspec）。
 void main() {

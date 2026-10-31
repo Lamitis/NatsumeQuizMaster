@@ -564,7 +564,7 @@ class SyncRepository {
   /// 快照来自本机（device_id 相同）时直接跳过。
   ///
   /// [conflictSink] 非空时，遇到**同名但内容不同**的题库会把冲突收集进去
-  /// （2026-10-09 用户要求：一样就不更新，不一样就提示覆盖或增添）。
+  /// （一样就不更新，不一样就挂起等用户选覆盖或增添）。
   /// 冲突题库及其题目在本批中**不合并**，等用户决策后走
   /// [resolveBankConflict] 落地。
   ///
@@ -643,7 +643,7 @@ class SyncRepository {
             peerImagesByQuestion,
           );
           if (localFp.length == peerFp.length && localFp.containsAll(peerFp)) {
-            // ① 内容完全一致 → 不更新（用户要求：若一样则不更新）
+            // ① 内容完全一致 → 不更新（一样就不重复导入）
             deferredBankUids.add(uid);
             DebugLogService.instance.log('SYNC', '同名题库「$name」内容一致，跳过');
             continue;

@@ -338,7 +338,7 @@ class StatsTabState extends State<StatsTab>
         ),
       ),
       const SizedBox(height: 14),
-      // v1.28：并排时两卡片等高（用户反馈要求与趋势卡持平）。
+      // 并排时两卡片等高（与趋势卡持平）。
       // 趋势图内容高度固定（图表 200 + 翻页条/图例），据此给年度坚持卡
       // 相同的目标高度，两张卡视觉持平。
       AdaptivePair(
@@ -481,7 +481,7 @@ class StatsTabState extends State<StatsTab>
 
   /// 点击趋势图某天：弹出当日详情。
   ///
-  /// 用户原话：「要做到点击显示详细数据（今日刷题量与正确率）」。
+  /// 点某一天要能看到当天详细数据（今日刷题量与正确率）。
   /// 此前 TrendChart 根本没接 onDaySelected，点了没有任何反应。
   void _showTrendDayDetail(Map<String, dynamic> day) {
     final ac = AppThemeColors.of(context);

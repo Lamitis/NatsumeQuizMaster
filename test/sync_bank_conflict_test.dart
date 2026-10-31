@@ -8,10 +8,8 @@ import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/sync/sync_models.dart';
 import 'package:natsume_quiz_master/services/sync/sync_repository.dart';
 
-/// 2026-10-09 用户要求：「同名题库的话，先进行校验比较两份题库和题库附属的内容
-/// 的文件是否不一样，若一样则不更新，若不一样则提示是否覆盖或者增添（把题库和
-/// 附属文件中相当于本机题库和附属文件中多出来的部分添加到本机的题库和其附属
-/// 文件中）。」
+/// 同名题库先比对两份题库及附属内容：一样不更新，不一样则提示覆盖或增添
+/// （增添＝只把对方多出来的部分补进本机题库及其附属文件）。
 ///
 /// 这些测试覆盖四种情形：不同名照常合并、同名同内容跳过、同名不同内容挂起冲突、
 /// 冲突决策后的覆盖与增添两种落地结果。

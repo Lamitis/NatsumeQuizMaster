@@ -37,7 +37,7 @@ class FSRSService {
       difficulty: initDifficulty,
       reviewCount: 0,
       lastReviewAt: now,
-      // 2026-10-29 用户反馈：刚答错的题不在错题本里出现，收藏的题却正常。
+      // 刚答错的题不在错题本里出现，收藏的题却正常。
       // 原因是新卡此前把下次复习排到「+初始稳定性（12~19 小时）」，而错题本
       // 的「错题/待复习」口径只看到期时间——于是新错题要等半天才看得见。
       // 新卡（reviewCount = 0）在 FSRS 语义里就是「立刻可复习」，这里把

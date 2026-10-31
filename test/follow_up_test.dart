@@ -5,7 +5,7 @@ import 'package:natsume_quiz_master/models/question.dart';
 import 'package:natsume_quiz_master/models/question_bank.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 
-/// 聊天气泡式追问（v1.0.2 用户反馈）：
+/// 聊天气泡式追问：
 /// 每道题追问历史持久化（follow_up_messages 表）、
 /// 随题库删除级联清理、备份版本提升至 9。
 void main() {

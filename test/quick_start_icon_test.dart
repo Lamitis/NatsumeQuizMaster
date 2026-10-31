@@ -9,7 +9,7 @@ import 'package:natsume_quiz_master/services/app_state.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
 
-/// 2026-10-29 用户要求：功能改名「自由选题」，图标改成「框里一个『自』字」，
+/// 功能名是「自由选题」，图标是「框里一个『自』字」，
 /// 不再使用 assets/burst_icon_ui.png 那张「爆」字素材。
 ///
 /// 这条测试守住两件事：

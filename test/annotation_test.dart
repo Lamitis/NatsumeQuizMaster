@@ -112,7 +112,6 @@ void main() {
       // 拖动平移
       c.moveSelected(const Offset(40, 40), canvas);
       expect(c.strokes[0].pts[0], closeTo(0.7, 1e-9));
-      // 删除选中
       c.deleteSelected();
       expect(c.strokes, isEmpty);
       c.dispose();

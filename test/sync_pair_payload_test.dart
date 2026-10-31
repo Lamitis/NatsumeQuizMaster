@@ -3,8 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:natsume_quiz_master/services/sync/sync_code.dart';
 import 'package:natsume_quiz_master/services/sync/sync_pair_payload.dart';
 
-/// 2026-10-08 用户要求：「长的字符串……要支持复制或者直接生成一个二维码，
-/// 另一台设备只要通过NatsumeQuizMaster扫码就可以连上。」
+/// 长串识别码要支持复制与生成二维码，
+/// 另一台设备扫码即可连上。
 ///
 /// 二维码载荷是配对入口，解析错了会连到错误设备或直接连不上，所以锁住：
 /// 编码/解码往返一致、拒绝非本应用二维码、容忍裸码、版本不认识的拒绝。

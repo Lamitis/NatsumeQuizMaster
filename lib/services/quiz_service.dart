@@ -70,7 +70,6 @@ class QuizService {
       return;
     }
 
-    // 创建会话
     _currentSession = QuizSession(
       bankIds: bankIds.join(','),
       mode: mode,
@@ -218,7 +217,6 @@ class QuizService {
 
     final recordId = await _db.insertAnswerRecord(record);
 
-    // 更新会话统计
     if (isCorrect) {
       _currentSession = QuizSession(
         id: _currentSession!.id,

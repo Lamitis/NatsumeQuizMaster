@@ -12,7 +12,7 @@ import 'package:natsume_quiz_master/services/theme_service.dart';
 import 'package:natsume_quiz_master/utils/app_constants.dart';
 import 'package:natsume_quiz_master/widgets/quiz_setup_sheet.dart';
 
-/// 2026-10-29 用户反馈：自由选题面板要能直接勾选**题库范围 + 知识点**，
+/// 自由选题面板要能直接勾选**题库范围 + 知识点**，
 /// 不必先回「管理题库」重勾一遍。
 ///
 /// 这里钉住四层口径：

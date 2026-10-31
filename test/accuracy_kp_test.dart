@@ -5,7 +5,7 @@ import 'package:natsume_quiz_master/models/question.dart';
 import 'package:natsume_quiz_master/models/question_bank.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 
-/// 正确率排行「按知识点」（v1.0.2 用户反馈修复）：
+/// 正确率排行「按知识点」：
 /// 查询返回的键名与 UI 读取键一致（name/total/correct），
 /// 空/无效知识点被过滤，不产生 "null" 行。
 void main() {

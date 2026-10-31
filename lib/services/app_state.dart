@@ -53,7 +53,6 @@ class AppState extends ChangeNotifier {
   final StatsService _statsService = StatsService();
   AIService? _aiService;
 
-  // 设置
   AppSettings _settings = AppSettings();
   AppSettings get settings => _settings;
 
@@ -719,7 +718,6 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 初始化
   Future<void> init() async {
     await _loadSettings();
     await _loadBanks();
@@ -1788,8 +1786,8 @@ class AppState extends ChangeNotifier {
 
   /// 为一道题拼装知识库「软约束」资料块；不该注入时返回空串。
   ///
-  /// 用户要求：「把知识库接地接进解析，但不是完全依赖知识库，也不禁止 AI
-  /// 自己的解析，因为知识库不一定全面」。因此这里只做**检索 + 软约束**，
+  /// 知识库接地接进解析，但**不硬绑**：资料不一定全面，所以只做
+  /// **检索 + 软约束**，
   /// 不做「只允许依据资料」的硬约束（那是 `GroundingService.buildBlock`，
   /// 留给 AI 出题那条链路）。
   ///
@@ -2207,7 +2205,7 @@ class AppState extends ChangeNotifier {
 
   /// 编辑当前题。[images] 为编辑后保留的配图（缺省沿用现状）；
   /// [options] / [analysis] / [knowledgePoint] 是 v1.30.1 新增的可编辑字段：
-  /// 此前编辑弹窗只有题型/题干/答案/配图，用户反馈「选项、解析、知识点改不了」。
+  /// 此前编辑弹窗只有题型/题干/答案/配图，选项/解析/知识点改不了。
   /// 被删掉的图，其 `{{img:N}}` 占位符从题干/选项/解析一并清掉——
   /// 图片是题目的一部分，删图即从题目内容中移除。
   Future<void> updateCurrentQuestion(String title, String answer, String? type,
@@ -2236,7 +2234,7 @@ class AppState extends ChangeNotifier {
 
   /// 题库管理页（v1.30.2）：按 id 保存一次编辑，不依赖当前答题会话。
   ///
-  /// 用户反馈「导入完了就动不了，只能再导入一次」——编辑入口因此从答题页
+  /// 「导入完了就动不了，只能再导入一次」——编辑入口因此从答题页
   /// 延伸到题库管理，这条路径必须和答题页共用同一套落库逻辑
   /// （见 [_applyQuestionEdit]），否则删图占位符清理、知识点
   /// `updated_at` 之类的细节会在两个入口表现不一致。

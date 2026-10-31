@@ -99,7 +99,7 @@ class SyncEngine extends ChangeNotifier {
   String _statusMessage = '';
   final Map<String, DateTime> _lastAutoSyncAt = {};
 
-  // ── 取消 / 看门狗 / 增量游标（2026-10-30）──
+  // ── 取消 / 看门狗 / 增量游标 ──
 
   /// 用户点了「取消同步」或看门狗触发：下一次网络等待立即中断
   bool _syncCancelRequested = false;
@@ -129,7 +129,7 @@ class SyncEngine extends ChangeNotifier {
   String _deviceCode = '';
 
   /// 对端识别码（用户输入或扫码得到）。**为空时不发起任何同步**——
-  /// 用户要求「接入端需要输入识别码才可以与目标设备进行自动同步」。
+  /// 接入端必须先出示识别码，才允许与目标设备自动同步。
   String _peerCode = '';
 
   // ── 配对状态机 ──
@@ -569,7 +569,7 @@ class SyncEngine extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── 同名题库冲突（2026-10-09 用户要求「若不一样则提示是否覆盖或者增添」）──
+  // ── 同名题库冲突：内容一样就不更新，不一样则让用户选覆盖或增添 ──
 
   final List<SyncBankConflict> _pendingConflicts = [];
 

@@ -12,8 +12,7 @@ import 'package:natsume_quiz_master/utils/app_constants.dart';
 import 'package:natsume_quiz_master/widgets/guide/guide_anchor.dart';
 import 'package:natsume_quiz_master/widgets/guide/guide_controller.dart';
 
-/// 2026-10-09 用户反馈：「在没有错题的情况下进入错题本后点击去刷题按钮会出现
-/// 快速开始页面的套娃」。
+/// 「没有错题时进入错题本、点『去刷题』，会出现快速开始页面套娃」。
 ///
 /// 根因：空态的「去刷题」原本 `Navigator.pushReplacement` 一份**新的**
 /// `QuickStartScreen`，而它本身就是主壳的一级「开始」Tab 页——主壳还留在栈底、
