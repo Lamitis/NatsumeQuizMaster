@@ -22,11 +22,17 @@ class DeveloperOptionsScreen extends StatefulWidget {
 
 class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen> {
   // v1.0.2 设计审查修复：不再明文存密码/写注释，改 SHA-256 哈希比对
-  static const _passwordHash =
-      '4e350f267cd76d000e9d0f99691683ebd989182a1b8266c02bc3739ef2fa1211';
+  // v1.35.5：哈希改为编译期注入——本地调试用
+  //   flutter run -d windows --dart-define=DEV_PW_HASH=<sha256 十六进制>
+  // 不传时回落到默认哈希，正式包行为不变。生成方法见 docs/开发者选项.md
+  static const _passwordHash = String.fromEnvironment('DEV_PW_HASH',
+      defaultValue:
+          '4e350f267cd76d000e9d0f99691683ebd989182a1b8266c02bc3739ef2fa1211');
 
+  // 命令行注入的哈希可能带首尾空白或大写，比对前统一成小写去空白
   static bool _checkPassword(String input) =>
-      sha256.convert(utf8.encode(input)).toString() == _passwordHash;
+      sha256.convert(utf8.encode(input)).toString() ==
+      _passwordHash.trim().toLowerCase();
 
   bool _unlocked = false;
   bool _simulating = false;

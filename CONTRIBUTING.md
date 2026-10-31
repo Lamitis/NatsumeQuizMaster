@@ -48,6 +48,10 @@
   不需要（也不应该）在任何其他文件里手工改版本号。
   两个常量 `kAppVersion` / `kAppBuildNumber` 与 pubspec 不一致时
   `test/version_single_source_test.dart` 会直接报错
+- **「开发者选项」的密码不写进代码**：只存 SHA-256 哈希，且由编译期
+  `--dart-define=DEV_PW_HASH=<哈希>` 注入（不传则用 `developer_options_screen.dart`
+  里的默认值，正式包行为不变）。生成哈希的 PowerShell 一行命令与用法见
+  [docs/开发者选项.md](docs/开发者选项.md)
 - **签名文件与密钥永不入库**：`android/key.properties`、`**/*.jks`、`**/*.keystore`
   已在 `.gitignore` 排除，请勿私自加回
 

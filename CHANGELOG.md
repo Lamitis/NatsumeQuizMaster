@@ -27,6 +27,7 @@
 
 ### 重构
 - 发布脚本与 CI 改为分别注入 `APP_VERSION`（三段）与 `APP_BUILD`（构建号），Dart 侧拆成 `kAppVersion` / `kAppBuildNumber` 两个常量。
+- 开发者选项密码改为编译期 `--dart-define=DEV_PW_HASH` 注入，不传则沿用默认哈希，正式包行为不变。
 
 ## [1.35.4] - 2026-10-31
 
