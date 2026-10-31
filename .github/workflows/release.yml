@@ -52,7 +52,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       build: ${{ steps.check.outputs.build }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: check
         name: 校验 pubspec.yaml 与 tag
         run: |
@@ -74,7 +74,7 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 安装 JDK
         uses: actions/setup-java@v4
@@ -280,7 +280,7 @@ jobs:
     # tools/patch_pub_cache.dart 里，原因见该脚本头部说明。
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 安装 Flutter
         uses: subosito/flutter-action@v2
@@ -435,7 +435,7 @@ jobs:
     steps:
       # gh 需要仓库上下文（它靠 .git 里的 remote 判断要发到哪个仓库）：
       # 没有 checkout 时最后一步会直接报 "failed to run git: fatal: not a git repository"。
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 下载全部产物
         uses: actions/download-artifact@v4
