@@ -84,7 +84,8 @@ class _ImportScreenState extends State<ImportScreen> {
   bool _addFiles(ImportSourceCollectResult result) {
     _showSkippedHint(result);
     if (result.files.isEmpty) {
-      _snack('没有可导入的文件（支持 JSON / DOCX / PDF）');
+      // 全被筛掉时 _showSkippedHint 已经说明原因，别再盖一条把它顶掉
+      if (result.isEmpty) _snack('没有可导入的文件（支持 JSON / DOCX / PDF）');
       return false;
     }
     setState(() {
