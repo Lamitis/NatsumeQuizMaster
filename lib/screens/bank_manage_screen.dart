@@ -4,10 +4,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/bank_category.dart';
+import '../models/list_sort.dart';
 import '../models/question_bank.dart';
 import '../services/app_state.dart';
 import '../services/bank_file_service.dart';
 import '../services/export_storage.dart';
+import '../services/list_sort_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
@@ -65,6 +67,24 @@ class _BankManageScreenState extends State<BankManageScreen> {
   /// 收起的分类 id（默认全展开）。纯 UI 状态，不落库。
   final Set<int> _collapsed = {};
 
+  /// 题库排序方式（v1.35.5）：存档在 SharedPreferences，跨启动记住
+  BankSortMode _sort = BankSortMode.createdDesc;
+
+  @override
+  void initState() {
+    super.initState();
+    ListSortService.instance.loadBankSort().then((mode) {
+      if (!mounted || mode == _sort) return;
+      setState(() => _sort = mode);
+    });
+  }
+
+  void _changeSort(BankSortMode mode) {
+    if (mode == _sort) return;
+    setState(() => _sort = mode);
+    ListSortService.instance.saveBankSort(mode);
+  }
+
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
@@ -73,6 +93,21 @@ class _BankManageScreenState extends State<BankManageScreen> {
       appBar: AppBar(
         title: const Text('题库管理'),
         actions: [
+          // 排序（v1.35.5）：只在每个分类内部生效，不改变分类树本身的结构
+          PopupMenuButton<BankSortMode>(
+            tooltip: '排序方式：${_sort.label}',
+            icon: const Icon(Icons.sort),
+            initialValue: _sort,
+            onSelected: _changeSort,
+            itemBuilder: (context) => [
+              for (final mode in BankSortMode.values)
+                CheckedPopupMenuItem<BankSortMode>(
+                  value: mode,
+                  checked: mode == _sort,
+                  child: Text(mode.label),
+                ),
+            ],
+          ),
           IconButton(
             tooltip: '新建分类',
             icon: const Icon(Icons.create_new_folder_outlined),
@@ -125,6 +160,11 @@ class _BankManageScreenState extends State<BankManageScreen> {
     final banksOf = <int?, List<QuestionBank>>{};
     for (final b in appState.banks) {
       banksOf.putIfAbsent(b.categoryId, () => []).add(b);
+    }
+    // v1.35.5：排序只在「同一分类内部」生效——分类树的结构（用户拖出来的层级）
+    // 不因排序方式改变而重排
+    for (final key in banksOf.keys.toList()) {
+      banksOf[key] = sortBanks(banksOf[key]!, _sort);
     }
 
     /// 分类（含子分类）下的题库数 / 题目数——父分类行要给出「整支」口径

@@ -286,6 +286,11 @@ class _ProfileTabState extends State<ProfileTab> {
             Text('版本：$kAppVersion',
                 style:
                     NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+            // v1.35.5：主版本只展示三段（v1.35.5），构建号降级为小字——
+            // 普通用户看版本，排障时才需要「是哪个构建产物」
+            const SizedBox(height: NatsumeSpace.xxs),
+            Text('Build $kAppBuildNumber',
+                style: NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
           ],
         ),
         actions: [

@@ -16,7 +16,8 @@
 #
 # 版本号约定：与 tools/publish_release.ps1 完全一致 —— pubspec.yaml 的 version
 # 字段是唯一来源，tag 必须与之匹配（不一致直接终止）。应用内展示的版本号由
-# --dart-define=APP_VERSION 注入，不需要改任何 Dart 文件。
+# --dart-define=APP_VERSION 注入（只含主版本 vX.Y.Z），构建号另由
+# --dart-define=APP_BUILD 注入（只在「关于」里以小字展示），不需要改任何 Dart 文件。
 #
 # 说明：本地发布用 tools/publish_release.ps1（版本双向校验 + CHANGELOG 小节核对
 # + APK 签名核验 + SHA256 清单 + gh release 一条龙）；本流水线是**不依赖本地环境**
@@ -238,7 +239,8 @@ jobs:
         run: |
           flutter build apk --release \
             --obfuscate --split-debug-info=build/symbols \
-            --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
+            --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }} \
+            --dart-define=APP_BUILD=${{ needs.verify.outputs.build }}
 
       - name: 暂存通用版（构建 arm64 会覆盖同名产物）
         run: |
@@ -251,7 +253,8 @@ jobs:
           flutter build apk --release \
             --obfuscate --split-debug-info=build/symbols \
             --target-platform android-arm64 \
-            --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
+            --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }} \
+            --dart-define=APP_BUILD=${{ needs.verify.outputs.build }}
           V=${{ needs.verify.outputs.version }}
           cp build/app/outputs/flutter-apk/app-release.apk \
              "${APP_NAME}-v${V}-android-arm64.apk"
@@ -306,7 +309,8 @@ jobs:
       - name: 构建 Windows 发布版
         run: >
           flutter build windows --release
-          --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
+          --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}
+          --dart-define=APP_BUILD=${{ needs.verify.outputs.build }}
 
       - name: 安装 / 检查 Inno Setup
         shell: pwsh

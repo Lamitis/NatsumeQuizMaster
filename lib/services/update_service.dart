@@ -14,7 +14,7 @@ enum UpdateStatus { updateAvailable, upToDate, failed }
 class UpdateCheckResult {
   final UpdateStatus status;
 
-  /// 当前 App 版本（[kAppVersion]，形如 `v1.33.0.26`）
+  /// 当前 App 主版本（[kAppVersion]，形如 `v1.35.5`；构建号见 `kAppBuildNumber`）
   final String currentVersion;
 
   /// 远端最新 tag（拿不到时为 null）

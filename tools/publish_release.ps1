@@ -13,21 +13,23 @@
 # 流程：版本校验 → 环境检查 → Android（通用 + arm64）→ Windows（绿色版 + 安装包）
 #       → SHA256SUMS.txt → gh release create（没装 gh 就只把产物留在 dist 并提示手工上传）
 #
-# 版本号唯一来源是 pubspec.yaml 的 version 字段（形如 1.35.4+32）：
-#   安装包 / Release 标题 / 产物文件名用版本名 1.35.4；应用内展示用 v1.35.4.32
-#   （--dart-define=APP_VERSION，与 CI 完全一致）。第 1 步会核对 kAppVersion 的
-#   defaultValue 是否对齐，不一致直接中止，避免把版本号标错的包发出去。
+# 版本号唯一来源是 pubspec.yaml 的 version 字段（形如 1.35.5+33）：
+#   安装包 / Release 标题 / 产物文件名用版本名 1.35.5；应用内展示用 v1.35.5
+#   （--dart-define=APP_VERSION），构建号单独用 --dart-define=APP_BUILD 注入。
+#   v1.35.5 起界面只展示主版本，构建号只出现在「关于」的小字里；第 1 步会核对
+#   kAppVersion / kAppBuildNumber 两个 defaultValue 是否都对齐，不一致直接中止，
+#   避免把版本号标错的包发出去。
 #
 # 前置：Flutter SDK；Inno Setup 6（可选，-PortableOnly 可跳过）；
 #       gh CLI（可选，仅用于自动创建 Release；没装则产物留在 dist\ 由手工上传）。
 #
 # 产物（全部落在 dist\）：
-#   NatsumeQuizMaster-v1.35.4.32-android-universal.apk
-#   NatsumeQuizMaster-v1.35.4.32-android-arm64.apk
+#   NatsumeQuizMaster-v1.35.5-android-universal.apk
+#   NatsumeQuizMaster-v1.35.5-android-arm64.apk
 #   NatsumeQuizMaster-Windows-<yyyyMMdd>\   （绿色版目录）
 #   NatsumeQuizMaster-Windows-<yyyyMMdd>.zip
-#   NatsumeQuizMaster-Setup-1.35.4-Windows-x64.exe
-#   SHA256SUMS.txt / release_notes_v1.35.4.32.md / publish_release.log
+#   NatsumeQuizMaster-Setup-1.35.5-Windows-x64.exe
+#   SHA256SUMS.txt / release_notes_v1.35.5.md / publish_release.log
 param(
     [switch]$SkipBuild,      # 复用 build\ 下已有产物，跳过两条 flutter build
     [switch]$SkipAndroid,
@@ -131,7 +133,10 @@ if (-not ($pubspec -match '(?m)^version:\s*([0-9]+\.[0-9]+\.[0-9]+)\+([0-9]+)'))
 }
 $verName = $Matches[1]
 $buildNo = $Matches[2]
-$appVersion = "v$verName.$buildNo"   # 应用内展示（--dart-define=APP_VERSION）
+# v1.35.5 起：界面只展示主版本，构建号走单独的 APP_BUILD 注入。
+# 产物文件名同样只用 v<版本名>，与 CI（release.yml）保持一致。
+$appVersion = "v$verName"      # 应用内展示 / 产物文件名（--dart-define=APP_VERSION）
+$buildNumber = $buildNo        # 构建号（--dart-define=APP_BUILD）
 
 $constPath = Join-Path $root 'lib\utils\app_constants.dart'
 if (-not (Test-Path -LiteralPath $constPath)) { Fail "找不到 $constPath" }
@@ -142,15 +147,24 @@ if (-not ($constText -match $constPattern)) {
     Fail 'app_constants.dart 里没解析到 kAppVersion 的 defaultValue（写法应保持 String.fromEnvironment(...)）'
 }
 $constVersion = $Matches[1]
+$buildPattern = "kAppBuildNumber\s*=\s*String\.fromEnvironment\(\s*'APP_BUILD'\s*,\s*defaultValue:\s*'([^']*)'"
+if (-not ($constText -match $buildPattern)) {
+    Fail 'app_constants.dart 里没解析到 kAppBuildNumber 的 defaultValue（写法应保持 String.fromEnvironment(...)）'
+}
+$constBuild = $Matches[1]
 
 Info "pubspec.yaml       : $verName+$buildNo"
-Info "app_constants.dart : $constVersion"
+Info "app_constants.dart : $constVersion (Build $constBuild)"
 if ($constVersion -ne $appVersion) {
     Fail ("版本号不一致：pubspec.yaml 推导出 $appVersion，而 kAppVersion 的 defaultValue 是 $constVersion。`n" +
-          "    修法：把 pubspec.yaml 的 version 与 lib/utils/app_constants.dart 的 defaultValue 统一成同一版本后重跑。`n" +
+          "    修法：把 pubspec.yaml 的 version 与 lib/utils/app_constants.dart 的 defaultValue 统一成同一主版本后重跑。`n" +
           "    （test/version_single_source_test.dart 就是拦这件事的，别绕过它。）")
 }
-Info "版本校验通过：$appVersion（安装包版本 $verName，构建号 $buildNo）"
+if ($constBuild -ne $buildNumber) {
+    Fail ("构建号不一致：pubspec.yaml 是 $buildNumber，而 kAppBuildNumber 的 defaultValue 是 $constBuild。`n" +
+          "    修法：把 lib/utils/app_constants.dart 里 kAppBuildNumber 的 defaultValue 同步成 pubspec 的构建号。")
+}
+Info "版本校验通过：界面展示 $appVersion（构建号 Build $buildNumber，安装包版本 $verName）"
 
 # CHANGELOG 必须有本版本小节：Release 说明默认就从这里抽，缺了等于发一个没有说明的版本
 $clPath = Join-Path $root 'CHANGELOG.md'
@@ -186,7 +200,7 @@ $pkgDir = Join-Path $dist "NatsumeQuizMaster-Windows-$stamp"
 $zipPath = "$pkgDir.zip"
 $setupPath = Join-Path $dist "NatsumeQuizMaster-Setup-$verName-Windows-x64.exe"
 $apks = @()
-$dartDefine = "--dart-define=APP_VERSION=$appVersion"
+$dartDefine = "--dart-define=APP_VERSION=$appVersion --dart-define=APP_BUILD=$buildNumber"
 
 # ─────────────────────────────────────────────────────────── 3. Android
 if ($SkipAndroid) {

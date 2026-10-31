@@ -43,10 +43,11 @@
 - 新增功能请补充对应测试；修复类提交建议补充回归测试
 - 数据库 schema 变更需提供迁移逻辑，并确保覆盖安装不丢数据
 - **版本号只改一处**：`pubspec.yaml` 的 `version:` 字段。
-  应用内展示的版本号由构建时 `--dart-define=APP_VERSION` 注入，
-  README 徽章是动态的——
+  应用内展示的版本号由构建时 `--dart-define=APP_VERSION`（主版本，如 `v1.35.5`）
+  与 `--dart-define=APP_BUILD`（构建号，如 `33`）注入，README 徽章是动态的——
   不需要（也不应该）在任何其他文件里手工改版本号。
-  两者不一致时 `test/version_single_source_test.dart` 会直接报错
+  两个常量 `kAppVersion` / `kAppBuildNumber` 与 pubspec 不一致时
+  `test/version_single_source_test.dart` 会直接报错
 - **签名文件与密钥永不入库**：`android/key.properties`、`**/*.jks`、`**/*.keystore`
   已在 `.gitignore` 排除，请勿私自加回
 

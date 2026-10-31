@@ -39,6 +39,17 @@ void main() {
         createdAt: DateTime.now().toIso8601String(),
       );
 
+  /// 构造带来源信息的批次（队列排序看的就是 [PreviewBatch.sourcePath] /
+  /// [PreviewBatch.sourceSizeBytes]，测试里不必真去解析文件）
+  PreviewBatch batch(String name,
+          {String? path, int size = 0, int qCount = 1}) =>
+      PreviewBatch(
+        bankName: name,
+        questions: List.generate(qCount, (i) => q('$name-$i')),
+        sourcePath: path ?? '',
+        sourceSizeBytes: size,
+      );
+
   test('后一份解析完排队等确认，当前预览不被顶掉', () async {
     final appState = AppState();
     await appState.init();
@@ -130,5 +141,88 @@ void main() {
     expect(appState.previewQuestions, isEmpty);
     expect(appState.previewQueue, isEmpty);
     expect(appState.previewTotalQuestionCount, 0);
+  });
+
+  // ===== v1.35.5：预览队列可调序 =====
+
+  test('拖拽调序：newIndex 按 onReorderItem 语义（已是移除后的目标下标）', () async {
+    final appState = AppState();
+    await appState.init();
+    appState.setPreviewQuestionsForTest([q('当前-1')], bankName: '当前');
+    for (final name in ['B', 'C', 'D']) {
+      appState.enqueuePreviewBatch(batch(name));
+    }
+    expect(appState.previewQueue.map((e) => e.bankName), ['B', 'C', 'D']);
+
+    appState.reorderPreviewQueue(2, 0); // D 拖到最前
+    expect(appState.previewQueue.map((e) => e.bankName), ['D', 'B', 'C']);
+
+    appState.reorderPreviewQueue(0, 2); // D 拖到末尾（移除后只剩两项，目标下标 2）
+    expect(appState.previewQueue.map((e) => e.bankName), ['B', 'C', 'D']);
+
+    // 越界一律夹到合法区间（UI 拖快拖慢都可能给出越界值，不能因此崩；下标负值当 0）
+    appState.reorderPreviewQueue(-1, 0);
+    appState.reorderPreviewQueue(9, 0);
+    expect(appState.previewQueue.map((e) => e.bankName), ['B', 'C', 'D']);
+
+    appState.reorderPreviewQueue(0, 99); // 目标越界 → 夹到队尾
+    expect(appState.previewQueue.map((e) => e.bankName), ['C', 'D', 'B']);
+
+    // 调序只改队列，不影响当前正在预览的那份
+    expect(appState.previewBankName, '当前');
+    expect(appState.previewQuestions.single.title, '当前-1');
+  });
+
+  test('按文件名 A-Z 排序（大小写不敏感，排序只动队列）', () async {
+    final appState = AppState();
+    await appState.init();
+    appState.setPreviewQuestionsForTest([q('当前-1')], bankName: '当前');
+    appState.enqueuePreviewBatch(
+        batch('b-doc', path: r'D:\题库\b-doc.docx', size: 10));
+    appState.enqueuePreviewBatch(
+        batch('A-doc', path: r'D:\题库\A-doc.pdf', size: 10));
+    appState.enqueuePreviewBatch(
+        batch('c-doc', path: r'D:\题库\c-doc.docx', size: 10));
+    expect(appState.previewQueue.map((e) => e.sourceFileName),
+        ['b-doc.docx', 'A-doc.pdf', 'c-doc.docx']);
+
+    appState.sortPreviewQueueByName();
+
+    expect(appState.previewQueue.map((e) => e.sourceFileName),
+        ['A-doc.pdf', 'b-doc.docx', 'c-doc.docx']);
+    expect(appState.previewBankName, '当前');
+    expect(appState.previewTotalQuestionCount, 4, reason: '排序不丢批次');
+  });
+
+  test('按文件大小排序：大的在前，大小未知的排最后且保持原有相对顺序', () async {
+    final appState = AppState();
+    await appState.init();
+    appState.setPreviewQuestionsForTest([q('当前-1')], bankName: '当前');
+    appState.enqueuePreviewBatch(
+        batch('small', path: r'D:\1.docx', size: 1024));
+    appState.enqueuePreviewBatch(batch('unknown-1'));
+    appState.enqueuePreviewBatch(
+        batch('large', path: r'D:\2.pdf', size: 5 * 1024 * 1024));
+    appState.enqueuePreviewBatch(batch('unknown-2'));
+
+    appState.sortPreviewQueueBySize();
+
+    expect(appState.previewQueue.map((e) => e.bankName),
+        ['large', 'small', 'unknown-1', 'unknown-2']);
+  });
+
+  test('批次来源信息：文件名取路径末段，取不到退回题库名；大小为 0 显示未知', () {
+    final withPath = batch('题库A', path: r'/home/u/资料/题库A.docx', size: 2048);
+    expect(withPath.sourceFileName, '题库A.docx');
+    expect(withPath.sourceSizeLabel, '2 KB');
+
+    final noPath = batch('题库B');
+    expect(noPath.sourceFileName, '题库B', reason: '没有路径时退回题库名');
+    expect(noPath.sourceSizeLabel, '未知');
+
+    // Windows 反斜杠也要能切
+    expect(batch('x', path: r'D:\a\b\c.pdf').sourceFileName, 'c.pdf');
+    expect(batch('big', size: 5 * 1024 * 1024).sourceSizeLabel, '5.0 MB');
+    expect(batch('tiny', size: 512).sourceSizeLabel, '512 B');
   });
 }

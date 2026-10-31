@@ -289,6 +289,49 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 拖拽调整预览队列顺序（v1.35.5）。
+  ///
+  /// 参数沿用 `ReorderableListView.onReorderItem` 的语义：[newIndex] 已是
+  /// **移除后**的目标下标（框架替调用方减过 1），直接按它插入即可——
+  /// 旧 API `onReorder` 那个「移入位置」语义已废弃，别在这里再减一次。
+  /// 越界一律夹到合法区间，UI 拖快拖慢都不会因此崩。
+  void reorderPreviewQueue(int oldIndex, int newIndex) {
+    if (oldIndex < 0 || oldIndex >= _previewQueue.length) return;
+    var target = newIndex;
+    if (target < 0) target = 0;
+    if (target > _previewQueue.length - 1) target = _previewQueue.length - 1;
+    if (target == oldIndex) return;
+    final batch = _previewQueue.removeAt(oldIndex);
+    _previewQueue.insert(target, batch);
+    notifyListeners();
+  }
+
+  /// 预览队列按文件名 A-Z 排序（大小写不敏感，中文按码位）。
+  void sortPreviewQueueByName() {
+    if (_previewQueue.length < 2) return;
+    _previewQueue.sort((a, b) => a.sourceFileName
+        .toLowerCase()
+        .compareTo(b.sourceFileName.toLowerCase()));
+    notifyListeners();
+  }
+
+  /// 预览队列按文件大小排序（**大的在前**）。
+  ///
+  /// 大文件解析最慢、题也最多，先看它能把等待压在用户还坐得住的时候；
+  /// 大小未知（0）的排在最后，保持原有相对顺序（`sort` 不稳定，故显式兜底）。
+  void sortPreviewQueueBySize() {
+    if (_previewQueue.length < 2) return;
+    final indexed = _previewQueue.asMap().entries.toList();
+    indexed.sort((x, y) {
+      final d = y.value.sourceSizeBytes.compareTo(x.value.sourceSizeBytes);
+      return d != 0 ? d : x.key.compareTo(y.key);
+    });
+    _previewQueue
+      ..clear()
+      ..addAll(indexed.map((e) => e.value));
+    notifyListeners();
+  }
+
   /// 解析文档并在预览中展示（不保存到数据库）。
   ///
   /// **批量**：多选 DOCX/PDF 时逐个解析，每份文档各成一个题库批次——
@@ -458,7 +501,19 @@ class AppState extends ChangeNotifier {
       questions: materialized.questions,
       orphans: materialized.orphans,
       parseErrors: result.errors,
+      sourcePath: file.path,
+      // 队列排序要用（按文件大小）；读不到就当未知，不影响导入
+      sourceSizeBytes: _safeFileSize(file),
     );
+  }
+
+  /// 文件字节数；读不到（权限 / 文件被移走）返回 0（= 大小未知）。
+  int _safeFileSize(File file) {
+    try {
+      return file.lengthSync();
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// 扫描版 PDF 切题（v1.30.2 抽成独立方法）。

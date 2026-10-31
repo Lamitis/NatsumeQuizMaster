@@ -5,8 +5,10 @@ import 'package:flutter/material.dart';
 
 import '../models/kb_document.dart';
 import '../models/knowledge_base.dart';
+import '../models/list_sort.dart';
 import '../services/knowledge_base/kb_file_service.dart';
 import '../services/knowledge_base/kb_service.dart';
+import '../services/list_sort_service.dart';
 import '../services/theme_service.dart';
 import '../services/export_storage.dart';
 import '../utils/design_tokens.dart';
@@ -38,11 +40,24 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   bool _loading = true;
   String _motto = '';
 
+  /// 知识库排序方式（v1.35.5）：存档在 SharedPreferences，跨启动记住
+  KbSortMode _sort = KbSortMode.createdDesc;
+
   @override
   void initState() {
     super.initState();
     _motto = NatsumePersonality.randomMotto();
+    ListSortService.instance.loadKbSort().then((mode) {
+      if (!mounted || mode == _sort) return;
+      setState(() => _sort = mode);
+    });
     _reload();
+  }
+
+  void _changeSort(KbSortMode mode) {
+    if (mode == _sort) return;
+    setState(() => _sort = mode);
+    ListSortService.instance.saveKbSort(mode);
   }
 
   Future<void> _reload() async {
@@ -65,8 +80,29 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
+    // 排序在 build 里算：`_bases` 保持数据库顺序，切换排序方式只是换个视图
+    final bases = sortKnowledgeBases(_bases, _sort);
     return Scaffold(
-      appBar: AppBar(title: const Text('知识库')),
+      appBar: AppBar(
+        title: const Text('知识库'),
+        actions: [
+          // 排序（v1.35.5）
+          PopupMenuButton<KbSortMode>(
+            tooltip: '排序方式：${_sort.label}',
+            icon: const Icon(Icons.sort),
+            initialValue: _sort,
+            onSelected: _changeSort,
+            itemBuilder: (context) => [
+              for (final mode in KbSortMode.values)
+                CheckedPopupMenuItem<KbSortMode>(
+                  value: mode,
+                  checked: mode == _sort,
+                  child: Text(mode.label),
+                ),
+            ],
+          ),
+        ],
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : ResponsivePage(
@@ -84,7 +120,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                     ),
                   ),
                   const SizedBox(height: NatsumeSpace.sm),
-                  if (_bases.isEmpty)
+                  if (bases.isEmpty)
                     NatsumeEmptyState(
                       icon: Icons.menu_book_outlined,
                       title: '还没有知识库',
@@ -92,7 +128,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                           '点「新建」创建，或「导入」一个知识库文件\n\n「$_motto」',
                     )
                   else
-                    for (final kb in _bases) ...[
+                    for (final kb in bases) ...[
                       _kbCard(kb, ac),
                       const SizedBox(height: NatsumeSpace.xs),
                     ],

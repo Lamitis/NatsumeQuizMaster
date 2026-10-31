@@ -187,6 +187,11 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                           ),
                         ),
 
+                        // v1.35.5 预览队列：多份文档时先在队列里把顺序调好，
+                        // 再逐份确认（拖拽 = 长按整行；按钮 = 一键按名/按大小）
+                        if (appState.previewQueue.isNotEmpty)
+                          _PreviewQueuePanel(appState: appState),
+
                         // v1.0.2 设计审查修复：分块解析失败横幅（显性提示，不再伪装成功）
                         if (appState.previewParseErrors.isNotEmpty)
                           Container(
@@ -1128,6 +1133,7 @@ class _EditCardState extends State<_EditCard> {
 
   /// v1.27：选项输入动态布局——每行两个选项，行尾可删除（保留至少 2 行）
   List<Widget> _buildOptionRows() {
+
     final rows = <Widget>[];
     for (var i = 0; i < _optCtrls.length; i += 2) {
       final hasSecond = i + 1 < _optCtrls.length;
@@ -1176,6 +1182,165 @@ class _EditCardState extends State<_EditCard> {
         labelStyle: const TextStyle(fontSize: NatsumeType.caption),
       ),
       style: const TextStyle(fontSize: NatsumeType.body),
+    );
+  }
+}
+
+/// 预览队列面板（v1.35.5）。
+///
+/// 批量导入多份文档时，解析顺序 = 选择顺序，而选择顺序往往和用户想看的顺序
+/// 不一致（文件夹多选会按系统排序塞进来）。这里给队列加两件事：
+///   · 一键排序：按文件名 A-Z / 按文件大小（大的在前）；
+///   · 长按拖拽：**整行**都是拖拽把手（手机上一行右侧再放小图标太难点），
+///     顺序会直接决定「确认完这份后接哪一份」。
+///
+/// 队列长度不设上限但显示上限 4 行，超出的在面板内滚动——队列再长也不能
+/// 把下面的题目列表挤没。
+class _PreviewQueuePanel extends StatelessWidget {
+  const _PreviewQueuePanel({required this.appState});
+
+  final AppState appState;
+
+  static const double _rowHeight = 40;
+
+  /// 行与行之间的间隔（每行用底部 margin 拉开，视觉上像列表项卡片）
+  static const double _rowGap = 4;
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    final queue = appState.previewQueue;
+    if (queue.isEmpty) return const SizedBox.shrink();
+    final visibleRows = queue.length > 4 ? 4 : queue.length;
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(
+          NatsumeSpace.sm, NatsumeSpace.xs, NatsumeSpace.sm, 0),
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      decoration: BoxDecoration(
+        color: ac.surfaceAlt,
+        borderRadius: NatsumeRadius.smallBorder,
+        border: Border.all(color: ac.border, width: NatsumeLine.width),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.low_priority, size: 16, color: ac.accent),
+              const SizedBox(width: NatsumeSpace.xs),
+              Expanded(
+                child: Text(
+                  '待预览队列 ${queue.length} 份 · 长按拖动可调序',
+                  style: TextStyle(
+                      fontSize: NatsumeType.caption, color: ac.textSecondary),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: NatsumeSpace.xs),
+          Row(
+            children: [
+              NatsumeButton(
+                label: '文件名 A-Z',
+                kind: NatsumeButtonKind.ghost,
+                dense: true,
+                icon: Icons.sort_by_alpha,
+                onPressed: queue.length < 2
+                    ? null
+                    : () {
+                        appState.sortPreviewQueueByName();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('队列已按文件名 A-Z 排序'),
+                              duration: Duration(seconds: 2)),
+                        );
+                      },
+              ),
+              const SizedBox(width: NatsumeSpace.xs),
+              NatsumeButton(
+                label: '文件大小',
+                kind: NatsumeButtonKind.ghost,
+                dense: true,
+                icon: Icons.sort,
+                onPressed: queue.length < 2
+                    ? null
+                    : () {
+                        appState.sortPreviewQueueBySize();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                              content: Text('队列已按文件大小排序（大的在前）'),
+                              duration: Duration(seconds: 2)),
+                        );
+                      },
+              ),
+            ],
+          ),
+          const SizedBox(height: NatsumeSpace.xs),
+          SizedBox(
+            // 恰好放下 visibleRows 行（含行间 4px 间隔），第 5 份起才需要滚动
+            height: visibleRows * (_rowHeight + _rowGap),
+            child: ReorderableListView.builder(
+              shrinkWrap: true,
+              buildDefaultDragHandles: false,
+              itemCount: queue.length,
+              // onReorderItem（Flutter 3.41 起替代已废弃的 onReorder）：它给出的
+              // newIndex 已是移除源项之后的下标，AppState 里不需要再减 1
+              onReorderItem: appState.reorderPreviewQueue,
+              itemBuilder: (context, i) {
+                final batch = queue[i];
+                // 长按才起拖（面板标题写的就是「长按拖动可调序」）：这个列表外面
+                // 还套着一层页面滚动，立即起拖会把手势抢走，划不动页面
+                return ReorderableDelayedDragStartListener(
+                  // ObjectKey：队列里是同一批批次对象，拖动后 key 仍稳定，
+                  // 不会因为下标变化让行状态错位
+                  key: ObjectKey(batch),
+                  index: i,
+                  child: Container(
+                    height: _rowHeight,
+                    margin: const EdgeInsets.only(bottom: _rowGap),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: NatsumeSpace.xs),
+                    decoration: BoxDecoration(
+                      color: ac.card,
+                      borderRadius: NatsumeRadius.smallBorder,
+                    ),
+                    child: Row(
+                      children: [
+                        Text('${i + 1}',
+                            style: TextStyle(
+                                fontSize: NatsumeType.micro,
+                                color: ac.textTertiary)),
+                        const SizedBox(width: NatsumeSpace.xs),
+                        Expanded(
+                          child: Text(
+                            batch.sourceFileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: NatsumeType.caption,
+                                color: ac.textPrimary),
+                          ),
+                        ),
+                        const SizedBox(width: NatsumeSpace.xs),
+                        Text(
+                          '${batch.questions.length} 题 · ${batch.sourceSizeLabel}',
+                          style: TextStyle(
+                              fontSize: NatsumeType.micro,
+                              color: ac.textTertiary),
+                        ),
+                        const SizedBox(width: NatsumeSpace.xs),
+                        Icon(Icons.drag_handle, size: 16, color: ac.textTertiary),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
