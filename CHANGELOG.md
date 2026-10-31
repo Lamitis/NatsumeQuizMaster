@@ -29,8 +29,33 @@
   `defaultValue` 还停在更早的 `v1.35.0.28`，于是 `test/version_single_source_test.dart`
   在 1.35.1 上一路红（本地那次全绿早于版本号改动，没能拦住）。现已同步，并随本版升到
   `v1.35.2.30`。
+- **发布流水线三处收口（`.github/workflows/release.yml`）**，把 v1.35.2 最后一个 tag
+  跑不通的三条红叉逐条落定：
+  - **Android 签名**：原来的 `echo "$BASE64" | base64 -d` 一旦 Secrets 里混进
+    粘贴带来的 `\r` / 空格，GNU base64 会写出一个**残缺**的 keystore，而 Java 对
+    「口令错」和「文件损坏」只回同一句
+    `Keystore was tampered with, or password was incorrect` —— 于是出现「本地
+    `keytool` 一切正常、CI 必失败」。现在先 `tr -d '[:space:]'` 再解码，再用
+    `keytool` 依次校验文件头（JKS / JCEKS / PKCS#12）、store 口令、别名、私钥口令，
+    `key.properties` 改用 `printf` 生成且**不加引号**（Groovy 的
+    `Properties.load` 会把引号算进值里），口令只回显长度。
+  - **Windows 安装包**：原来「`ISCC.exe` 存在就跳过安装」，而镜像预装的 Inno Setup
+    可能是残缺的、或版本低于 6.3（不认 `x64compatible`），此时 ISCC 只回一句
+    Win32 的 `The system cannot find the file specified.`，日志里毫无线索。现在按
+    「文件完整性 + 版本 ≥ 6.3」判断并按需 `choco` 修复，编译前逐个点名 `.iss`
+    引用的文件，`/DProjectRoot` 显式传入，ISCC 输出另存 `iscc.log` 并在失败时
+    回显；`.iss` 里图标 / 许可文本缺失改为**跳过并告警**（不再让一个装饰性文件
+    把整个安装包卡死），缺 `tools\setup_license.txt` 时退回仓库根的 `LICENSE`。
+  - **SDK 版本告警**：`compileSdk 35 → 36`（`flutter_local_notifications` 22.3.3
+    与 `flutter_secure_storage` 11.2.0 都按 36 编译），并显式声明
+    `ndkVersion "28.2.13676358"`；CI 同步预装 `platforms;android-36` 与该版本 NDK。
+- **`tools/natsume_setup.iss` 的 `ProjectRoot` 改为可被 `/D` 覆盖**，不再只能靠
+  `SourcePath` 推导；源目录不存在时打印可读提示，而不是让 ISCC 抛 Win32 错误码。
 
 ### 升级说明
+- `android/app/build.gradle` 本版起显式声明 `ndkVersion "28.2.13676358"`：本地首次
+  `flutter build apk` 会再下载一次该 NDK（约 600 MB），属预期行为；CI 已在
+  `release.yml` 里预装它，同时保留 pdfrx 需要的 `26.1.10909125`。
 - `flutter_local_notifications` 已确认停在 **22.3.3**（pub 上最新稳定版），其 Windows
   实现 3.1.1 也没有更新的稳定版可升：再往上只有 4.0.0-dev.x（预发布，要求 Flutter
   ≥ 3.44，平台接口一起跳到 13.0.0-dev），本次不采用。`pubspec.lock` 未变动。

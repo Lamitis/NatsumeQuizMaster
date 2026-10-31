@@ -52,7 +52,18 @@ def requestedAbis = requestedPlatforms == null
 
 android {
     namespace "com.natsume.quiz"
-    compileSdk 35
+    // v1.35.2：compileSdk 35 → 36。
+    // CI 日志里的告警来自「插件按 36 编译、App 按 35 编译」：flutter_secure_storage
+    // 等插件直接写 compileSdk = flutter.compileSdkVersion（Flutter 3.47 为 36），
+    // 而这里是硬编码的 35，于是 AGP 提示「App 的 compileSdk 低于插件要求」。
+    // 影响不止告警：aar 元数据（minCompileSdk）不一致时构建会直接失败。
+    compileSdk 36
+    // 同理显式钉住 NDK：日志里给出的建议值就是 28.2.13676358。
+    // 不写这一行时，插件（含 pdfrx 的 CMake 胶水）会各自回退到不同默认版本，
+    // Flutter 便打印 "Your project is configured with Android NDK ..., but the
+    // following plugin(s) depend on a different Android NDK version"。
+    // 注意：CI（release.yml）的 sdkmanager 会同步安装该版本。
+    ndkVersion "28.2.13676358"
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8

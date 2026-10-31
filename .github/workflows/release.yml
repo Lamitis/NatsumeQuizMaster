@@ -97,31 +97,120 @@ jobs:
             android/gradle/wrapper/gradle-wrapper.properties
           grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties
 
-      # pdfrx 的 Android 侧编译 PDFium FFI 胶水，build.gradle 钉了 NDK 26.1 + CMake 3.18+
-      # （缺任一都会让 Gradle 在配置/编译阶段直接失败）
-      - name: 安装 NDK 26.1 与 CMake（pdfrx 原生编译需要）
+      # pdfrx 的 Android 侧要跑一遍 CMake（下拉 Android 版 PDFium + 编一层 FFI 胶水），
+      # 缺 NDK 或 CMake 会让 Gradle 在配置/编译阶段直接失败，所以这里预先装齐。
+      - name: 安装 NDK 与 CMake（原生代码编译需要）
         run: |
+          # android/app/build.gradle 现在显式声明 ndkVersion = 28.2.13676358
+          # （v1.35.2 起与 Flutter 日志给出的建议值对齐，消掉 NDK 版本告警），
+          # 必须预装；26.1.10909125 是 pdfrx 等按旧工具链发布的插件用的版本，
+          # 一并保留，免得构建中期 gradle 才去 auto-download（那一步极易超时）。
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
-            "ndk;26.1.10909125" "cmake;3.22.1"
+            "platforms;android-36" \
+            "ndk;28.2.13676358" "ndk;26.1.10909125" "cmake;3.22.1"
+          ls "$ANDROID_HOME/ndk" || true
 
       - name: 注入签名配置（从 Secrets 还原 keystore）
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD_RAW: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS_RAW: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD_RAW: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+
+          # ── 0. 清洗 Secrets ────────────────────────────────────────────────
+          # 粘贴 Secret 有两种常见污染，后果都是 Gradle 报
+          #   "Keystore was tampered with, or password was incorrect"
+          # （这句对「store 口令错」和「keystore 文件损坏」是同一句话，极易误判）：
+          #   ① 首尾混进换行 / 空格——在 PowerShell 里 echo 出来再复制必带 \r\n；
+          #   ② 从命令行复制时连外层引号一起粘进去，"pass" 被当成 6 个字符的口令。
+          # 这里统一去掉首尾空白并剥掉成对引号；真实口令只打印长度，不打印内容。
+          clean() {
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"
+            v="${v%"${v##*[![:space:]]}"}"
+            case "$v" in
+              \"*\") v="${v#\"}"; v="${v%\"}" ;;
+              \'*\') v="${v#\'}"; v="${v%\'}" ;;
+            esac
+            printf '%s' "$v"
+          }
+          STORE_PASSWORD="$(clean "${STORE_PASSWORD_RAW:-}")"
+          KEY_ALIAS="$(clean "${KEY_ALIAS_RAW:-}")"
+          KEY_PASSWORD="$(clean "${KEY_PASSWORD_RAW:-}")"
+          echo "口令长度：store=${#STORE_PASSWORD}  key=${#KEY_PASSWORD}  别名='${KEY_ALIAS}'"
+
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::缺少 ANDROID_KEYSTORE_BASE64，请先在仓库 Secrets 中配置（见本文件头部说明）"
             exit 1
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.jks
-          cat > android/key.properties <<EOF
-          storeFile=release.jks
-          storePassword=$STORE_PASSWORD
-          keyAlias=$KEY_ALIAS
-          keyPassword=$KEY_PASSWORD
-          EOF
+          # ── 1. 还原 keystore ──────────────────────────────────────────────
+          # GitHub 上粘贴的 base64 常带 CRLF 折行。GNU base64 -d 只忽略 \n，
+          # 遇到 \r / 空格会报 "invalid input" 并写出一个**残缺文件** —— 这正是
+          # 「本地 keytool 打得开、CI 却报 tampered」的经典成因，所以先 tr 掉
+          # 所有空白再解码，并且下面立刻校验文件头。
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > android/app/release.jks
+
+          SIZE=$(stat -c %s android/app/release.jks)
+          MAGIC=$(od -An -tx1 -N4 android/app/release.jks | tr -d ' \n')
+          echo "release.jks：${SIZE} 字节，文件头 ${MAGIC}"
+          case "$MAGIC" in
+            feedfeed) echo "  格式：JKS" ;;
+            cececece) echo "  格式：JCEKS" ;;
+            3082*|3081*|3080*) echo "  格式：PKCS#12" ;;
+            *)
+              echo "::error::release.jks 的文件头（${MAGIC}）不是已知 keystore 格式：ANDROID_KEYSTORE_BASE64 很可能被截断、掺入了非 base64 字符（例如 certutil -encode 的 -----BEGIN----- 头尾），或存的根本不是 keystore"
+              exit 1
+              ;;
+          esac
+
+          # ── 2. 用 Secrets 里的口令真正打开一次 ────────────────────────────
+          # 只验「能不能开」：这一步失败 Gradle 必然也签名失败，提前拦下并说清原因。
+          if ! keytool -list -keystore android/app/release.jks -storepass "$STORE_PASSWORD" \
+                 > /tmp/kt.out 2> /tmp/kt.err; then
+            echo "::error::keytool 打不开 release.jks —— ANDROID_STORE_PASSWORD 与 keystore 不匹配（或文件已损坏）"
+            sed 's/^/    /' /tmp/kt.err
+            exit 1
+          fi
+          echo "keytool -list 通过："
+          grep -E 'Your keystore contains|Entry' /tmp/kt.out | sed 's/^/    /' || true
+
+          # 别名必须存在，否则 Gradle 报 "Failed to read key *** from store ..."
+          if ! keytool -list -keystore android/app/release.jks -storepass "$STORE_PASSWORD" \
+                 -alias "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::keystore 里没有别名 '$KEY_ALIAS'，请核对 ANDROID_KEY_ALIAS"
+            exit 1
+          fi
+
+          # JKS 允许 store 口令与 key 口令不同，而 keytool -list 只验前者；
+          # 这里用 -certreq 真签一次请求把 ANDROID_KEY_PASSWORD 也验掉。
+          # 只作告警不作拦截（PKCS#12 会忽略 -keypass，交给 Gradle 最终判定）。
+          if ! keytool -certreq -keystore android/app/release.jks \
+                 -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" -keypass "$KEY_PASSWORD" \
+                 > /dev/null 2> /tmp/kt2.err < /dev/null; then
+            echo "::warning::ANDROID_KEY_PASSWORD 可能与别名 '$KEY_ALIAS' 的私钥口令不匹配"
+            sed 's/^/    /' /tmp/kt2.err
+          fi
+
+          # ── 3. 生成 key.properties ────────────────────────────────────────
+          # 三条硬规矩：① 值不加引号（Groovy 的 Properties.load 会把引号算进值里，
+          # 于是口令永远对不上）；② 不带 BOM、不留首尾空白；③ storeFile 相对
+          # android/app（build.gradle 里用的是 file()，基于模块目录解析）。
+          umask 077
+          {
+            printf 'storeFile=release.jks\n'
+            printf 'storePassword=%s\n' "$STORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > android/key.properties
+          chmod 600 android/key.properties android/app/release.jks
+
+          # ── 4. 脱敏回显，方便排查（口令一律替换成 ***）────────────────────
+          echo "--- android/key.properties（口令已脱敏）---"
+          sed -e 's/^\(storePassword=\).*/\1***/' \
+              -e 's/^\(keyPassword=\).*/\1***/' android/key.properties
+          ls -l android/key.properties android/app/release.jks
 
       - name: 拉取依赖并测试
         run: |
@@ -205,12 +294,44 @@ jobs:
           flutter build windows --release
           --dart-define=APP_VERSION=v${{ needs.verify.outputs.version }}.${{ needs.verify.outputs.build }}
 
-      - name: 安装 Inno Setup
+      - name: 安装 / 检查 Inno Setup
         shell: pwsh
         run: |
-          if (-not (Test-Path 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe')) {
-            choco install innosetup --no-progress -y
+          # 原来「ISCC.exe 存在就跳过安装」：镜像自带的安装可能是残缺的（缺
+          # ISCmplr.dll / Default.isl，或版本低于 6.3 不认 x64compatible），那时
+          # ISCC 只会回一句 Win32 的 "The system cannot find the file specified."，
+          # 日志里根本看不出问题。改成「按完整性判断 + 打印版本」。
+          function Get-IsccPath {
+            $cands = @()
+            if (${env:ProgramFiles(x86)}) { $cands += (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe') }
+            if ($env:ProgramFiles)        { $cands += (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe') }
+            $cands | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
+          function Test-IsccOk([string]$iscc) {
+            if (-not $iscc) { return $false }
+            $dir = Split-Path -Parent $iscc
+            $hasCmp = Test-Path -LiteralPath (Join-Path $dir 'ISCmplr.dll')
+            $hasIsl = Test-Path -LiteralPath (Join-Path $dir 'Default.isl')
+            if (-not ($hasCmp -and $hasIsl)) { return $false }
+            # .iss 用了 x64compatible（Inno Setup 6.3+ 才认），镜像预装的旧版
+            # 会被判为「不可用」，下面走 choco 升级。
+            $ver = (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
+            if (-not $ver) { return $true }
+            try { return ([version]$ver -ge [version]'6.3') } catch { return $true }
+          }
+          $iscc = Get-IsccPath
+          if (-not (Test-IsccOk $iscc)) {
+            Write-Host 'ISCC 缺失或安装不完整，用 choco 安装/修复…'
+            & choco install innosetup --no-progress -y --force
+            # 「强制重装」时 choco 可能返回非 0（已安装 / 建议重启等），
+            # 成败以下面的完整性检查为准；同时清掉 $LASTEXITCODE ——
+            # GitHub Actions 的 pwsh 包装器会拿它当步骤退出码，否则会误报失败。
+            $global:LASTEXITCODE = 0
+            $iscc = Get-IsccPath
+          }
+          if (-not (Test-IsccOk $iscc)) { throw "Inno Setup 不可用（ISCC=$iscc）" }
+          Write-Host "ISCC: $iscc"
+          Write-Host "版本: $((Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion)"
 
       - name: 打包便携版 + 编译安装版
         shell: pwsh
@@ -232,10 +353,57 @@ jobs:
           }
           Copy-Item $portable "$env:APP_NAME-v$V-windows-portable.zip"
 
-          # 安装版：版本号与源目录都由 /D 传入（.iss 里不再写死绝对路径）
-          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
-          & $iscc "/DMyAppVersion=$V" "/DSrcDir=$pkgDir" "/DOutDir=$PWD\dist" "$PWD\tools\natsume_setup.iss"
-          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compile failed" }
+          # 安装版：版本号 / 源目录 / 输出目录 / 项目根全部用 /D 传进去，
+          # .iss 不再依赖 SourcePath 推导（CI 的检出路径是多一层的 仓库名\仓库名）。
+          $rootPath = $PWD.Path
+          $pf86 = ${env:ProgramFiles(x86)}
+          $isccCands = @()
+          if ($pf86) { $isccCands += (Join-Path $pf86 'Inno Setup 6\ISCC.exe') }
+          if ($env:ProgramFiles) { $isccCands += (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe') }
+          $iscc = $isccCands | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "找不到 ISCC.exe，已尝试：$($isccCands -join '; ')" }
+          Write-Host "ISCC: $iscc （版本 $((Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion)）"
+
+          # 编译前逐个确认 .iss 会引用的文件都在（缺哪个直接点名），
+          # 不要再让 ISCC 只回一句 Win32 的 "The system cannot find the file specified."
+          $issFile  = Join-Path $rootPath 'tools\natsume_setup.iss'
+          $iconFile = Join-Path $rootPath 'windows\runner\resources\app_icon.ico'
+          # 许可文本优先用精简版（setup_license.txt），没有就退回仓库根的 LICENSE
+          # （AGPL 全文）。后者一定在版本库里，能避免「本地能编、CI 编不出」。
+          $licFile  = Join-Path $rootPath 'tools\setup_license.txt'
+          if (-not (Test-Path -LiteralPath $licFile)) {
+            $licFile = Join-Path $rootPath 'LICENSE'
+            Write-Host '  未找到 tools\setup_license.txt，改用仓库根的 LICENSE 作为许可文本'
+          }
+          foreach ($f in @($issFile, $iconFile, $licFile)) {
+            if (Test-Path -LiteralPath $f) { Write-Host "  存在   $f" }
+            else { Write-Warning "  缺失   $f（.iss 里对应的 SetupIconFile / LicenseFile 会被跳过）" }
+          }
+          if (-not (Test-Path -LiteralPath $issFile)) { throw "找不到安装脚本：$issFile" }
+          if (-not (Test-Path -LiteralPath $pkgDir))  { throw "找不到绿色版目录：$pkgDir" }
+
+          $isccArgs = @(
+            "/DMyAppVersion=$V"
+            "/DSrcDir=$pkgDir"
+            "/DOutDir=$rootPath\dist"
+            "/DProjectRoot=$rootPath"
+            "/DLicenseTextFile=$licFile"
+            $issFile
+          )
+          Write-Host "ISCC $($isccArgs -join ' ')"
+          $isccLog = Join-Path $rootPath 'iscc.log'
+          # 注意：这里**不能**写 `2>&1`。GitHub Actions 的 pwsh 步骤开头会注入
+          # $ErrorActionPreference = 'Stop'，而把原生命令的 stderr 并进管道会让
+          # PowerShell 生成 ErrorRecord，ISCC 只要往 stderr 写一行（比如警告）
+          # 整步就会中断，还看不出原始报错。所以 stderr 留在控制台，stdout 另存日志。
+          & $iscc @isccArgs | Tee-Object -FilePath $isccLog
+          $isccExit = $LASTEXITCODE
+          Write-Host "ISCC 退出码：$isccExit"
+          if ($isccExit -ne 0) {
+            Write-Host '--- iscc.log（stdout 部分）---'
+            Get-Content -LiteralPath $isccLog | Write-Host
+            throw "Inno Setup compile failed (exit $isccExit)，ISCC 的 Error 行见上方控制台输出"
+          }
 
           $setup = Get-ChildItem "$PWD\dist" -Filter "NatsumeQuizMaster-Setup-$V-Windows-x64.exe" |
                    Select-Object -First 1
