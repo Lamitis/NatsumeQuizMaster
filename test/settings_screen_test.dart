@@ -125,6 +125,18 @@ class FailingSync extends ChangeNotifier implements SyncEngine {
       const SyncPairPayload(code: 'TESTCODE0000AAAA');
   @override
   Future<bool> pairFromScan(SyncPairPayload payload) async => false;
+
+  // ── 双向配对 / 取消 / 增量重置（2026-10-30 新增的 SyncEngine API）──
+  // 设置页会读 peerConfirmed（同步按钮门禁）与 lastSyncCancelled，
+  // 并取 cancelSync / resetSyncProgress 的方法引用——mock 不实现就会抛。
+  @override
+  bool get peerConfirmed => false;
+  @override
+  bool get lastSyncCancelled => false;
+  @override
+  void cancelSync() {}
+  @override
+  Future<void> resetSyncProgress({bool quiet = false}) async {}
 }
 
 class FakeReminderActions extends SettingsReminderActions {

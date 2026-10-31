@@ -1689,6 +1689,27 @@ class _SettingsScreenState extends State<SettingsScreen>
                               onPressed: sync.syncing ? null : _syncNow,
                             ),
                           ),
+                          // 任务二·2：同步中给一个「取消同步」——用户可以随时中止，
+                          // 引擎会断掉在途连接并通知对端一起复位，不再只能干等。
+                          if (sync.syncing)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: SizedBox(
+                                width: double.infinity,
+                                child: OutlinedButton.icon(
+                                  icon: const Icon(Icons.cancel_outlined,
+                                      size: 16),
+                                  label: const Text('取消同步'),
+                                  onPressed: () {
+                                    sync.cancelSync();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                          content: Text('正在中止同步…')),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
                           const SizedBox(height: 8),
                           // ── 网络诊断（2026-10-30 真机反馈）──
                           // 「未发现设备」以前是一句毫无信息量的话：包没发出、被防火墙
@@ -1773,6 +1794,17 @@ class _SettingsScreenState extends State<SettingsScreen>
                                           height: 1.4),
                                     ),
                                   ),
+                                // 任务三·1：增量同步的「后悔药」。对端重装/清库后
+                                // 旧游标会让增量永远补不回来，这里给一个手动全量入口。
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: TextButton.icon(
+                                    icon: const Icon(Icons.restart_alt,
+                                        size: 16),
+                                    label: const Text('重置同步进度（下次全量）'),
+                                    onPressed: () => sync.resetSyncProgress(),
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -2826,6 +2858,20 @@ class _SettingsScreenState extends State<SettingsScreen>
     final messenger = ScaffoldMessenger.of(context);
     final errorColor = Theme.of(context).colorScheme.error;
     if (engine.syncing) return;
+    // 前端拦截未配对同步（任务一·2）：双方没互相确认就直接提示，
+    // 一个包都不发——旧行为是发出去转圈 30 秒后报「时间溢出异常」。
+    if (!engine.peerConfirmed) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(
+          engine.pairDetail.isNotEmpty
+              ? '请先完成双向配对：${engine.pairDetail}'
+              : '请先完成双向配对：在下方输入对端识别码，等对端确认后再同步',
+        ),
+        duration: const Duration(seconds: 6),
+        backgroundColor: errorColor,
+      ));
+      return;
+    }
     try {
       if (!engine.started) {
         await engine.start(autoSync: appState.settings.autoSync);
@@ -2841,6 +2887,15 @@ class _SettingsScreenState extends State<SettingsScreen>
     // 并把具体原因写进 statusMessage（没配对 / 没发现 / 连不上 / 码不对）。
     final (tried, ok) = await engine.manualSync();
     if (!mounted) return;
+    // 被用户取消（或对端取消）：提示「已取消」而不是「失败」
+    if (engine.lastSyncCancelled) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(engine.statusMessage.isEmpty
+            ? '已取消同步'
+            : engine.statusMessage),
+      ));
+      return;
+    }
     if (tried == 0) {
       messenger.showSnackBar(
         SnackBar(

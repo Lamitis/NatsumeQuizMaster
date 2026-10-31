@@ -1,7 +1,7 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../database_service.dart';
@@ -12,7 +12,6 @@ import '../../models/companion_avatar.dart';
 import '../../models/companion_memory.dart';
 import '../../models/companion_settings.dart';
 import '../../models/plugin_sync_scope.dart';
-import '../../models/question_image.dart';
 import 'sync_models.dart';
 
 /// 局域网同步：快照导出与合并入库
@@ -26,6 +25,13 @@ import 'sync_models.dart';
 class SyncRepository {
   static const int protocolVersion = 1;
 
+  /// 增量游标的安全重叠窗口（2026-10-30）。
+  ///
+  /// 用「上次同步时刻」当游标有两个现实风险：两端时钟不完全一致、同步途中
+  /// 本机仍有写入落在游标之后。回退一段时间再取增量，代价只是多传少量未变更
+  /// 的行（合并是按 uid upsert 的幂等操作），换来的是**不会漏数据**。
+  static const Duration cursorOverlap = Duration(minutes: 10);
+
   final DatabaseService _db = DatabaseService.instance;
 
   /// 导出本机同步快照。
@@ -36,18 +42,27 @@ class SyncRepository {
   ///
   /// [banksOnly] = false 时是整库快照（局域网数据量小，全量合并；
   /// 模拟数据与未完成会话不参与同步）。
-  Future<Map<String, dynamic>> exportSnapshot({bool banksOnly = false}) async {
+  Future<Map<String, dynamic>> exportSnapshot({
+    bool banksOnly = false,
+    DateTime? since,
+  }) async {
+    final total = Stopwatch()..start();
+    final exportedAt = DateTime.now();
+    // 增量导出的实际起点：游标回退一个重叠窗口（见 [cursorOverlap]）
+    final cutoff = since?.subtract(cursorOverlap);
     final db = await _db.database;
     final deviceId = await DeviceService.instance.deviceId;
     final deviceName = await DeviceService.instance.deviceName;
 
+    // 题库行**始终全带**：体量小，而且题目要靠 bank_uid → 本地 id 映射，
+    // 只发题目不发题库会让对端把题挂到 null 上（旧实现在这里踩过坑）。
     final banks = await db.rawQuery('''
       SELECT uid, name, file_source, question_count, created_at,
              COALESCE(updated_at, created_at) AS updated_at
       FROM question_banks
     ''');
 
-    final questions = await db.rawQuery('''
+    final allQuestions = await db.rawQuery('''
       SELECT q.uid AS uid, qb.uid AS bank_uid, q.title, q.options,
              q.correct_answer, q.analysis, q.question_type, q.source,
              q.knowledge_point, q.created_at,
@@ -55,20 +70,57 @@ class SyncRepository {
       FROM questions q
       JOIN question_banks qb ON qb.id = q.bank_id
     ''');
+    // 增量：只留 cutoff 之后动过的题目（按 updated_at 比对）
+    final questions = cutoff == null
+        ? allQuestions
+        : allQuestions
+            .where((r) => _changedSince(r['updated_at'], cutoff))
+            .toList();
+    final includedQuestionUids = cutoff == null
+        ? null
+        : {for (final r in questions) (r['uid'] ?? '').toString()};
 
-    // v12 配图随题同步（图片是题目的一部分）：BLOB 转 base64 走 JSON
-    final images = (await db.rawQuery('''
-      SELECT q.uid AS question_uid, qi.position, qi.mime, qi.width, qi.height,
-             qi.anchor, qi.content
-      FROM question_images qi
-      JOIN questions q ON q.id = qi.question_id
-      ORDER BY q.uid, qi.position
-    ''')).map((r) {
+    // v12 配图随题同步（图片是题目的一部分）：BLOB 转 base64 走 JSON。
+    // 增量时按题目 uid 预过滤——**base64 是同步里最贵的一步**（几 MB 图片
+    // 编码 + JSON 里膨胀 33%），未变更题目的配图一张都不编。
+    final imageRows = includedQuestionUids == null
+        ? await db.rawQuery('''
+            SELECT q.uid AS question_uid, qi.position, qi.mime, qi.width,
+                   qi.height, qi.anchor, qi.content
+            FROM question_images qi
+            JOIN questions q ON q.id = qi.question_id
+            ORDER BY q.uid, qi.position
+          ''')
+        : includedQuestionUids.isEmpty
+            ? const <Map<String, Object?>>[]
+            : await db.rawQuery(
+                '''
+            SELECT q.uid AS question_uid, qi.position, qi.mime, qi.width,
+                   qi.height, qi.anchor, qi.content
+            FROM question_images qi
+            JOIN questions q ON q.id = qi.question_id
+            WHERE q.uid IN
+              (${List.filled(includedQuestionUids.length, '?').join(',')})
+            ORDER BY q.uid, qi.position
+          ''',
+                includedQuestionUids.toList(),
+              );
+    final images = imageRows.map((r) {
       final m = Map<String, dynamic>.from(r);
       final content = m['content'];
       m['content'] = content is List<int> ? base64Encode(content) : '';
       return m;
     }).toList();
+
+    final incremental = cutoff != null;
+    DebugLogService.instance.log('SYNC',
+        '快照导出：题库 ${banks.length} / 题目 ${questions.length}'
+        '（共 ${allQuestions.length}）/ 配图 ${images.length}，'
+        '${incremental ? '增量自 ${cutoff.toIso8601String()}' : '全量'}，'
+        '耗时 ${total.elapsedMilliseconds}ms');
+    debugPrint('[SYNC] exportSnapshot ${incremental ? 'incremental' : 'full'} '
+        'banks=${banks.length} questions=${questions.length}/${allQuestions.length} '
+        'images=${images.length} ${total.elapsedMilliseconds}ms');
 
     // 仅题库：到这里就结束，记录类数据一律不出门
     if (banksOnly) {
@@ -77,6 +129,9 @@ class SyncRepository {
         'device_id': deviceId,
         'device_name': deviceName,
         'scope': 'banks',
+        // 增量协议：对端据此推进游标；老客户端忽略这两个字段即可
+        'exported_at': exportedAt.toIso8601String(),
+        'incremental': incremental,
         'banks': banks,
         'questions': questions,
         'question_images': images,
@@ -103,14 +158,16 @@ class SyncRepository {
       FROM quiz_sessions
       WHERE source = 'real' AND end_time IS NOT NULL AND end_time != ''
     ''');
-    final sessions = sessionRows.map((r) {
+    final sessions = sessionRows
+        .where((r) => cutoff == null || _changedSince(r['start_time'], cutoff))
+        .map((r) {
       final m = Map<String, dynamic>.from(r);
       m['bank_ids'] =
           _mapBankIdsToUids(m['bank_ids'] as String? ?? '', bankUidById);
       return m;
     }).toList();
 
-    final records = await db.rawQuery('''
+    final recordRows = await db.rawQuery('''
       SELECT ar.uid AS uid, q.uid AS question_uid, qs.uid AS session_uid,
              ar.user_answer, ar.is_correct, ar.ai_analysis, ar.answered_at,
              ar.hidden, ar.source, ar.origin_device
@@ -119,23 +176,38 @@ class SyncRepository {
       LEFT JOIN quiz_sessions qs ON qs.id = ar.session_id
       WHERE ar.source = 'real'
     ''');
+    final records = cutoff == null
+        ? recordRows
+        : recordRows
+            .where((r) => _changedSince(r['answered_at'], cutoff))
+            .toList();
 
-    final errors = await db.rawQuery('''
+    final errorRows = await db.rawQuery('''
       SELECT eb.uid AS uid, q.uid AS question_uid, eb.origin_device, eb.added_at
       FROM error_book eb
       JOIN questions q ON q.id = eb.question_id
     ''');
+    final errors = cutoff == null
+        ? errorRows
+        : errorRows.where((r) => _changedSince(r['added_at'], cutoff)).toList();
 
-    final annotations = await db.rawQuery('''
+    final annotationRows = await db.rawQuery('''
       SELECT qa.device_id, q.uid AS question_uid, qa.data, qa.updated_at
       FROM question_annotations qa
       JOIN questions q ON q.id = qa.question_id
     ''');
+    final annotations = cutoff == null
+        ? annotationRows
+        : annotationRows
+            .where((r) => _changedSince(r['updated_at'], cutoff))
+            .toList();
 
     return {
       'protocol': protocolVersion,
       'device_id': deviceId,
       'device_name': deviceName,
+      'exported_at': exportedAt.toIso8601String(),
+      'incremental': incremental,
       'banks': banks,
       'questions': questions,
       'question_images': images,
@@ -144,42 +216,84 @@ class SyncRepository {
       'error_book': errors,
       'annotations': annotations,
       // v1.35 插件内容（笔记 / 助教 / 待办），按本机开关逐项决定
-      'plugins': await _exportPlugins(db),
+      'plugins': await _exportPlugins(db, cutoff: cutoff),
     };
+  }
+
+  /// 增量判定：`stamp` 是否晚于 [cutoff]。
+  ///
+  /// 时间戳缺失或解析失败时**照发**——宁可多传一条，也不因为一行脏数据
+  /// 让对端永远收不到它（漏传是数据错误，多传只是流量）。
+  static bool _changedSince(Object? stamp, DateTime cutoff) {
+    final parsed = _parseStamp(stamp);
+    if (parsed == null) return true;
+    return parsed.isAfter(cutoff);
+  }
+
+  /// 解析 ISO8601 时间戳（脏值返回 null）
+  static DateTime? _parseStamp(Object? raw) {
+    if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+    return null;
   }
 
   /// 导出插件内容（v1.35）。
   ///
   /// 开关取自本机 settings（[PluginSyncScope]），**不写进快照**：同步过来的是
   /// 数据，不是「你该不该同步」的决定。三项都关时返回空 Map，快照形状不变。
-  Future<Map<String, dynamic>> _exportPlugins(Database db) async {
+  ///
+  /// [cutoff] 非空时按 `updated_at` 过滤笔记与待办（增量同步）；助教只有
+  /// 一份人设与记忆（几 KB），始终全带。
+  Future<Map<String, dynamic>> _exportPlugins(
+    Database db, {
+    DateTime? cutoff,
+  }) async {
     final scope = PluginSyncScope.decode(
         await _db.getSetting(PluginSyncScope.settingsKey));
     final out = <String, dynamic>{};
     if (scope.notes) {
-      out['notes'] = {
-        'notes': await db.rawQuery('''
+      final noteRows = await db.rawQuery('''
           SELECT n.uid, n.title, n.content, n.created_at, n.updated_at,
                  n.origin_device, b.uid AS bank_uid, q.uid AS question_uid
           FROM notes n
           LEFT JOIN question_banks b ON b.id = n.bank_id
           LEFT JOIN questions q ON q.id = n.question_id
           WHERE n.uid IS NOT NULL AND n.uid != ''
-        '''),
-        'links': await db.rawQuery('''
+        ''');
+      final notes = cutoff == null
+          ? noteRows
+          : noteRows
+              .where((r) =>
+                  _changedSince(r['updated_at'] ?? r['created_at'], cutoff))
+              .toList();
+      // 出链只增不删：只要笔记带了，链路就全带上（不是增量点）
+      final noteUids = {for (final r in notes) (r['uid'] ?? '').toString()};
+      final linkRows = await db.rawQuery('''
           SELECT n.uid AS note_uid, l.target
           FROM note_links l JOIN notes n ON n.id = l.note_id
           WHERE n.uid IS NOT NULL AND n.uid != ''
-        '''),
+        ''');
+      out['notes'] = {
+        'notes': notes,
+        'links': cutoff == null
+            ? linkRows
+            : linkRows
+                .where((r) => noteUids.contains((r['note_uid'] ?? '').toString()))
+                .toList(),
       };
     }
     if (scope.schedule) {
-      out['schedule'] = {
-        'items': await db.rawQuery('''
+      final itemRows = await db.rawQuery('''
           SELECT uid, title, detail, due_at, done, created_at, updated_at,
                  origin_device
           FROM schedule_items WHERE uid IS NOT NULL AND uid != ''
-        '''),
+        ''');
+      out['schedule'] = {
+        'items': cutoff == null
+            ? itemRows
+            : itemRows
+                .where((r) =>
+                    _changedSince(r['updated_at'] ?? r['created_at'], cutoff))
+                .toList(),
       };
     }
     if (scope.companion) {
@@ -453,14 +567,21 @@ class SyncRepository {
   /// （2026-10-09 用户要求：一样就不更新，不一样就提示覆盖或增添）。
   /// 冲突题库及其题目在本批中**不合并**，等用户决策后走
   /// [resolveBankConflict] 落地。
+  ///
+  /// 增量快照（`incremental == true`）时**跳过同名内容比对**：增量里对端只带
+  /// 了部分题目，拿部分列表去算指纹会把「本机 30 题 / 对端 3 题」误判成
+  /// 「内容不同」，凭空造出一堆假冲突。同名比对只在首次全量同步时做一次，
+  /// 增量轮次按 uid 直接 upsert 即可。
   Future<int> importSnapshot(
     Map<String, dynamic> snapshot, {
     List<SyncBankConflict>? conflictSink,
   }) async {
     final deviceId = await DeviceService.instance.deviceId;
     if (snapshot['device_id'] == deviceId) return 0; // 不合并自己的快照
+    final total = Stopwatch()..start();
     final db = await _db.database;
     final now = DateTime.now().toIso8601String();
+    final incremental = snapshot['incremental'] == true;
     var merged = 0;
 
     // 对端题库按 uid 归档，便于同名比对时取到它名下的题目与配图
@@ -480,6 +601,18 @@ class SyncRepository {
     }
 
     await db.transaction((txn) async {
+      // 0. 本地「题目 uid → 本地 id」一次性读进内存。
+      //    旧实现对**每一张配图、每一条作答记录**都单独查一次 questions，
+      //    几百条就是几百次 SQL 往返（每次都要过一遍 sqflite 的 channel）。
+      //    这是「几十道题同步十几分钟」的一半原因，另一半见 2b 的嵌套 db 死锁。
+      final questionLocalByUid = <String, int>{};
+      final localQuestionRows =
+          await txn.query('questions', columns: ['id', 'uid']);
+      for (final r in localQuestionRows) {
+        final u = r['uid'] as String?;
+        if (u != null && u.isNotEmpty) questionLocalByUid[u] = r['id'] as int;
+      }
+
       // 1. 题库
       final bankLocalByUid = <String, int>{};
       // 同名冲突 / 内容一致的题库：本批跳过它们的题库行与题目
@@ -490,7 +623,8 @@ class SyncRepository {
         if (uid == null || uid.isEmpty) continue;
         final name = (m['name'] ?? '').toString();
 
-        // 同名检测：uid 不同但题库名相同 → 先比内容
+        // 同名检测：uid 不同但题库名相同 → 先比内容（增量轮次不做：
+        // 增量只带部分题目，比对必然失真，见方法头注释）
         final sameName = await txn.query(
           'question_banks',
           columns: ['id', 'uid'],
@@ -498,7 +632,9 @@ class SyncRepository {
           whereArgs: [name],
           limit: 1,
         );
-        if (sameName.isNotEmpty && sameName.first['uid'] != uid) {
+        final hasNameClash =
+            sameName.isNotEmpty && sameName.first['uid'] != uid;
+        if (hasNameClash && !incremental) {
           final localBankId = sameName.first['id'] as int;
           final peerQuestions = peerQuestionsByBank[uid] ?? const [];
           final localFp = await _questionFingerprints(txn, localBankId);
@@ -548,7 +684,6 @@ class SyncRepository {
       }
 
       // 2. 题目（bank_uid 映射为本地 bank_id；未知题库的题跳过）
-      final questionLocalByUid = <String, int>{};
       for (final raw in (snapshot['questions'] as List? ?? const [])) {
         final m = Map<String, dynamic>.from(raw as Map);
         final uid = m['uid'] as String?;
@@ -573,7 +708,8 @@ class SyncRepository {
         merged++;
       }
 
-      // 兜底：对端引用了更早同步过的实体（本批未重发）时按库内 uid 查
+      // 兜底：对端引用了更早同步过的实体（本批未重发）时按库内 uid 查。
+      // 命中 0 步里预读的映射就不查库了。
       Future<int?> questionIdByUid(String? uid) async {
         if (uid == null || uid.isEmpty) return null;
         final cached = questionLocalByUid[uid];
@@ -586,30 +722,39 @@ class SyncRepository {
 
       // 2b. 题目配图（图片是题目的一部分，随题合并）。
       //     首写槽位生效、不覆盖本机已有——本地题目文本的占位符与本地
-      //     图片槽位是对齐的，覆盖会错位；删除型差异不跨设备传播
-      for (final raw in (snapshot['question_images'] as List? ?? const [])) {
-        final m = Map<String, dynamic>.from(raw as Map);
-        final questionId = await questionIdByUid(m['question_uid'] as String?);
+      //     图片槽位是对齐的，覆盖会错位；删除型差异不跨设备传播。
+      //
+      //     **必须用 txn 写**：旧实现调的是 `DatabaseService.mergeQuestionImages`，
+      //     它内部走全局 `db.batch()`——在事务里访问同一个 db 会排队等事务结束，
+      //     而事务又在等这次 batch，于是**永久卡死**（真机表现：界面一直转圈，
+      //     日志里只剩「接收异常」，十几分钟走不完一批几十道题的同步）。
+      for (final entry in peerImagesByQuestion.entries) {
+        final questionId = await questionIdByUid(entry.key);
         if (questionId == null) continue;
-        final data = m['content'];
-        Uint8List bytes;
-        try {
-          bytes = data is String ? base64Decode(data) : Uint8List(0);
-        } catch (_) {
-          continue;
+        for (final m in entry.value) {
+          final data = m['content'];
+          Uint8List bytes;
+          try {
+            bytes = data is String ? base64Decode(data) : Uint8List(0);
+          } catch (_) {
+            continue;
+          }
+          if (bytes.isEmpty) continue;
+          await txn.insert(
+            'question_images',
+            {
+              'question_id': questionId,
+              'position': (m['position'] as num?)?.toInt() ?? 0,
+              'mime': m['mime'] as String? ?? 'image/jpeg',
+              'width': (m['width'] as num?)?.toInt() ?? 0,
+              'height': (m['height'] as num?)?.toInt() ?? 0,
+              'anchor': m['anchor'],
+              'content': bytes,
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+          merged++;
         }
-        if (bytes.isEmpty) continue;
-        await _db.mergeQuestionImages(questionId, [
-          QuestionImage(
-            position: (m['position'] as num?)?.toInt() ?? 0,
-            mime: m['mime'] as String? ?? 'image/jpeg',
-            width: (m['width'] as num?)?.toInt() ?? 0,
-            height: (m['height'] as num?)?.toInt() ?? 0,
-            anchor: m['anchor'] as String?,
-            content: bytes,
-          ),
-        ]);
-        merged++;
       }
 
       // 3. 会话（bank_ids 的 uid 还原为本地 id）
@@ -705,6 +850,11 @@ class SyncRepository {
         );
       }
     });
+    DebugLogService.instance.log('SYNC',
+        '快照合并完成：$merged 项，${incremental ? '增量' : '全量'}，'
+        '耗时 ${total.elapsedMilliseconds}ms');
+    debugPrint('[SYNC] importSnapshot ${incremental ? 'incremental' : 'full'} '
+        'merged=$merged ${total.elapsedMilliseconds}ms');
     return merged;
   }
 

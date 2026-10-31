@@ -102,6 +102,71 @@ class SyncBankConflict {
       '本机 $localCount 题 / 对端 $peerCount 题，其中对端多出 $additionCount 题';
 }
 
+/// 配对请求（2026-10-30 双向握手）。
+///
+/// 真机反馈：设备 A 输入 B 的识别码后，A 显示「已配对」，B 上点「立即同步」
+/// 却提示「必须输入对端识别码才行」——配对只有单向：A 验证了 B，B 根本不知道
+/// A 的存在。现在 A 核实通过后会把这份载荷 `POST /sync/pair` 给 B：
+/// - 请求头携带 `X-Sync-Code: <B 的码>`：证明 A 确实知道 B 的识别码（B 侧门禁照旧）；
+/// - 请求体里的 [code] 是 **A 自己的设备码**，B 收下后就有了回连 A 的凭据，
+///   双方状态同时进入「已配对」。
+class SyncPairRequest {
+  const SyncPairRequest({
+    required this.deviceId,
+    required this.deviceName,
+    required this.code,
+    required this.port,
+    this.address = '',
+  });
+
+  /// 对端设备 id（跨端唯一，用于日志与去重）
+  final String deviceId;
+
+  /// 对端设备名（为空时 UI 回落成地址）
+  final String deviceName;
+
+  /// 对端设备码——本机之后拿它作为 `X-Sync-Code` 向对端发请求
+  final String code;
+
+  /// 对端同步服务端口
+  final int port;
+
+  /// 对端来源地址（服务端从 `connectionInfo` 取，不信请求体里自报的 IP）
+  final String address;
+
+  bool get valid =>
+      deviceId.isNotEmpty && code.isNotEmpty && address.isNotEmpty && port > 0;
+
+  Map<String, dynamic> toJson() => {
+        'device_id': deviceId,
+        'device_name': deviceName,
+        'code': code,
+        'port': port,
+      };
+
+  /// 解析请求体；非法（缺字段 / 字段类型不对）返回 null
+  static SyncPairRequest? parse(Object? raw, {required String address}) {
+    if (raw is! Map) return null;
+    final map = raw.map((k, v) => MapEntry(k.toString(), v));
+    final deviceId = (map['device_id'] ?? '').toString().trim();
+    final code = (map['code'] ?? '').toString().trim();
+    final port = (map['port'] as num?)?.toInt() ?? 0;
+    final name = (map['device_name'] ?? '').toString().trim();
+    if (deviceId.isEmpty || code.isEmpty) return null;
+    if (port <= 0 || port > 65535) return null;
+    return SyncPairRequest(
+      deviceId: deviceId,
+      deviceName: name,
+      code: code,
+      port: port,
+      address: address,
+    );
+  }
+
+  @override
+  String toString() => 'SyncPairRequest($deviceName / $deviceId @ $address:$port)';
+}
+
 class SyncBeacon {
   /// 协议魔数：过滤局域网内其他应用的 UDP 包
   static const String appTag = 'natsume_sync';

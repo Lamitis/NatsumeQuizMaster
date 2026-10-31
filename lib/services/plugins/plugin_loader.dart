@@ -74,6 +74,19 @@ class PluginLoader {
 
   static const String manifestFileName = 'plugin.json';
 
+  /// 清单文件名的兼容别名（2026-10-30，见根目录 `PLUGIN_DEVELOPMENT.md`）。
+  ///
+  /// 早期实现只认 `plugin.json`，而对外文档与社区习惯多写 `manifest.json`。
+  /// 现在两个名字等价：先找 `plugin.json`，找不到再找 `manifest.json`——
+  /// 老插件包不用改，新插件包按文档写 `manifest.json` 也能装。
+  static const String manifestAliasFileName = 'manifest.json';
+
+  /// 清单候选（顺序即优先级）
+  static const List<String> manifestCandidates = [
+    manifestFileName,
+    manifestAliasFileName,
+  ];
+
   static Future<LoadedPlugin> loadFromZip(
       String zipPath, String installDir) async {
     final bytes = File(zipPath).readAsBytesSync();
@@ -119,7 +132,14 @@ class PluginLoader {
   }
 
   static PluginManifest? _readManifestFromMap(Map<String, List<int>> files) {
-    final bytes = files[manifestFileName];
+    List<int>? bytes;
+    for (final name in manifestCandidates) {
+      final candidate = files[name];
+      if (candidate != null) {
+        bytes = candidate;
+        break;
+      }
+    }
     if (bytes == null) return null;
     try {
       final json = jsonDecode(utf8.decode(bytes));
@@ -135,7 +155,7 @@ class PluginLoader {
     final assets = <String, String>{};
     for (final entry in files.entries) {
       final name = entry.key;
-      if (name == manifestFileName || name == 'prompt.md') continue;
+      if (manifestCandidates.contains(name) || name == 'prompt.md') continue;
       // 只把文本类资产读入内存（kb 文档、示例题库）；二进制忽略
       final lower = name.toLowerCase();
       if (lower.endsWith('.md') ||

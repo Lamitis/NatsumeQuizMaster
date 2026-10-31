@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import '../database_service.dart';
 import '../debug_log_service.dart';
 import '../device_service.dart';
 import 'lan_address.dart';
 import 'sync_discovery.dart';
 import 'sync_code.dart';
+import 'sync_error.dart';
 import 'sync_models.dart';
 import 'sync_pair_payload.dart';
 import 'sync_repository.dart';
@@ -72,7 +74,19 @@ class SyncEngine extends ChangeNotifier {
 
   /// 自动同步的每设备冷却（避免两端互相发现时反复全量同步）
   static const Duration autoSyncCooldown = Duration(seconds: 120);
-  static const Duration exchangeTimeout = Duration(seconds: 30);
+
+  /// 单次交换的超时（含对端合并 + 生成快照 + 回程传输）。
+  /// 旧值 30 秒在带配图的题库上经常不够，误判成「时间溢出」。
+  static const Duration exchangeTimeout = Duration(seconds: 45);
+
+  /// 同步看门狗：超过这个时间还没收尾就强制中止（UI 绝不允许无限转圈）
+  static const Duration syncWatchdogTimeout = Duration(seconds: 90);
+
+  /// 增量游标落库键（改键 = 老用户退化为一次全量，没有数据风险）
+  static const String _cursorSettingKey = 'sync_cursors_v1';
+
+  /// 配对状态落库键（双向握手之后，两端都要记住对方）
+  static const String _pairSettingKey = 'sync_pair_v1';
 
   /// Android 组播/广播锁通道（Wi-Fi 默认丢广播包，持锁才能收到对端信标）
   static const MethodChannel _androidSyncChannel =
@@ -84,6 +98,29 @@ class SyncEngine extends ChangeNotifier {
   DateTime? _lastSyncAt;
   String _statusMessage = '';
   final Map<String, DateTime> _lastAutoSyncAt = {};
+
+  // ── 取消 / 看门狗 / 增量游标（2026-10-30）──
+
+  /// 用户点了「取消同步」或看门狗触发：下一次网络等待立即中断
+  bool _syncCancelRequested = false;
+
+  /// 本次同步是被取消结束的（用于文案区分「取消」与「失败」）
+  bool _syncCancelled = false;
+
+  /// 进行中的同步专用 HTTP 客户端：`close()` 能立刻断掉在途请求
+  http.Client? _activeClient;
+
+  /// 看门狗定时器（超时强制收尾，界面不允许永远转圈）
+  Timer? _syncWatchdog;
+
+  /// 本机已经推给对端的数据时刻（push 方向的增量游标）
+  final Map<String, DateTime> _sentCursors = {};
+
+  /// 本机已经从对端收到的数据时刻（pull 方向的增量游标）
+  final Map<String, DateTime> _recvCursors = {};
+
+  /// 最近一次同步的业务错误（UI 需要区分取消/超时/未授权时用）
+  SyncException? _lastError;
 
   /// 本机设备码（长码，由 deviceId 派生；同一台设备恒定）
   String _deviceCode = '';
@@ -151,6 +188,12 @@ class SyncEngine extends ChangeNotifier {
   /// 状态说明（含失败原因，UI 直接展示）
   String get pairDetail => _pairDetail;
 
+  /// 最近一次同步的业务错误（取消 / 超时 / 未授权…；成功时为 null）
+  SyncException? get lastError => _lastError;
+
+  /// 本次同步是否被用户取消
+  bool get lastSyncCancelled => _syncCancelled;
+
   /// 已确认的对端（名字 + 地址），未确认时为空
   String get confirmedPeerName => _verifiedPeerName;
 
@@ -175,12 +218,20 @@ class SyncEngine extends ChangeNotifier {
     final deviceId = await DeviceService.instance.deviceId;
     _deviceCode = SyncCode.deviceCodeOf(deviceId);
 
+    // 上次会话的配对与增量游标先读回来：B 端（收到配对请求的一方）
+    // 重启后不能又变成「必须输入对端识别码」。
+    await _loadPairState();
+    await _loadCursors();
+
     await _server.start(
       onReceived: (snapshot) async {
         final found = <SyncBankConflict>[];
+        final sw = Stopwatch()..start();
         final merged =
             await _repository.importSnapshot(snapshot, conflictSink: found);
         _collectConflicts(found);
+        DebugLogService.instance.log('SYNC',
+            '接收并合并对端数据：$merged 项，耗时 ${sw.elapsedMilliseconds}ms');
         if (merged > 0) {
           _lastSyncAt = DateTime.now();
           _statusMessage = '已接收并合并对端数据（$merged 项）';
@@ -191,6 +242,29 @@ class SyncEngine extends ChangeNotifier {
       snapshot: ({required bool banksOnly}) =>
           _repository.exportSnapshot(banksOnly: banksOnly),
     );
+
+    // 增量快照（带 since）：服务端把请求头 `x-sync-since` 传进来
+    _server.buildIncrementalSnapshot =
+        ({required bool banksOnly, String? since}) =>
+            _repository.exportSnapshot(
+              banksOnly: banksOnly,
+              since: since == null ? null : DateTime.tryParse(since),
+            );
+
+    // 双向握手：对端出示本机识别码并交来它自己的码 → 本机也进入「已配对」
+    _server.onPairRequest = _acceptPairRequest;
+
+    // 对端中止同步：本机 UI 立刻复位，不留半锁死状态
+    _server.onCancel = () {
+      if (!_syncing) return;
+      _syncCancelRequested = true;
+      _syncCancelled = true;
+      _lastError = const SyncException(SyncErrorCode.cancelled, '对端取消了本次同步');
+      _statusMessage = '对端取消了本次同步';
+      DebugLogService.instance.log('SYNC', '对端中止同步，本机状态已复位');
+      notifyListeners();
+      _abortActiveClient();
+    };
 
     // 识别码门禁：设备长码 或 未过期的临时码，任一命中才放行
     _server.verifyCode = (presented) => SyncCode.accepts(
@@ -238,6 +312,10 @@ class SyncEngine extends ChangeNotifier {
     DebugLogService.instance.log(
         'SYNC', '同步服务已启动：HTTP 端口 ${_server.port}，自动同步=${autoSync ? "开" : "关"}');
     notifyListeners();
+
+    // 记忆里已有识别码（上次会话配对过）→ 立即核实一次，并把状态摆正：
+    // 恢复时状态一律先落回「等待对端确认」，连上才算数（不做乐观 UI）。
+    if (_peerCode.isNotEmpty) unawaited(verifyPairing());
   }
 
   /// 自动同步开关切换（设置页）：只改「发现后是否自动同步」，
@@ -278,6 +356,9 @@ class SyncEngine extends ChangeNotifier {
       _pairDetail = '已解除配对，将不再自动同步';
       _statusMessage = _pairDetail;
       _stopVerifyTimer();
+      // 解除配对就把增量游标一起清掉：下次重新配对从全量开始，
+      // 免得「以为对方有数据、其实对方是刚重装的」漏传。
+      unawaited(resetSyncProgress(quiet: true));
     } else {
       _pairState = SyncPairState.awaitingPeer;
       _pairDetail = '已保存识别码，正在等待对端确认…';
@@ -286,6 +367,7 @@ class SyncEngine extends ChangeNotifier {
     DebugLogService.instance.log(
         'SYNC', normalized.isEmpty ? '解除配对' : '已保存对端识别码，等待对端确认');
     notifyListeners();
+    unawaited(_persistPairState());
     if (normalized.isNotEmpty && autoVerify) unawaited(verifyPairing());
   }
 
@@ -346,6 +428,10 @@ class SyncEngine extends ChangeNotifier {
           _statusMessage = _pairDetail;
           DebugLogService.instance.log('SYNC', '配对已确认：$_verifiedPeerName');
           _stopVerifyTimer();
+          // 双向握手：把本机身份 + 本机识别码推给对端，让对端也变「已配对」。
+          // 不做这一步就是用户报的「A 显示已配对，B 点同步却说要输识别码」。
+          unawaited(_announcePairing(target));
+          await _persistPairState();
           return;
         }
         if (result.state == SyncPairState.rejected) {
@@ -354,6 +440,7 @@ class SyncEngine extends ChangeNotifier {
               '（请核对是否抄错，或临时码已过期）';
           _statusMessage = _pairDetail;
           _stopVerifyTimer();
+          await _persistPairState();
           return;
         }
         lastError = result.error;
@@ -438,6 +525,10 @@ class SyncEngine extends ChangeNotifier {
     _verifiedPeerPort = peer.port;
     _pairDetail = '已配对：${peer.deviceName}（${peer.ip}:${peer.port}）';
     _stopVerifyTimer();
+    // 反向补一次配对请求：让对端也知道「这台设备已确认」，两边状态一致
+    unawaited(_announcePairing(
+        _PairTarget(ip: peer.ip, port: peer.port, name: peer.deviceName)));
+    unawaited(_persistPairState());
   }
 
   /// 已确认过的对端（发现通道失灵时用它直连）
@@ -583,6 +674,9 @@ class SyncEngine extends ChangeNotifier {
     if (_syncing) return;
     // 未配对（没输入对端识别码）时绝不自动同步
     if (!paired) return;
+    // 没拿到对端确认也不自动同步：单方面「已保存识别码」就推数据，
+    // 正是「A 已配对、B 一无所知」的成因。
+    if (!peerConfirmed) return;
     final last = _lastAutoSyncAt[peer.deviceId];
     if (last != null && DateTime.now().difference(last) < autoSyncCooldown) {
       return; // 冷却期内，等下次发现事件
@@ -598,9 +692,26 @@ class SyncEngine extends ChangeNotifier {
   /// 让用户看到**具体原因**（没发现 / 连不上 / 码不对）。
   /// 返回 (尝试数, 成功数)
   Future<(int, int)> manualSync() async {
-    // 未配对时明确提示，而不是静默什么都不做
+    // 门禁一：没输码。
     if (!paired) {
-      _statusMessage = '请先输入对端识别码再同步';
+      _lastError = const SyncException(
+          SyncErrorCode.notPaired, '请先输入对端识别码再同步');
+      _statusMessage = _lastError!.message;
+      notifyListeners();
+      return (0, 0);
+    }
+    // 门禁二：输码了但**对端还没确认**（双向配对未完成）。
+    // 旧实现在这里直接发请求，结果是对端根本没接受过本机 → 界面转圈 30 秒 →
+    // 报「时间溢出异常」。现在直接在前端给出可执行的提示，一个包都不发。
+    if (!peerConfirmed) {
+      _lastError = SyncException(
+        SyncErrorCode.notPaired,
+        '请先完成双向配对：本机已保存识别码，但还没有得到对端确认'
+        '（当前状态：${_pairState.label}）。请让对端保持前台并确认同一 Wi-Fi，'
+        '或在两端各点一次「配对」',
+      );
+      _statusMessage = _lastError!.message;
+      DebugLogService.instance.log('SYNC', '拦截未配对同步：${_pairState.label}');
       notifyListeners();
       return (0, 0);
     }
@@ -624,75 +735,500 @@ class SyncEngine extends ChangeNotifier {
     return (targets.length, ok);
   }
 
-  /// 与单个对端同步：推送本机快照 → 对端合并并回传其快照 → 本机合并。
-  /// 返回是否成功
+  /// 与单个对端同步：推送本机增量快照 → 对端合并并回传其快照 → 本机合并。
+  /// 返回是否成功（失败原因见 [statusMessage] / [lastError]）。
+  ///
+  /// 2026-10-30 真机三个问题的收口点：
+  /// - **未完成双向配对不发请求**：直接返回业务错误，UI 提示「请先完成双向配对」，
+  ///   绝不让底层用超时去兜（旧表现：转圈 30 秒后弹「时间溢出异常」）。
+  /// - **不再无限转圈**：每一步都有超时，外面还有看门狗；任何异常都在 `finally`
+  ///   里复位 [syncing] 并给出中文原因。
+  /// - **可中途取消**：[cancelSync] 直接 `close()` 掉在途连接（独立 client），
+  ///   并尽力通知对端一起复位。
+  /// - **增量**：请求头 `x-sync-since` 告诉对端「我已有到哪个时刻的数据」，
+  ///   本机推的也是增量（`exportSnapshot(since:)`）。
+  /// - **不阻塞 UI**：快照的 JSON 编解码放后台 isolate（`compute`）。
   Future<bool> syncWith(DiscoveredPeer peer, {String source = '手动'}) async {
-    if (_syncing) return false;
-    // 识别码是硬门禁：没配对就不发请求（用户要求「接入端需要输入识别码
-    // 才可以与目标设备进行自动同步」）
-    if (!paired) {
-      _statusMessage = '请先输入对端识别码再同步';
+    if (_syncing) {
+      _statusMessage = '已有同步在进行中，可点「取消同步」中止后再试';
       notifyListeners();
       return false;
     }
+    // 双向配对门禁：只有「双方互相确认」才发请求
+    if (!peerConfirmed) {
+      _lastError = SyncException(
+        SyncErrorCode.notPaired,
+        '请先完成双向配对：本机还没得到对端确认（当前状态：${_pairState.label}）',
+      );
+      _statusMessage = '请先完成双向配对再同步（${_pairState.label}）';
+      DebugLogService.instance.log('SYNC', '拦截未配对同步：${_pairState.label}');
+      notifyListeners();
+      return false;
+    }
+
     _syncing = true;
+    _syncCancelRequested = false;
+    _syncCancelled = false;
+    _lastError = null;
     _statusMessage = '正在与 ${peer.deviceName} 同步...';
     notifyListeners();
+
+    final total = Stopwatch()..start();
+    final step = Stopwatch();
+    final client = http.Client();
+    _activeClient = client;
+    _startWatchdog(peer);
     try {
-      final mySnapshot =
-          await _repository.exportSnapshot(banksOnly: _banksOnly);
-      final payload = utf8.encode(jsonEncode(mySnapshot));
+      // ① 生成快照（本机数据 → Map）。增量起点 = 上次推给该对端的时刻。
+      step
+        ..reset()
+        ..start();
+      final mySnapshot = await _repository.exportSnapshot(
+        banksOnly: _banksOnly,
+        since: _sentCursors[peer.deviceId],
+      );
+      final myExportedAt =
+          _parseStamp(mySnapshot['exported_at']) ?? DateTime.now();
+      _logStep('生成快照', step,
+          '题目 ${(mySnapshot['questions'] as List?)?.length ?? 0} 条');
+
+      // ② 序列化（后台 isolate：几 MB 的 base64 配图在主 isolate 上编码
+      //    会把界面卡住，真机表现为「同步时界面僵住」）
+      step
+        ..reset()
+        ..start();
+      final payload = await compute(_encodeSnapshotPayload, mySnapshot);
+      _logStep('序列化', step, '${(payload.length / 1024).toStringAsFixed(1)}KB');
       // 图片随同步走，但 64MB 单次上限是硬约束：超限给出清晰错误，
       // 不把大半请求发过去让对端拒收
       if (payload.length > SyncServer.maxBodyBytes) {
-        throw Exception(
-            '同步数据 ${(payload.length / 1048576).toStringAsFixed(1)}MB 超过 64MB 上限'
-            '（题库配图较多），请减少同步范围');
+        throw SyncException(
+          SyncErrorCode.payloadTooLarge,
+          '同步数据 ${(payload.length / 1048576).toStringAsFixed(1)}MB '
+          '超过 64MB 上限（题库配图较多），请减少同步范围',
+        );
       }
-      final uri = Uri.parse('http://${peer.ip}:${peer.port}/sync/exchange');
-      final response = await _httpClient
-          .post(uri,
-              headers: {
-                'Content-Type': 'application/json; charset=utf-8',
-                SyncServer.codeHeader: _peerCode,
-                SyncServer.scopeHeader: _banksOnly ? 'banks' : 'full',
-              },
-              body: payload)
-          .timeout(exchangeTimeout);
-      if (response.statusCode == 403) {
+      _throwIfCancelled();
+
+      // ③ 建立连接并发送（对端要合并完才回包，所以这一步包含对方的处理时间）
+      step
+        ..reset()
+        ..start();
+      final request = http.Request(
+        'POST',
+        Uri.parse('http://${peer.ip}:${peer.port}/sync/exchange'),
+      );
+      request.headers.addAll({
+        'Content-Type': 'application/json; charset=utf-8',
+        SyncServer.codeHeader: _peerCode,
+        SyncServer.scopeHeader: _banksOnly ? 'banks' : 'full',
+      });
+      final recvCursor = _recvCursors[peer.deviceId];
+      if (recvCursor != null) {
+        request.headers[SyncServer.sinceHeader] = recvCursor.toIso8601String();
+      }
+      request.bodyBytes = payload;
+      final streamed = await client.send(request).timeout(exchangeTimeout);
+      _logStep('发送并等待对端', step, 'HTTP ${streamed.statusCode}');
+      _throwIfCancelled();
+
+      // ④ 接收响应体
+      step
+        ..reset()
+        ..start();
+      final bodyBytes =
+          await streamed.stream.toBytes().timeout(exchangeTimeout);
+      _logStep(
+          '接收数据', step, '${(bodyBytes.length / 1024).toStringAsFixed(1)}KB');
+      final status = streamed.statusCode;
+      if (status == 403) {
         // 对端明确拒绝：状态直接判为「不匹配」，不再假装已配对
         _pairState = SyncPairState.rejected;
         _pairDetail = '识别码不匹配：对端拒绝了本次同步'
             '（请核对识别码是否抄错，或临时码已过期）';
         _stopVerifyTimer();
-        throw Exception('识别码不匹配，对端拒绝了本次同步');
+        await _persistPairState();
+        throw SyncException(
+          SyncErrorCode.unauthorized,
+          '识别码不匹配，对端拒绝了本次同步（请核对是否抄错，或临时码已过期）',
+          statusCode: status,
+        );
       }
-      if (response.statusCode != 200) {
-        throw Exception('对端返回 ${response.statusCode}');
+      if (status != 200) {
+        // 409 对端忙 / 504 对端超时 / 499 对端中止 …全部翻成业务错误
+        throw SyncException.fromResponse(status,
+            body: _errorHintOf(bodyBytes));
       }
-      final dynamic parsed = jsonDecode(utf8.decode(response.bodyBytes));
-      if (parsed is Map<String, dynamic>) {
-        final found = <SyncBankConflict>[];
-        final merged =
-            await _repository.importSnapshot(parsed, conflictSink: found);
-        _collectConflicts(found);
-        if (merged > 0) onSyncApplied?.call();
+
+      // ⑤ 反序列化 + 合并入库（合并整个过程是单事务，失败即回滚，不留半锁死）
+      step
+        ..reset()
+        ..start();
+      final parsed = await compute(_decodeSnapshotPayload, bodyBytes);
+      if (parsed == null) {
+        throw const SyncException(
+          SyncErrorCode.badSnapshot,
+          '对端快照无法解析（两端版本可能不一致，或数据被截断）',
+        );
       }
+      final found = <SyncBankConflict>[];
+      final merged =
+          await _repository.importSnapshot(parsed, conflictSink: found);
+      _collectConflicts(found);
+      _logStep('合并数据', step, '$merged 项');
+
+      if (merged > 0) onSyncApplied?.call();
       _lastSyncAt = DateTime.now();
+
+      // ⑥ 推进增量游标：push 用本机导出的时刻，pull 用对端导出的时刻
+      _sentCursors[peer.deviceId] = myExportedAt;
+      final peerExportedAt = _parseStamp(parsed['exported_at']);
+      if (peerExportedAt != null) {
+        // 对端时钟偏快时不要把游标推到未来，否则会一直拉不到增量
+        final now = DateTime.now();
+        _recvCursors[peer.deviceId] =
+            peerExportedAt.isAfter(now) ? now : peerExportedAt;
+      }
+      await _saveCursors();
+
       // 同步成功 = 对端已接受本机识别码：这时才允许显示「已配对」
       _markVerified(peer);
       _scanIp = peer.ip;
       _scanPort = peer.port;
-      _statusMessage = '$source同步完成：${peer.deviceName}';
-      DebugLogService.instance.log('SYNC', '与 ${peer.deviceName} 同步成功');
+      _statusMessage = '$source同步完成：${peer.deviceName}'
+          '（${(total.elapsedMilliseconds / 1000).toStringAsFixed(1)}s，'
+          '合并 $merged 项）';
+      DebugLogService.instance.log('SYNC',
+          '与 ${peer.deviceName} 同步成功：合并 $merged 项，'
+          '总耗时 ${total.elapsedMilliseconds}ms');
       return true;
+    } on SyncException catch (e) {
+      _lastError = e;
+      _syncCancelled = e.code == SyncErrorCode.cancelled;
+      _statusMessage = _syncCancelled
+          ? '同步已取消：${peer.deviceName}'
+          : '同步失败：${peer.deviceName}（${e.message}）';
+      DebugLogService.instance.log(
+          'SYNC', '与 ${peer.deviceName} 同步失败[${e.code.wireName}]: ${e.message}');
+      return false;
     } catch (e) {
-      _statusMessage = '同步失败：${peer.deviceName}（${_brief(e)}）';
-      DebugLogService.instance.log('SYNC', '与 ${peer.deviceName} 同步失败: $e');
+      // 兜底：底层任何异常都翻成业务错误，绝不把 TimeoutException 甩给界面
+      final ex = SyncException.wrap(e, action: '同步');
+      _lastError = ex;
+      _syncCancelled = ex.code == SyncErrorCode.cancelled;
+      _statusMessage = _syncCancelled
+          ? '同步已取消：${peer.deviceName}'
+          : '同步失败：${peer.deviceName}（${ex.message}）';
+      DebugLogService.instance.log(
+          'SYNC', '与 ${peer.deviceName} 同步异常[${ex.code.wireName}]: $e');
       return false;
     } finally {
+      // 任何路径都必须收尾：停看门狗、断连接、复位转圈状态
+      _stopWatchdog();
+      _activeClient = null;
+      client.close();
       _syncing = false;
+      _syncCancelRequested = false;
+      DebugLogService.instance.log('SYNC',
+          '同步收尾：${peer.deviceName} 总耗时 ${total.elapsedMilliseconds}ms'
+          '${_syncCancelled ? '（已取消）' : ''}');
       notifyListeners();
+    }
+  }
+
+  /// 步骤耗时打点（真机排查「卡在哪一步」用；同步相关的日志都带 `[SYNC]` 前缀）
+  void _logStep(String name, Stopwatch sw, String detail) {
+    final ms = sw.elapsedMilliseconds;
+    DebugLogService.instance
+        .log('SYNC', '同步步骤「$name」耗时 ${ms}ms（$detail）');
+    debugPrint('[SYNC] $name ${ms}ms $detail');
+  }
+
+  /// 取消标记已置位时立刻抛业务异常（不再等下一个网络往返）
+  void _throwIfCancelled() {
+    if (!_syncCancelRequested) return;
+    throw SyncException(
+      SyncErrorCode.cancelled,
+      _syncCancelled ? '已取消同步' : '同步被中止（超时或连接被断开）',
+    );
+  }
+
+  static DateTime? _parseStamp(Object? raw) {
+    if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+    return null;
+  }
+
+  /// 从错误响应体里取一句人话（`hint` > `error` > 原文前 120 字）
+  static String? _errorHintOf(List<int> bytes) {
+    if (bytes.isEmpty) return null;
+    try {
+      final dynamic parsed = jsonDecode(utf8.decode(bytes));
+      if (parsed is Map) {
+        final hint = parsed['hint'] ?? parsed['error'];
+        if (hint is String && hint.isNotEmpty) return hint;
+      }
+    } catch (_) {}
+    try {
+      final text = utf8.decode(bytes.take(160).toList());
+      return text.length > 120 ? '${text.substring(0, 120)}…' : text;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // ── 取消 / 看门狗（任务二：不再无限转圈）──
+
+  /// 用户点「取消同步」：立刻断链、复位状态，并尽力通知对端一起复位。
+  ///
+  /// 为什么要通知对端：本机 close 掉连接后，对端可能正卡在合并事务里，
+  /// 它会一直等到自己的 120 秒超时才收场——两边数据库都不该被一次取消
+  /// 拖成「半锁死」。`/sync/cancel` 让对端当场停手。
+  void cancelSync() {
+    if (!_syncing) {
+      _statusMessage = '当前没有进行中的同步';
+      notifyListeners();
+      return;
+    }
+    _syncCancelRequested = true;
+    _syncCancelled = true;
+    _lastError = const SyncException(SyncErrorCode.cancelled, '已取消同步');
+    _statusMessage = '正在中止同步…';
+    DebugLogService.instance.log('SYNC', '用户点击「取消同步」');
+    notifyListeners();
+    unawaited(_notifyPeerCancel());
+    _abortActiveClient();
+  }
+
+  /// 强制断开在途请求（`http.Client.close()` 会让挂起的 send 立刻抛异常）
+  void _abortActiveClient() {
+    final client = _activeClient;
+    _activeClient = null;
+    try {
+      client?.close();
+    } catch (_) {}
+  }
+
+  /// 通知对端「本机已中止」，让它的 UI 也复位（best-effort，2 秒超时）
+  Future<void> _notifyPeerCancel() async {
+    final target = _confirmedPeer();
+    if (target == null || _peerCode.isEmpty) return;
+    final client = http.Client();
+    try {
+      await client
+          .post(
+            Uri.parse('http://${target.ip}:${target.port}/sync/cancel'),
+            headers: {SyncServer.codeHeader: _peerCode},
+          )
+          .timeout(const Duration(seconds: 2));
+      DebugLogService.instance.log('SYNC', '已通知对端中止同步');
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '通知对端中止失败（忽略）: $e');
+    } finally {
+      client.close();
+    }
+  }
+
+  /// 看门狗：超时先断连接，再兜一层硬复位——界面绝不允许永远转圈。
+  void _startWatchdog(DiscoveredPeer peer) {
+    _stopWatchdog();
+    _syncWatchdog = Timer(syncWatchdogTimeout, () {
+      if (!_syncing) return;
+      DebugLogService.instance.log('SYNC',
+          '同步看门狗触发（${syncWatchdogTimeout.inSeconds}s 无结果），强制中止');
+      _syncCancelRequested = true;
+      _abortActiveClient();
+      _syncWatchdog = Timer(const Duration(seconds: 5), () {
+        if (!_syncing) return;
+        _syncing = false;
+        _syncCancelled = true;
+        _lastError = const SyncException(SyncErrorCode.timeout, '同步看门狗超时');
+        _statusMessage = '同步超时已中止：${peer.deviceName}'
+            '（对端无响应或数据库繁忙，可稍后重试）';
+        DebugLogService.instance.log('SYNC', '看门狗硬复位（连接未能按时收尾）');
+        notifyListeners();
+      });
+    });
+  }
+
+  void _stopWatchdog() {
+    _syncWatchdog?.cancel();
+    _syncWatchdog = null;
+  }
+
+  /// 清空增量游标：下次同步走全量。
+  ///
+  /// 给「换了设备 / 重装过 / 怀疑漏数据」这种情况留的后悔药——增量同步的
+  /// 前提是「对端确实已经有旧数据」，一旦这个前提不成立（对端重装、清库），
+  /// 只有全量才能补回来。
+  Future<void> resetSyncProgress({bool quiet = false}) async {
+    _sentCursors.clear();
+    _recvCursors.clear();
+    try {
+      await DatabaseService.instance.setSetting(_cursorSettingKey, '{}');
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '清空增量游标失败: $e');
+    }
+    if (!quiet) {
+      _statusMessage = '已重置同步进度：下次同步会重新走全量';
+      DebugLogService.instance.log('SYNC', '用户重置同步进度（下次全量）');
+      notifyListeners();
+    }
+  }
+
+  // ── 双向握手（任务一）──
+
+  /// 接受对端配对请求（服务端回调）。
+  ///
+  /// 对端已在请求头出示了本机识别码（服务端门禁已校验），并把自己的识别码
+  /// 交了过来。本机记下它，于是 B 端也能「立即同步」，不再要求手输识别码。
+  Future<bool> _acceptPairRequest(SyncPairRequest req) async {
+    if (!req.valid) return false;
+    if (req.code == _deviceCode) return false; // 自己的码，忽略（防自环）
+    final name = req.deviceName.isNotEmpty
+        ? req.deviceName
+        : (req.address.isEmpty ? req.deviceId : req.address);
+    _peerCode = req.code;
+    _verifiedPeerName = name;
+    _verifiedPeerIp = req.address;
+    _verifiedPeerPort = req.port;
+    _scanIp = req.address;
+    _scanPort = req.port;
+    _pairState = SyncPairState.verified;
+    _pairDetail = '已配对：$name（${req.address}:${req.port}）· 对端已确认';
+    _statusMessage = '已接受「$name」的配对请求，现在可以互相同步';
+    _lastError = null;
+    _stopVerifyTimer();
+    await _persistPairState();
+    DebugLogService.instance
+        .log('SYNC', '接受配对请求：$name（${req.address}:${req.port}）');
+    notifyListeners();
+    return true;
+  }
+
+  /// 向对端发送配对请求（让对端也进入「已配对」）。
+  ///
+  /// 请求头带的是**对端的识别码**（证明本机确实知道它），体里带本机码。
+  /// 失败不抛异常：配对已经单向成立了，反向通知失败只是让对端需要再点一次。
+  Future<bool> _announcePairing(_PairTarget target) async {
+    if (_peerCode.isEmpty || _deviceCode.isEmpty) return false;
+    final client = http.Client();
+    try {
+      final response = await client
+          .post(
+            Uri.parse('http://${target.ip}:${target.port}/sync/pair'),
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              SyncServer.codeHeader: _peerCode,
+            },
+            body: jsonEncode({
+              'device_id': await DeviceService.instance.deviceId,
+              'device_name': await DeviceService.instance.deviceName,
+              'code': _deviceCode,
+              'port': _server.port,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
+      final label = target.name.isEmpty ? target.ip : target.name;
+      if (response.statusCode == 200) {
+        DebugLogService.instance.log('SYNC', '配对请求已送达 $label，对端也已确认');
+        return true;
+      }
+      DebugLogService.instance
+          .log('SYNC', '配对请求被 $label 拒绝：HTTP ${response.statusCode}');
+      return false;
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '配对请求发送失败（忽略）: $e');
+      return false;
+    } finally {
+      client.close();
+    }
+  }
+
+  // ── 配对状态 / 增量游标的持久化 ──
+
+  Future<void> _persistPairState() async {
+    try {
+      await DatabaseService.instance.setSetting(
+        _pairSettingKey,
+        jsonEncode({
+          'peer_code': _peerCode,
+          'verified_name': _verifiedPeerName,
+          'verified_ip': _verifiedPeerIp,
+          'verified_port': _verifiedPeerPort,
+          'state': _pairState.name,
+        }),
+      );
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '配对状态保存失败: $e');
+    }
+  }
+
+  /// 恢复上次会话的配对。**状态一律先落回 awaitingPeer**：连上才算数，
+  /// 免得「上次配过、这次对端没开」却显示「已配对」（旧 bug 的复现路径）。
+  Future<void> _loadPairState() async {
+    try {
+      final raw = await DatabaseService.instance.getSetting(_pairSettingKey);
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final code = (decoded['peer_code'] ?? '').toString();
+      if (code.isEmpty || _peerCode.isNotEmpty) return;
+      _peerCode = code;
+      _verifiedPeerName = (decoded['verified_name'] ?? '').toString();
+      _verifiedPeerIp = (decoded['verified_ip'] ?? '').toString();
+      _verifiedPeerPort = (decoded['verified_port'] as num?)?.toInt() ?? 0;
+      if (_verifiedPeerIp.isNotEmpty && _verifiedPeerPort > 0) {
+        _scanIp = _verifiedPeerIp;
+        _scanPort = _verifiedPeerPort;
+      }
+      _pairState = SyncPairState.awaitingPeer;
+      _pairDetail = '已恢复上次的识别码，正在等对端确认…';
+      DebugLogService.instance.log('SYNC', '已恢复上次的配对识别码（待重新核实）');
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '配对状态恢复失败: $e');
+    }
+  }
+
+  Future<void> _saveCursors() async {
+    try {
+      await DatabaseService.instance.setSetting(
+        _cursorSettingKey,
+        jsonEncode({
+          'sent': {
+            for (final e in _sentCursors.entries)
+              e.key: e.value.toIso8601String(),
+          },
+          'recv': {
+            for (final e in _recvCursors.entries)
+              e.key: e.value.toIso8601String(),
+          },
+        }),
+      );
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '增量游标保存失败: $e');
+    }
+  }
+
+  Future<void> _loadCursors() async {
+    try {
+      final raw = await DatabaseService.instance.getSetting(_cursorSettingKey);
+      if (raw == null || raw.trim().isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      void fill(Map<String, DateTime> into, Object? block) {
+        if (block is! Map) return;
+        block.forEach((key, value) {
+          final stamp = _parseStamp(value);
+          if (stamp != null) into[key.toString()] = stamp;
+        });
+      }
+
+      fill(_sentCursors, decoded['sent']);
+      fill(_recvCursors, decoded['recv']);
+      DebugLogService.instance.log('SYNC',
+          '已恢复增量游标：${_sentCursors.length} 台对端');
+    } catch (e) {
+      DebugLogService.instance.log('SYNC', '增量游标恢复失败: $e');
     }
   }
 
@@ -703,6 +1239,9 @@ class SyncEngine extends ChangeNotifier {
   }
 
   Future<void> stop() async {
+    // 先中止在途同步，再拆服务：否则同步 future 会挂在已关闭的服务端上
+    _stopWatchdog();
+    _abortActiveClient();
     if (Platform.isAndroid) {
       try {
         await _androidSyncChannel
@@ -715,6 +1254,23 @@ class SyncEngine extends ChangeNotifier {
     _stopVerifyTimer();
     _httpClient.close();
     _started = false;
+  }
+}
+
+/// 快照 → JSON 字节（在**后台 isolate** 里跑）。
+///
+/// 几十张配图 base64 进来就是几 MB，主 isolate 上 encode 会卡住 UI，
+/// 真机表现是「点同步后界面僵住几百毫秒到数秒」。
+List<int> _encodeSnapshotPayload(Map<String, dynamic> snapshot) =>
+    utf8.encode(jsonEncode(snapshot));
+
+/// JSON 字节 → 快照（同样在后台 isolate 里跑）；非法返回 null。
+Map<String, dynamic>? _decodeSnapshotPayload(List<int> bytes) {
+  try {
+    final dynamic parsed = jsonDecode(utf8.decode(bytes));
+    return parsed is Map<String, dynamic> ? parsed : null;
+  } catch (_) {
+    return null;
   }
 }
 
