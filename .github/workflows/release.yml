@@ -8,7 +8,7 @@
 #
 # 需要配置的 Repository Secrets（Settings → Secrets and variables → Actions）：
 #   ANDROID_KEYSTORE_BASE64   keystore 文件（.jks）的 base64 编码
-#   ANDROID_STORE_PASSWORD    keystore 密码
+#   ANDROID_KEYSTORE_PASSWORD keystore 密码
 #   ANDROID_KEY_ALIAS         密钥别名
 #   ANDROID_KEY_PASSWORD      密钥密码
 # 生成 base64（PowerShell）：
@@ -113,7 +113,7 @@ jobs:
       - name: 注入签名配置（从 Secrets 还原 keystore）
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD_RAW: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          STORE_PASSWORD_RAW: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS_RAW: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD_RAW: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
@@ -140,6 +140,19 @@ jobs:
           KEY_ALIAS="$(clean "${KEY_ALIAS_RAW:-}")"
           KEY_PASSWORD="$(clean "${KEY_PASSWORD_RAW:-}")"
           echo "口令长度：store=${#STORE_PASSWORD}  key=${#KEY_PASSWORD}  别名='${KEY_ALIAS}'"
+
+          # 口令读空基本只有一个原因：Secrets 里的名字和这里 env 块取的名字对不上
+          # （2026-10 就是这样：旧版 env 取的是 ANDROID_STORE_PASSWORD，实际配的叫
+          # ANDROID_KEYSTORE_PASSWORD，store 长度恒为 0，再被 keytool 报成
+          # 「口令与 keystore 不匹配」，看着像密码错了，其实根本没读到）。
+          # 所以这里先卡「有没有读到」，别让它流到 keytool 再变成误导性报错。
+          if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "::error::口令/别名为空（store=${#STORE_PASSWORD} 字符、key=${#KEY_PASSWORD} 字符、别名='${KEY_ALIAS}'）—— 请核对 Secrets 里的名字：ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS 必须与本步骤 env 块一致"
+            exit 1
+          fi
+          if [ -z "$KEY_PASSWORD" ]; then
+            echo "::warning::ANDROID_KEY_PASSWORD 为空（别名 '$KEY_ALIAS' 的私钥口令读不到），Gradle 签名多半会失败"
+          fi
 
           if [ -z "$KEYSTORE_BASE64" ]; then
             echo "::error::缺少 ANDROID_KEYSTORE_BASE64，请先在仓库 Secrets 中配置（见本文件头部说明）"
@@ -169,7 +182,7 @@ jobs:
           # 只验「能不能开」：这一步失败 Gradle 必然也签名失败，提前拦下并说清原因。
           if ! keytool -list -keystore android/app/release.jks -storepass "$STORE_PASSWORD" \
                  > /tmp/kt.out 2> /tmp/kt.err; then
-            echo "::error::keytool 打不开 release.jks —— ANDROID_STORE_PASSWORD 与 keystore 不匹配（或文件已损坏）"
+            echo "::error::keytool 打不开 release.jks —— ANDROID_KEYSTORE_PASSWORD 与 keystore 不匹配（或文件已损坏）"
             sed 's/^/    /' /tmp/kt.err
             exit 1
           fi
@@ -297,60 +310,30 @@ jobs:
       - name: 安装 / 检查 Inno Setup
         shell: pwsh
         run: |
-          # 判据只有一条：这个 ISCC.exe 现在能不能真跑起来 ——
-          # Test-Path 存在 + & "<path>" /? 正常返回（退出码 0）就算可用。
-          # 不再检查 ISCmplr.dll / Default.isl 这类内部文件，也不再卡版本号：
-          # 它们是 Inno Setup 的实现细节，跨小版本会挪位置或改名。6.7.1 上
-          # （choco 装好、路径完全正确）就是被那套判据判成「不可用」的，而
-          # 那个 if 什么都不打印，日志里只剩一句 ISCC=…，根本没法定位。
-          # 现在判据失败会把 ISCC 所在目录的内容打出来。
+          # 只看两件事：ISCC.exe 在不在；不在就用 choco 装。装完还在 = 直接认为可用。
+          # 不再用 & ISCC.exe /? 去探退出码 —— Inno Setup 打印帮助后原生退出码
+          # 就是 1，拿它当「可用」的判据必然误杀（2026-10 连红两轮：先栽在内部
+          # 文件清单上，又栽在 /? 的退出码上）。真正的体检交给后面的编译步骤：
+          # .iss、路径、权限任何一处有问题，ISCC 自己会打印完整日志。
           function Get-IsccPath {
             $cands = @()
             if (${env:ProgramFiles(x86)}) { $cands += (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe') }
             if ($env:ProgramFiles)        { $cands += (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe') }
             $cands | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           }
-          function Test-IsccOk([string]$iscc) {
-            if (-not $iscc) { return $false }
-            if (-not (Test-Path -LiteralPath $iscc)) { return $false }
-            # 路径带空格（Program Files (x86)）：用 & "$iscc" 把整条路径当成
-            # 一个参数交给原生命令；不要拼命令行字符串，拼字符串会在空格处被
-            # 拆成两个 token，那正是这类判断「本机好、runner 挂」的常见来源。
-            #
-            # 探针期间临时放开 ErrorActionPreference：GitHub Actions 的 pwsh
-            # 包装器会注入 'Stop'，原生 exe 只要往 stderr 写一行就会变成终止性
-            # 异常，于是「能跑」被误判成「不可用」。
-            #
-            # $LASTEXITCODE 先置哨兵：进程起不来（缺 DLL / 位数不符）时
-            # PowerShell 不会更新它，会把上一条命令的退出码留在那里，白判成可用。
-            $prev = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            $global:LASTEXITCODE = -9999
-            try { & "$iscc" /? *> $null } catch { $global:LASTEXITCODE = -9999 }
-            finally { $ErrorActionPreference = $prev }
-            if ($LASTEXITCODE -eq 0) { return $true }
-            Write-Host "  ISCC 自检未通过：$iscc （退出码 $LASTEXITCODE）"
-            return $false
-          }
           $iscc = Get-IsccPath
-          if (-not (Test-IsccOk $iscc)) {
-            Write-Host 'ISCC 不可用，用 choco 安装/修复…'
-            & choco install innosetup --no-progress -y --force
-            # 「强制重装」时 choco 可能返回非 0（已安装 / 建议重启等），
-            # 成败以下面的可用性自检为准；同时清掉 $LASTEXITCODE ——
-            # GitHub Actions 的 pwsh 包装器会拿它当步骤退出码，否则会误报失败。
+          if (-not $iscc) {
+            Write-Host '未找到 ISCC.exe，用 choco 安装…'
+            & choco install innosetup --no-progress -y
+            # 只记录，不作为硬失败判据：choco 对「已安装 / 建议重启」会返回非 0。
+            Write-Host "choco 退出码：$LASTEXITCODE"
+            # 清掉 $LASTEXITCODE —— GitHub Actions 的 pwsh 包装器会拿它当步骤
+            # 退出码，否则会出现「装好了但这一步显示失败」。
             $global:LASTEXITCODE = 0
             $iscc = Get-IsccPath
           }
-          if (-not (Test-IsccOk $iscc)) {
-            # 失败时把目录里到底有什么打出来，免得下次又只剩一句「不可用」。
-            if ($iscc) {
-              $isccDir = Split-Path -Parent $iscc
-              Write-Host "ISCC 所在目录：$isccDir"
-              Get-ChildItem -LiteralPath $isccDir -ErrorAction SilentlyContinue |
-                ForEach-Object { Write-Host ('  ' + $_.Name) }
-            }
-            throw "Inno Setup 不可用（ISCC=$iscc）"
+          if (-not $iscc -or -not (Test-Path -LiteralPath $iscc)) {
+            throw "Inno Setup 不可用：常见目录里没有 ISCC.exe，choco 安装后仍未找到"
           }
           Write-Host "ISCC: $iscc"
           Write-Host "版本: $((Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion)"
