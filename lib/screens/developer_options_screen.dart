@@ -22,7 +22,7 @@ class DeveloperOptionsScreen extends StatefulWidget {
 
 class _DeveloperOptionsScreenState extends State<DeveloperOptionsScreen> {
   // v1.0.2 设计审查修复：不再明文存密码/写注释，改 SHA-256 哈希比对
-  // v1.35.5：哈希改为编译期注入——本地调试用
+  // v1.35.6：哈希改为编译期注入——本地调试用
   //   flutter run -d windows --dart-define=DEV_PW_HASH=<sha256 十六进制>
   // 不传时回落到默认哈希，正式包行为不变。生成方法见 docs/开发者选项.md
   static const _passwordHash = String.fromEnvironment('DEV_PW_HASH',
