@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 import 'package:file_picker/file_picker.dart';
 import '../services/app_state.dart';
 import '../services/theme_service.dart';
+import '../utils/import_source_filter.dart';
+import '../widgets/import_drop_zone.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../utils/responsive.dart';
 import '../widgets/guide/guide_anchor.dart';
@@ -21,7 +23,9 @@ class ImportScreen extends StatefulWidget {
 }
 
 class _ImportScreenState extends State<ImportScreen> {
-  List<String> _selectedFiles = [];
+  /// 已选文件（入口层临时列表：多选 / 拖拽都往这里并，点「开始 AI 导入」
+  /// 后交给应用层，随后清空）
+  final List<String> _selectedFiles = [];
 
   /// v1.27 后台导入：示例题库任务交给应用层，立即回首页（进度在首页展示，
   /// 完成后弹提示），不再阻塞在导入页。
@@ -53,21 +57,89 @@ class _ImportScreenState extends State<ImportScreen> {
     );
   }
 
+  /// 系统文件选择器（多选）。
+  ///
+  /// file_picker 13.x 的 [FilePicker.pickFiles] **本身就是多选**：13.x 是 API
+  /// 重写版，`allowMultiple` 参数随 `FilePickerResult` 一起去掉了，桌面端
+  /// （资源管理器）与移动端（系统文档选择器）都支持一次选多个，返回
+  /// `List<PlatformFile>`，取消即空列表。选中后逐个过滤并入已选列表，
+  /// 点「开始 AI 导入」时由 [AppState.startBackgroundImport] 依次解析、
+  /// 逐个排队预览——队列逻辑沿用既有实现。
   Future<void> _pickFiles() async {
-    // file_picker 13.x：pickFiles 恒为多选，返回 List<PlatformFile>，取消即空列表
-    final files = await FilePicker.pickFiles(
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '选择题库文件（可多选）',
       type: FileType.custom,
-      allowedExtensions: ['doc', 'docx', 'json', 'pdf'], // v1.0.2: 支持 JSON 题库；v12: 支持 PDF
+      // v1.35.4：入口统一口径 —— 只放 JSON / DOCX / PDF
+      allowedExtensions: ImportSourceFilter.supportedExtensions,
     );
-
-    if (files.isNotEmpty) {
-      setState(() {
-        _selectedFiles = files.map((f) => f.path).whereType<String>().toList();
-      });
-    }
+    if (picked.isEmpty || !mounted) return;
+    final result = await ImportSourceFilter.collect(
+        picked.map((f) => f.path).whereType<String>());
+    if (!mounted) return;
+    _addFiles(result);
   }
 
-  /// DOC/DOCX/PDF 走 AI 解析；JSON 直接入库（与应用层同一口径）
+  /// 把过滤后的文件并入已选列表（去重、保序），并提示被跳过的格式。
+  /// 返回 false 表示一个能导入的文件都没有。
+  bool _addFiles(ImportSourceCollectResult result) {
+    _showSkippedHint(result);
+    if (result.files.isEmpty) {
+      _snack('没有可导入的文件（支持 JSON / DOCX / PDF）');
+      return false;
+    }
+    setState(() {
+      final seen = _selectedFiles.map((f) => f.toLowerCase()).toSet();
+      for (final file in result.files) {
+        if (seen.add(file.toLowerCase())) _selectedFiles.add(file);
+      }
+    });
+    return true;
+  }
+
+  /// 桌面端拖拽落地：文件 / 文件夹一次性塞进导入流程。
+  ///
+  /// 「松开」即视为用户已经决定导入，所以直接走 [_startImport]：
+  /// DOCX/PDF 由应用层逐个解析并排队预览（预览队列逻辑一行没改），
+  /// JSON 直接入库。
+  void _onDroppedFiles(ImportSourceCollectResult result) {
+    if (!mounted) return;
+    if (!_addFiles(result)) return;
+    final appState = context.read<AppState>();
+    if (appState.importTaskActive) {
+      _snack('已有导入任务进行中，文件已加入已选列表');
+      return;
+    }
+    unawaited(_startImport(appState));
+  }
+
+  /// 被跳过的格式 / 文件夹：一次说清，别让用户以为文件丢了
+  void _showSkippedHint(ImportSourceCollectResult result) {
+    final lines = <String>[];
+    if (result.rejected.isNotEmpty) {
+      final names = result.rejected.take(3).map(p.basename).join('、');
+      final more =
+          result.rejected.length > 3 ? ' 等 ${result.rejected.length} 个' : '';
+      final hasLegacyDoc =
+          result.rejected.any((f) => f.toLowerCase().endsWith('.doc'));
+      lines.add('已跳过不支持的文件：$names$more'
+          '${hasLegacyDoc ? '（旧版 .doc 请先用 Word 另存为 .docx）' : ''}');
+    }
+    if (result.skippedDirectories.isNotEmpty) {
+      lines.add('${result.skippedDirectories.length} 个文件夹无法读取，已跳过');
+    }
+    if (lines.isNotEmpty) _snack(lines.join('\n'));
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// DOC/DOCX/PDF 走 AI 解析；JSON 直接入库（与应用层同一口径）。
+  ///
+  /// v1.35.4 起入口只放行 docx/pdf/json，`.doc` 保留判定只为兼容历史调用
+  /// （拖入 .doc 会在入口被拦下并提示另存为 .docx）。
   bool _isAiDoc(String path) {
     final lower = path.toLowerCase();
     return lower.endsWith('.docx') ||
@@ -75,11 +147,78 @@ class _ImportScreenState extends State<ImportScreen> {
         lower.endsWith('.pdf');
   }
 
+  /// 开始导入（页底按钮与桌面拖拽共用同一入口）。
+  ///
+  /// 顺序与既有页面逻辑一致：无 Key 先拦（直达设置）→ JSON 直接入库 →
+  /// DOCX/PDF 交给应用层后台解析并逐个排队预览。
+  Future<void> _startImport(AppState appState) async {
+    if (_selectedFiles.isEmpty) {
+      _snack('请先选择文件');
+      return;
+    }
+    // 后台导入互斥在应用层是静默 return——UI 层提前明示
+    if (appState.importTaskActive) {
+      _snack('已有导入任务进行中');
+      return;
+    }
+    // v1.28.1 新生引导：DOCX/PDF 依赖 AI 解析，无 Key 时前置拦截并直达设置页，
+    // 不再让后台任务失败后只弹一个"知道了"
+    final aiFiles = _selectedFiles.where(_isAiDoc).toList();
+    if (aiFiles.isNotEmpty && !appState.settings.isConfigured) {
+      await showDialog<void>(
+        context: context,
+        builder: (dlgCtx) => AlertDialog(
+          title: const Text('需要 API Key'),
+          content: const Text(
+              'DOCX/PDF 导入使用 AI 解析题目，需要先配置 API Key。\n\n'
+              '没有 Key？可以先点「一键导入示例题库」离线体验；'
+              'JSON 题库文件也无需 Key。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dlgCtx),
+              child: const Text('知道了'),
+            ),
+            FilledButton.icon(
+              icon: const Icon(Icons.settings, size: 16),
+              label: const Text('去设置'),
+              onPressed: () {
+                Navigator.pop(dlgCtx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                      builder: (_) => const SettingsScreen(group: SettingsGroup.ai)),
+                );
+              },
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+    // v1.27 后台导入：JSON 直接入库 + DOCX 走 AI 解析，全部在应用层执行；
+    // 立即回首页（进度在首页展示、完成弹提示），导入期间可随时离开本页。
+    final jsonFiles =
+        _selectedFiles.where((f) => f.toLowerCase().endsWith('.json')).toList();
+    NatsumeImportTask.discarded = false;
+    unawaited(appState.startBackgroundImport(
+      jsonFiles: jsonFiles,
+      aiFiles: aiFiles,
+    ));
+    setState(() => _selectedFiles.clear());
+    _snack('导入任务已开始，进度见开始页顶部卡片，可先浏览其他页面');
+    Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
     // v1.0.2 设计审查修复：整页蓝白硬编码 → 主题色（此前切换任意主题都不变）
     final ac = AppThemeColors.of(context);
-    return Scaffold(
+    // v1.35.4 入口优化：桌面端整页可接收文件拖拽（移动端/测试环境为透明包装）。
+    // 这里只 select 一个 bool，避免导入进度的高频 notifyListeners 触发整页重建。
+    final isProcessing =
+        context.select<AppState, bool>((s) => s.importTaskActive);
+    final page = Scaffold(
       backgroundColor: ac.background,
       appBar: AppBar(
         title: const Text('导入题库'),
@@ -221,7 +360,7 @@ class _ImportScreenState extends State<ImportScreen> {
                         Icon(Icons.cloud_upload_outlined,
                             size: 48, color: ac.textSecondary),
                         const SizedBox(height: 12),
-                        Text('选择文件（DOCX / PDF / JSON）',
+                        Text('选择文件（DOCX / PDF / JSON，可多选）',
                             style: TextStyle(
                                 fontSize: NatsumeType.h3, color: ac.accent)),
                         const SizedBox(height: 4),
@@ -238,6 +377,15 @@ class _ImportScreenState extends State<ImportScreen> {
                             '导入 .json 题库文件（可多选），无需 AI 解析，题目答案直接入库，完成后显示导入报告',
                             style: TextStyle(
                                 fontSize: NatsumeType.body, color: ac.textSecondary)),
+                        // v1.35.4 入口优化：桌面端支持拖拽（拖文件夹会递归展开）
+                        if (ImportDropZone.isDesktopPlatform) ...[
+                          const SizedBox(height: 4),
+                          Text('桌面端还可以直接把文件或文件夹拖到这里，松开即批量导入',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  color: ac.textSecondary)),
+                        ],
                       ],
                     ),
                   ),
@@ -358,80 +506,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       ),
                       onPressed: isProcessing
                           ? null
-                          : () {
-                              if (_selectedFiles.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text('请先选择文件')),
-                                );
-                                return;
-                              }
-                              // 后台导入互斥在应用层是静默 return——UI 层提前明示
-                              if (appState.importTaskActive) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                      content: Text('已有导入任务进行中')),
-                                );
-                                return;
-                              }
-                              // v1.28.1 新生引导：DOCX/PDF 依赖 AI 解析，无 Key 时
-                              // 前置拦截并直达设置页，不再让后台任务失败后
-                              // 只弹一个"知道了"
-                              final aiFiles =
-                                  _selectedFiles.where(_isAiDoc).toList();
-                              final hasAi = aiFiles.isNotEmpty;
-                              if (hasAi && !appState.settings.isConfigured) {
-                                showDialog<void>(
-                                  context: context,
-                                  builder: (dlgCtx) => AlertDialog(
-                                    title: const Text('需要 API Key'),
-                                    content: const Text(
-                                        'DOCX/PDF 导入使用 AI 解析题目，需要先配置 API Key。\n\n'
-                                        '没有 Key？可以先点「一键导入示例题库」离线体验；'
-                                        'JSON 题库文件也无需 Key。'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(dlgCtx),
-                                        child: const Text('知道了'),
-                                      ),
-                                      FilledButton.icon(
-                                        icon: const Icon(Icons.settings, size: 16),
-                                        label: const Text('去设置'),
-                                        onPressed: () {
-                                          Navigator.pop(dlgCtx);
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                                builder: (_) =>
-                                                    const SettingsScreen(group: SettingsGroup.ai)),
-                                          );
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                );
-                                return;
-                              }
-                              // v1.27 后台导入：JSON 直接入库 + DOCX 走 AI 解析，
-                              // 全部在应用层执行；立即回首页（进度在首页展示、
-                              // 完成弹提示），导入期间可随时离开本页。
-                              final jsonFiles = _selectedFiles
-                                  .where((f) =>
-                                      f.toLowerCase().endsWith('.json'))
-                                  .toList();
-                              NatsumeImportTask.discarded = false;
-                              unawaited(appState.startBackgroundImport(
-                                jsonFiles: jsonFiles,
-                                aiFiles: aiFiles,
-                              ));
-                              setState(() => _selectedFiles.clear());
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                    content: Text(
-                                        '导入任务已开始，进度见开始页顶部卡片，可先浏览其他页面')),
-                              );
-                              Navigator.pop(context);
-                            },
+                          : () => _startImport(appState),
                     ),
                   ),
 
@@ -452,6 +527,12 @@ class _ImportScreenState extends State<ImportScreen> {
           );
         },
       ),
+    );
+
+    return ImportDropZone(
+      enabled: !isProcessing,
+      onFiles: _onDroppedFiles,
+      child: page,
     );
   }
 }

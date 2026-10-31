@@ -71,7 +71,7 @@ Google、阿里云、月之暗面、MiniMax 的**商标图形**，归各公司�
 | provider | MIT | 状态管理 |
 | sqflite / sqflite_common_ffi | BSD-2-Clause | 本地数据库 |
 | path / http / http_parser / crypto / intl / timezone | BSD-3-Clause | 基础工具 |
-| file_picker / archive / xml / fl_chart / shimmer / audioplayers / uuid / image | MIT | 文件、图表、音效、图像 |
+| file_picker / desktop_drop / archive / xml / fl_chart / shimmer / audioplayers / uuid / image | MIT | 文件、图表、音效、图像 |
 | share_plus / shared_preferences / path_provider / qr / mobile_scanner / flutter_secure_storage / flutter_local_notifications | BSD-3-Clause | 平台能力 |
 | pointycastle | MIT（BSD 风格） | AES 加密 |
 | flutter_timezone | MIT | 时区 |
