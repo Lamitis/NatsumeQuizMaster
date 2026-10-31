@@ -49,8 +49,16 @@ class _QuickStartScreenState extends State<QuickStartScreen> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      final info = await context.read<AppState>().getUnfinishedSessionInfo();
-      if (mounted) setState(() => _unfinished = info);
+      try {
+        final info = await context.read<AppState>().getUnfinishedSessionInfo();
+        if (mounted) setState(() => _unfinished = info);
+      } catch (_) {
+        // v1.35.7：查询失败（典型场景：库已 close，例如 App 退出或测试
+        // tearDown 后这条 post-frame 查询才落地）不该抛到页面之外。
+        // 断点续刷只是入口便利，少了它照样能刷题；而抛出去会让这类
+        // 「测试已结束、库已关」的时序变成未处理异步异常，
+        // 进而把 widget 测试判成随机失败（dpi_stats_test 曾因此偶发挂）。
+      }
     });
   }
 

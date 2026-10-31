@@ -16,7 +16,7 @@ library;
 /// 把关——改了 pubspec 却忘了同步这里，测试会红。这正是「APK versionName 误标」
 /// 那类事故的根因，所以用测试锁住，而不是靠记性。
 const String kAppVersion =
-    String.fromEnvironment('APP_VERSION', defaultValue: 'v1.35.6');
+    String.fromEnvironment('APP_VERSION', defaultValue: 'v1.35.7');
 
 /// 构建号（形如 `33`），同样来自 `pubspec.yaml` 的 `+<构建号>`：
 /// CI / 发版脚本注入 `--dart-define=APP_BUILD=<构建号>`。
@@ -24,7 +24,7 @@ const String kAppVersion =
 /// 它**不进主版本字符串**（[kAppVersion] 里不含构建号），只在需要精确定位
 /// 是哪个构建产物时以 `Build 33` 的形式出现——用户看版本、开发者对产物。
 const String kAppBuildNumber =
-    String.fromEnvironment('APP_BUILD', defaultValue: '34');
+    String.fromEnvironment('APP_BUILD', defaultValue: '35');
 
 /// 刷题数量「全部」哨兵值（9999）
 const int kQuestionCountAll = 9999;
