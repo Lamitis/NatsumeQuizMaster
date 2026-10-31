@@ -63,6 +63,12 @@ NatsumeQuizMaster 是一个面向备考场景的本地刷题工具，目标是�
 | 接口兼容 | 兼容任意 OpenAI 兼容接口（官方 API 与第三方订阅均可） |
 | 连接测试 | 设置页可测试 API 可用性，并拉取可用模型列表 |
 
+<p align="center">
+  <img src="docs/screenshots/desktop_ai_quiz_analysis.png" width="800" alt="AI 逐题解析（桌面端）">
+  <br>
+  <sub><b>AI 逐题解析</b>：抓题眼 → 理逻辑 → 指坑点 → 划重点，答案绿 / 题眼蓝 / 避坑红</sub>
+</p>
+
 ### 刷题
 
 | 功能 | 说明 |
@@ -120,6 +126,12 @@ NatsumeQuizMaster 是一个面向备考场景的本地刷题工具，目标是�
 | 每日提醒 | 本地时区排程 + 前台服务保活，按时提醒刷题 |
 | 寒暑假模式 | 假期暂停提醒与复习排期，不中断连续打卡 |
 
+<p align="center">
+  <img src="docs/screenshots/desktop_sync.png" width="800" alt="局域网同步（桌面端）">
+  <br>
+  <sub><b>局域网同步</b>：同一 Wi-Fi 下自动发现设备 → 识别码 / 扫码配对 → 双向交换题库与刷题进度，数据不经过云端</sub>
+</p>
+
 ### 本地知识库 / 本地模型 / 插件（v13 新增）
 
 | 功能 | 说明 |
@@ -135,6 +147,74 @@ NatsumeQuizMaster 是一个面向备考场景的本地刷题工具，目标是�
 > 插件开发见 [docs/插件开发指南.md](docs/插件开发指南.md)；签名与分发见
 > [docs/签名与分发.md](docs/签名与分发.md)；同步说明见
 > [docs/同步说明.md](docs/同步说明.md)。
+
+---
+
+## 📸 界面预览 (Screenshots)
+
+> 桌面端为 Windows 版（1280 宽窗口），移动端为 Android 版；点击图片可查看原图。
+
+<p align="center">
+  <img src="docs/screenshots/desktop_home.png" width="800" alt="首页（桌面端）">
+  <br>
+  <sub><b>首页</b> —— 题库卡片、今日进度与断点续刷入口</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_ai_quiz_analysis.png" width="800" alt="AI 逐题解析（桌面端）">
+  <br>
+  <sub><b>AI 逐题解析</b> —— 题眼破题法四步拆解，关键词分色高亮</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_ai_assistant.png" width="800" alt="小鲸助教（桌面端）">
+  <br>
+  <sub><b>小鲸助教</b> —— 应用内悬浮陪伴：连胜打气、错题提醒、随身追问</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_custom_quiz.png" width="800" alt="自由组题（桌面端）">
+  <br>
+  <sub><b>自由组题</b> —— 题库 → 知识点 → 题型 → 题量 → 模式，一次确认即可开刷</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_stats.png" width="800" alt="学习统计（桌面端）">
+  <br>
+  <sub><b>学习统计</b> —— 年度热力图、近一年双 Y 轴趋势、正确率排行</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_sync.png" width="800" alt="局域网同步（桌面端）">
+  <br>
+  <sub><b>局域网同步</b> —— 同网段设备发现、双向配对、增量交换题库与进度</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_schedule.png" width="800" alt="待办与复习排期（桌面端）">
+  <br>
+  <sub><b>待办 / 复习排期</b> —— FSRS-5 按遗忘曲线排出到期题目</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_import_export.png" width="800" alt="导入导出（桌面端）">
+  <br>
+  <sub><b>导入 / 导出</b> —— DOCX / PDF / JSON 导入，题库与整库备份导出</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/desktop_settings.png" width="800" alt="设置中心（桌面端）">
+  <br>
+  <sub><b>设置中心</b> —— 接口与模型、回答风格、主题、同步与网络诊断</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/mobile_home.jpg" width="250" alt="主界面（Android）">
+  <img src="docs/screenshots/mobile_start.jpg" width="250" alt="开始刷题（Android）">
+  <img src="docs/screenshots/mobile_profile.jpg" width="250" alt="我的（Android）">
+  <br>
+  <sub><b>移动端</b> —— 主界面 · 开始刷题 · 我的（手机底部导航，宽屏自动切左侧导航）</sub>
+</p>
 
 ---
 
@@ -235,7 +315,7 @@ Get-FileHash .\Natsume-v1.29.0-windows-setup.exe -Algorithm SHA256
 
 - **完整的自动化测试套件**，覆盖判题、复习算法、数据层、导入解析（含 PDF 图文抽取与配图归属）、同步、布局自适应等
   （每次 push 由 [GitHub Actions](https://github.com/Lamitis/NatsumeQuizMaster/actions) 自动执行，见上方 CI 徽章）
-- 数据库 schema v15，外键级联、索引优化、事务一致性（v15＝题库分类树，v12＝题目配图）
+- 数据库 schema v17，外键级联、索引优化、事务一致性（v15＝题库分类树，v12＝题目配图）
 - 每次发版依次执行：静态分析（0 error / 0 warning）→ 全量测试 → 混淆构建 → **组件 / 权限 / 文案 / 资源四维基线对照校验** → 签名校验
 
 发布历程：2026 年 6 月 15 日立项 → 8 月完成 42 项修复与 AES 加密 →
