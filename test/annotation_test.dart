@@ -109,7 +109,6 @@ void main() {
       c.setTool(AnnoTool.select);
       expect(c.selectAt(const Offset(280, 280), canvas), isTrue);
       expect(c.selectedIndex, 0);
-      // 拖动平移
       c.moveSelected(const Offset(40, 40), canvas);
       expect(c.strokes[0].pts[0], closeTo(0.7, 1e-9));
       c.deleteSelected();
