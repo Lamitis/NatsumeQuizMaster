@@ -178,7 +178,7 @@ class _QuizScreenState extends State<QuizScreen> {
     if (_annoPersistent &&
         _anno.strokes.isNotEmpty &&
         _lastQuestionId != null) {
-      AnnotationService.instance.save(_lastQuestionId!, _anno.strokes);
+      _saveAnnoQuietly(_lastQuestionId!, _anno.strokes);
     }
     _anno.dispose();
     _followUpController.dispose();
@@ -257,7 +257,7 @@ class _QuizScreenState extends State<QuizScreen> {
           if (_annoPersistent &&
               _anno.strokes.isNotEmpty &&
               _lastQuestionId != null) {
-            AnnotationService.instance.save(_lastQuestionId!, _anno.strokes);
+            _saveAnnoQuietly(_lastQuestionId!, _anno.strokes);
           }
           _annotating = false;
           _annoPersistent = false;
@@ -282,7 +282,7 @@ class _QuizScreenState extends State<QuizScreen> {
             });
             // v1.0.3 手写批注：预载新题持久批注（已答/背题进入即可见，REQ-006；
             // 渲染条件仍控制未作答时不显示）
-            AnnotationService.instance.load(qid).then((strokes) {
+            _loadAnnoQuietly(qid, (strokes) {
               if (!mounted || _annotating) return;
               if (appState.currentQuestion?.id != qid) return; // 又切题了
               if (strokes.isEmpty) return;
@@ -668,7 +668,7 @@ class _QuizScreenState extends State<QuizScreen> {
       _annoPersistent = true;
       final qid = appState.currentQuestion?.id;
       if (qid != null) {
-        AnnotationService.instance.load(qid).then((strokes) {
+        _loadAnnoQuietly(qid, (strokes) {
           if (!mounted || _annotating) return;
           if (appState.currentQuestion?.id != qid) return; // 已切题
           _anno.loadFrom(strokes);
@@ -689,9 +689,29 @@ class _QuizScreenState extends State<QuizScreen> {
     if (_annoPersistent) {
       final qid = appState.currentQuestion?.id;
       if (qid != null) {
-        AnnotationService.instance.save(qid, _anno.strokes);
+        _saveAnnoQuietly(qid, _anno.strokes);
       }
     }
+  }
+
+  /// 批注落库：fire-and-forget，但**兜住异常**。
+  ///
+  /// 切题 / 完成编辑 / 退出页面三处保存都不等结果（等 UI 白等），可写盘失败
+  /// （磁盘忙、App 正在退出、数据库已关闭）时抛出的 Future 异常没人接，会直接
+  /// 掀翻当前 zone：线上是控制台红字，测试里就是「failed after test
+  /// completion」——用例全绿却让整条构建变红（v1.36.1 修的就是这个）。
+  /// 批注保存失败最坏只是「下次进这题看不到笔迹」，不该升级成崩溃，
+  /// 所以这里只记一条日志。
+  void _saveAnnoQuietly(int questionId, List<InkStroke> strokes) {
+    unawaited(AnnotationService.instance.save(questionId, strokes).catchError(
+        (Object e) => debugPrint('批注保存失败（题 $questionId）：$e')));
+  }
+
+  /// 批注回读：同上——fire-and-forget 但兜住异常
+  /// （页面可能已销毁、库可能已关，读不到就当这题没批注）。
+  void _loadAnnoQuietly(int questionId, void Function(List<InkStroke>) onLoaded) {
+    unawaited(AnnotationService.instance.load(questionId).then(onLoaded,
+        onError: (Object e) => debugPrint('批注回读失败（题 $questionId）：$e')));
   }
 
   // ======================== v1.0.3 PC 快捷键（仅桌面平台） ========================

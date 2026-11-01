@@ -3,12 +3,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
+import 'package:natsume_quiz_master/models/ink_annotation.dart';
 import 'package:natsume_quiz_master/models/question.dart';
 import 'package:natsume_quiz_master/models/question_bank.dart';
 import 'package:natsume_quiz_master/screens/quiz_screen.dart';
 import 'package:natsume_quiz_master/screens/practice_screen.dart' show PracticeTiming;
 import 'package:natsume_quiz_master/widgets/annotation_canvas.dart';
 import 'package:natsume_quiz_master/widgets/annotation_controller.dart';
+import 'package:natsume_quiz_master/services/annotation_service.dart';
 import 'package:natsume_quiz_master/services/app_state.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
@@ -20,6 +22,14 @@ import 'package:natsume_quiz_master/services/theme_service.dart';
 /// 永久挂起——所有被 await 的 DB 操作必须包 tester.runAsync；
 /// UI 内 fire-and-forget 的 DB 调用不阻塞帧渲染，无碍。
 /// 落库/回读行为由 test/annotation_test.dart（纯逻辑）与模拟器验证覆盖。
+///
+/// **收尾纪律（v1.36.1）**：页面里的批注保存是 fire-and-forget，「写完」
+/// 的时机不在测试手里。以前只等固定 30ms 真实时间就结束，云端 CI 磁盘慢一
+/// 点就赢不了这个赌：tearDown 先关库，迟到的 `INSERT INTO
+/// question_annotations` 抛「This database has already been closed」，
+/// 记成 failed after test completion——用例其实全绿，构建却是红的。
+/// 现在一律按「回读到刚存的笔迹」收尾（[waitAnnotationSaved]），
+/// 并在 [teardownTree] 里把 dispose 兑底保存的写入也排空。
 void main() {
   setUp(() async {
     await DatabaseService.instance.close();
@@ -81,13 +91,57 @@ void main() {
     }
   }
 
+  /// 排空「测试已结束、写入还在路上」的窗口：真实时间与假时钟交替推进。
+  ///
+  /// 为什么要交替：ffi 写的完成回调要靠真实事件循环送达，而落在 FakeAsync
+  /// zone 的微任务只有 pump 才会被冲刷——单给真实时间或单给 pump 都推不动。
+  /// 这里给 20 × 20ms ≈ 400ms，比 `settleFrames` 里单次 30ms 宽裕一个数量级，
+  /// 云端 CI 的慢磁盘也够用。
+  Future<void> drainPendingWrites(WidgetTester tester) async {
+    for (var i = 0; i < 20; i++) {
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+  }
+
   /// 收尾：卸载树 + 把 FakeAsync 时钟推过 sqflite 锁警告
   /// Timer 的 10s 周期（pending timer 会让测试失败）
+  ///
+  /// 最后必须再排空一次写入：`pumpWidget(SizedBox)` 会把 QuizScreen 卸载，
+  /// dispose 里的「兑底保存」此刻才发出（fire-and-forget），不等它落库就走，
+  /// tearDown 关库会让这笔 INSERT 抛「database has already been closed」。
   Future<void> teardownTree(WidgetTester tester) async {
     await tester.pumpWidget(const SizedBox.shrink());
     await settleFrames(tester);
     await tester.pump(const Duration(seconds: 12));
     await settleFrames(tester);
+    await drainPendingWrites(tester);
+  }
+
+  /// 等某题的批注**真正落库**（默认最多 5s），返回回读到的笔迹。
+  ///
+  /// 这是「保存写完了」唯一可靠的信号：页面里的 `AnnotationService.save`
+  /// 没人 await，只能靠回读确认。回读本身必须包 [WidgetTester.runAsync]
+  /// （真实 zone）才拿得到结果；两次尝试之间照旧交替真实时间与 pump，
+  /// 好让挂起的那笔写入继续往前走。
+  Future<List<InkStroke>> waitAnnotationSaved(
+    WidgetTester tester,
+    int questionId, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    var strokes = const <InkStroke>[];
+    while (DateTime.now().isBefore(deadline)) {
+      strokes = await tester.runAsync(
+              () => AnnotationService.instance.load(questionId)) ??
+          const <InkStroke>[];
+      if (strokes.isNotEmpty) return strokes;
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    return strokes;
   }
 
   testWidgets('REQ-001/005：正常模式有批注入口，练习模式无', (tester) async {
@@ -144,6 +198,7 @@ void main() {
     final appState = await seedAndStart(tester);
     await tester.pumpWidget(host(appState, const QuizScreen()));
     await settleFrames(tester);
+    final qid = appState.currentQuestion!.id!;
 
     // 造已作答态：runAsync 里直接提交答案（答错留在本题；
     // 不走 UI tap 是为了绕开答题音效的 platform channel）
@@ -165,6 +220,15 @@ void main() {
     await tester.tap(find.text('完成 (Esc)'));
     await settleFrames(tester);
     expect(find.text('完成 (Esc)'), findsNothing);
+
+    // REQ-006 的核心是「持久」：完成编辑即落库，下次进来还能回读。
+    // 断言必须等到写入真的完成（回读到笔迹），不能只 pump 固定帧数就收尾——
+    // save 是 fire-and-forget，写盘在真实事件循环里跑，云端 CI 慢过那点
+    // 固定等待时，tearDown 先关库，迟到的 INSERT 就会报「database has
+    // already been closed」。
+    final saved = await waitAnnotationSaved(tester, qid);
+    expect(saved, isNotEmpty, reason: '完成编辑后应能回读到刚画的笔迹');
+    expect(saved.first.frame, isNotEmpty, reason: '笔迹坐标系要一起存下来');
 
     await teardownTree(tester);
   });

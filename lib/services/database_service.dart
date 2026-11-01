@@ -3398,8 +3398,18 @@ class DatabaseService {
     }
     if (window == '7d' || window == '30d') {
       final days = window == '7d' ? 7 : 30;
-      where.add("s.last_answered_at IS NOT NULL AND "
-          "datetime(s.last_answered_at) >= datetime('now', 'localtime', '-$days days')");
+      // 下界在 Dart 侧算好再绑进去，别让 SQLite 的 'localtime' 参与日期算术：
+      // 库里的作答时间是 Dart 的**本地墙钟**字符串，而
+      // `datetime('now','localtime','-N days')` 是「本地墙钟减 N 天」——
+      // 这 N 天一旦跨过夏令时切换（回拨 / 前拨 1 小时），两者就会错开 1 小时，
+      // 边界上的题被误算进/误排除出「近 N 天」（v1.36.1 修复：太平洋时区
+      // 11/1 回拨当天，7 天前的那一刻被当成窗口内）。
+      // 「近 N 天」在这里取严格的 N×24 小时，与 UI 文案一致。
+      where.add('s.last_answered_at IS NOT NULL AND '
+          'datetime(s.last_answered_at) >= datetime(?)');
+      args.add(DateTime.now()
+          .subtract(Duration(days: days))
+          .toIso8601String());
     }
 
     final orderBy = recentFirst
