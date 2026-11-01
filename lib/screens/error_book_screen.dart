@@ -1,10 +1,14 @@
-﻿import '../utils/app_constants.dart';
+﻿import 'dart:async';
+import 'dart:convert';
+
+import '../utils/app_constants.dart';
 import '../utils/design_tokens.dart';
 import '../services/theme_service.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/question.dart';
 import '../services/app_state.dart';
+import '../services/plugins/plugin_prompt_service.dart';
 import '../services/docx_export_service.dart';
 import '../services/export_storage.dart';
 import 'package:flutter/services.dart';
@@ -41,6 +45,18 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   late String _filter = widget.initialFilter;
   List<Map<String, dynamic>> _kpStats = [];
   bool _adviceLoading = false;
+
+  /// v1.37 P1：小抄生成中（读取错题 + 装配模板这段是同步可控的，AI 请求本身
+  /// 在弹窗里流式显示，所以这里只挡住按钮被连点）
+  bool _cheatSheetLoading = false;
+
+  /// 插件功能模板名。宿主只认这个名字，具体内容由插件 `prompts/cheat_sheet.md` 提供
+  static const String _cheatSheetTemplate = 'cheat_sheet';
+
+  /// 塞进模板的错题上限。小抄是「考前翻一眼」的东西，题越多越不像小抄，
+  /// 而且题干一起塞进上下文会把 token 顶上去（一份 10 题的小抄足够覆盖
+  /// 当前范围最扎手的那几道）。
+  static const int _cheatSheetMaxQuestions = 10;
 
   static const _filters = [
     ('all', '全部'),
@@ -392,6 +408,132 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         SnackBar(content: Text('生成建议失败：$e')),
       );
     }
+  }
+
+  /// v1.37 P1：考前小抄（宿主代劳 · 插件提供模板）
+  ///
+  /// 流程：宿主查库（当前筛选 + 已选题库）→ 挑错得最多的 N 道 → 拼成纯文本
+  /// → 填进**已启用插件**的 `prompts/cheat_sheet.md` 模板占位符 → 交给 AI。
+  ///
+  /// 三处刻意的取舍：
+  /// · **模板缺失就明说**：没有插件提供小抄模板时不偷偷用宿主提示词顶替，
+  ///   否则用户以为「插件生效了」，实际生成的是宿主的通用总结；
+  /// · **题量封顶**：只带最扎手的 10 道，小抄才有「抄」的密度；
+  /// · **图片占位符去掉**：AI 看不到图，留着 `⟦img:1⟧` 只会被抄进正文。
+  Future<void> _generateCheatSheet() async {
+    final appState = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (_guard(appState)) return;
+    final ai = appState.aiService;
+    if (ai == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('请先在「设置」里配置 AI 的 API Key')),
+      );
+      return;
+    }
+    if (PluginPromptService.instance.template(_cheatSheetTemplate) == null) {
+      messenger.showSnackBar(const SnackBar(
+        duration: Duration(seconds: 6),
+        content: Text('没有已启用的插件提供考前小抄模板（prompts/cheat_sheet.md）。'
+            '请到「世界总览 → 插件市场」安装并启用对应插件后重试。'),
+      ));
+      return;
+    }
+
+    final bankIds =
+        _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
+    setState(() => _cheatSheetLoading = true);
+    List<({Question question, int answered, int correct, FSRSCardState? card})>
+        cards;
+    try {
+      cards = await appState.getErrorQuestionCards(_filter, bankIds: bankIds);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cheatSheetLoading = false);
+      messenger.showSnackBar(SnackBar(content: Text('读取错题失败：$e')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _cheatSheetLoading = false);
+
+    // 排序口径与「最薄弱知识点」一致：错得越多越该背
+    final picked = cards.where((c) => c.question.id != null).toList()
+      ..sort((a, b) => _wrongCountOf(b).compareTo(_wrongCountOf(a)));
+    if (picked.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('当前范围下没有错题，先做几道再来生成小抄。')),
+      );
+      return;
+    }
+    final limited = picked.take(_cheatSheetMaxQuestions).toList();
+
+    final label = _filters.firstWhere((f) => f.$1 == _filter).$2;
+    final scopeLabel = _selectedBanks.isEmpty
+        ? '$label（全部题库）'
+        : '$label · ${_selectedBanks.length} 个题库';
+    final vars = <String, String>{
+      'ERROR_QUESTIONS': _formatCheatSheetQuestions(limited),
+      'ERROR_COUNT': '${limited.length}',
+      'SCOPE': scopeLabel,
+      'DATE': _dateStamp(DateTime.now()),
+      // 知识点面板的当前口径（没有就留空串：模板里那一行会变成空行，不会报错）
+      'KNOWLEDGE_POINTS':
+          _kpStats.take(6).map((s) => '${s['kp']}（${s['cnt']} 题）').join('、'),
+    };
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _CheatSheetDialog(
+        scopeLabel: scopeLabel,
+        questionCount: limited.length,
+        stream: ai.streamPluginTask(
+          template: _cheatSheetTemplate,
+          vars: vars,
+        ),
+      ),
+    );
+  }
+
+  /// 错了几次（作答次数 - 答对次数；答对次数缺失时按 0 算）
+  static int _wrongCountOf(
+      ({Question question, int answered, int correct, FSRSCardState? card})
+          it) {
+    final wrong = it.answered - it.correct;
+    return wrong < 0 ? 0 : wrong;
+  }
+
+  /// 填进 `{{ERROR_QUESTIONS}}` 的错题正文。
+  ///
+  /// 只写「背什么」必需的信息：题干、选项、正确答案、解析、错了几次。
+  /// 知识点写进标题行——小抄按知识点聚堆才好记。
+  String _formatCheatSheetQuestions(
+    List<({Question question, int answered, int correct, FSRSCardState? card})>
+        items,
+  ) {
+    final buffer = StringBuffer();
+    for (var i = 0; i < items.length; i++) {
+      final it = items[i];
+      final q = it.question;
+      final kp = (q.knowledgePoint ?? '').trim();
+      buffer.writeln('${i + 1}. ${stripImageTokens(q.title).trim()}'
+          '${kp.isEmpty ? '' : '【知识点：$kp】'}');
+      for (var j = 0; j < q.options.length; j++) {
+        buffer.writeln(
+            '   ${String.fromCharCode(65 + j)}. ${stripImageTokens(q.options[j]).trim()}');
+      }
+      buffer.writeln('   正确答案：${q.correctAnswer}');
+      final analysis =
+          q.analysis == null ? '' : stripImageTokens(q.analysis!).trim();
+      if (analysis.isNotEmpty) buffer.writeln('   解析：$analysis');
+      buffer.writeln('   我的成绩：做过 ${it.answered} 次，错 ${_wrongCountOf(it)} 次');
+    }
+    return buffer.toString().trimRight();
+  }
+
+  /// 小抄里的日期戳（本地时区，形如 2026-11-01）
+  static String _dateStamp(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)}';
   }
 
   /// 导出错题：先让用户选范围，再导出为 .json（可再导入）。
@@ -946,6 +1088,18 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         ),
         title: const Text('错题本'),
         actions: [
+          // v1.37 P1：考前小抄（模板来自已启用插件，数据由宿主查库填槽）
+          IconButton(
+            tooltip: '生成考前小抄',
+            icon: _cheatSheetLoading
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.auto_awesome_outlined),
+            onPressed: _cheatSheetLoading ? null : _generateCheatSheet,
+          ),
           // v1.34.1 错题删减：把不想再练 / 不需要练的错题移出错题本
           IconButton(
             tooltip: '管理错题',
@@ -1715,4 +1869,193 @@ class _AnswerStylePainter extends CustomPainter {
       old.line != line ||
       old.accent != accent ||
       old.faint != faint;
+}
+
+/// v1.37 P1：考前小抄弹窗。
+///
+/// 内容是**流式**的：AI 一边生成一边显示，用户不必等整段完成；
+/// 拿到第一段文本后「复制」与「保存为 .md」即可用。
+///
+/// 关掉弹窗就断流（[dispose] 里 cancel）：没人看的生成没必要跑完、更没必要
+/// 继续烧 token。
+class _CheatSheetDialog extends StatefulWidget {
+  const _CheatSheetDialog({
+    required this.scopeLabel,
+    required this.questionCount,
+    required this.stream,
+  });
+
+  /// 范围说明（如「错题 · 2 个题库」）
+  final String scopeLabel;
+
+  /// 本次塞进模板的错题数
+  final int questionCount;
+
+  /// 插件模板任务的流（产出累计文本）
+  final Stream<String> stream;
+
+  @override
+  State<_CheatSheetDialog> createState() => _CheatSheetDialogState();
+}
+
+class _CheatSheetDialogState extends State<_CheatSheetDialog> {
+  StreamSubscription<String>? _sub;
+  String _text = '';
+  String? _error;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = widget.stream.listen(
+      (acc) {
+        if (!mounted) return;
+        setState(() => _text = acc);
+      },
+      onError: (Object e) {
+        if (!mounted) return;
+        setState(() => _error = '$e');
+      },
+      onDone: () {
+        // 空产出（模型没给内容）也当失败说清楚，不留一个永远转圈的弹窗
+        if (!mounted) return;
+        if (_text.trim().isEmpty && _error == null) {
+          setState(() => _error = '模型没有返回内容，请稍后重试');
+        }
+      },
+      cancelOnError: true,
+    );
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _sub = null;
+    super.dispose();
+  }
+
+  bool get _ready => _text.trim().isNotEmpty;
+
+  Future<void> _copy() async {
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(ClipboardData(text: _text));
+    messenger.showSnackBar(const SnackBar(
+      duration: Duration(seconds: 2),
+      content: Text('小抄已复制到剪贴板'),
+    ));
+  }
+
+  /// 存成 .md：走与错题导出同一套「另存为」（桌面原生对话框 / Android SAF），
+  /// 取消不报成功，落到默认目录则把目录告诉用户，别让他去找。
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    final messenger = ScaffoldMessenger.of(context);
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp = '${now.year}${two(now.month)}${two(now.day)}_'
+        '${two(now.hour)}${two(now.minute)}';
+    final result = await ExportStorage.saveAsBytes(
+      Uint8List.fromList(utf8.encode(_text)),
+      fileName: '考前小抄_$stamp.md',
+      dialogTitle: '保存考前小抄',
+    );
+    if (!mounted) return;
+    setState(() => _saving = false);
+    if (!result.saved) {
+      messenger.showSnackBar(const SnackBar(content: Text('已取消保存')));
+      return;
+    }
+    final path = result.path!;
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(seconds: 8),
+      content: Text('已保存：${ExportStorage.folderOf(path)}',
+          maxLines: 2, overflow: TextOverflow.ellipsis),
+      action: SnackBarAction(
+        label: '复制路径',
+        onPressed: () => Clipboard.setData(ClipboardData(text: path)),
+      ),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    return NatsumeDialog(
+      title: '考前小抄',
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '${widget.scopeLabel} · ${widget.questionCount} 道错题',
+            style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary),
+          ),
+          const SizedBox(height: NatsumeSpace.sm),
+          ConstrainedBox(
+            // 限高：小抄可能很长，弹窗不能顶到屏幕外（大字号下更明显）
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.5,
+              minHeight: 72,
+            ),
+            child: SingleChildScrollView(child: _body(ac)),
+          ),
+        ],
+      ),
+      actions: [
+        NatsumeButton(
+          label: '复制',
+          kind: NatsumeButtonKind.secondary,
+          dense: true,
+          icon: Icons.copy_all_outlined,
+          onPressed: _ready ? _copy : null,
+        ),
+        NatsumeButton(
+          label: _saving ? '保存中…' : '保存为 .md',
+          kind: NatsumeButtonKind.secondary,
+          dense: true,
+          icon: Icons.save_alt,
+          onPressed: _ready && !_saving ? _save : null,
+        ),
+        NatsumeButton(
+          label: '关闭',
+          dense: true,
+          onPressed: () => Navigator.pop(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _body(AppThemeColors ac) {
+    final error = _error;
+    if (error != null) {
+      return Text(
+        '生成失败：$error',
+        style: TextStyle(fontSize: NatsumeType.body, color: ac.danger),
+      );
+    }
+    if (!_ready) {
+      return Row(
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: NatsumeSpace.sm),
+          Expanded(
+            child: Text(
+              '正在按插件模板生成…',
+              style:
+                  TextStyle(fontSize: NatsumeType.body, color: ac.textSecondary),
+            ),
+          ),
+        ],
+      );
+    }
+    // 复用解析/建议那套富文本渲染：小抄里的 ## 小标题、**粗体**、表格都按格式显示
+    return SelectionArea(
+      child: AiResponseWidget(text: _text, fontSize: NatsumeType.body),
+    );
+  }
 }
