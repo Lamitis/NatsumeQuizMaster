@@ -56,7 +56,7 @@ plugins {
     // apply false：只把插件放到构建脚本的 classpath 上，
     // 由各子工程（:app 与第三方插件）自己决定何时 apply。
     id 'com.android.application' version '8.13.2' apply false
-    id 'org.jetbrains.kotlin.android' version '2.2.20' apply false
+    id 'org.jetbrains.kotlin.android' version '2.4.21' apply false
 }
 
 include ':app'
