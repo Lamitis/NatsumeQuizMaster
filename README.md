@@ -132,7 +132,7 @@ NatsumeQuizMaster 是一个面向备考场景的本地刷题工具，目标是�
   <sub><b>局域网同步</b>：同一 Wi-Fi 下自动发现设备 → 识别码 / 扫码配对 → 双向交换题库与刷题进度，数据不经过云端</sub>
 </p>
 
-### 本地知识库 / 本地模型 / 插件（v13 新增）
+### 本地知识库 / 本地模型 / 插件
 
 | 功能 | 说明 |
 |------|------|
@@ -513,13 +513,13 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -IsccPath 
 也可以手动分三步来做：
 
 ```powershell
-flutter build windows --release --dart-define=APP_VERSION=v1.35.5 --dart-define=APP_BUILD=33
+flutter build windows --release --dart-define=APP_VERSION=v1.38.0 --dart-define=APP_BUILD=38
 powershell -ExecutionPolicy Bypass -File tools\package_windows.ps1
 # 产物：dist\NatsumeQuizMaster-Windows-<yyyyMMdd>\（绿色版目录）+ 同名 .zip
 
 # 可选：生成安装包（需 Inno Setup 6；与 CI 用法一致）
 # ISCC.exe 常见位置有两个：全局安装（Program Files (x86)）或仅当前用户安装
-$V = '1.35.4'
+$V = '1.38.0'
 $pkg = "$PWD\dist\NatsumeQuizMaster-Windows-$(Get-Date -Format yyyyMMdd)"
 $iscc = @(
   'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
@@ -539,9 +539,9 @@ $iscc = @(
 > 的测试库，可能因 `onCreate` 不再触发而出现 `no such table: main.question_images`
 > 等大量误报（清掉该目录即可恢复）。
 
-> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.35.5+33`）。
+> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.38.0+38`）。
 > 发布构建把它拆成两半注入：`--dart-define=APP_VERSION=v<版本名>`（界面只展示这一段）、
-> `--dart-define=APP_BUILD=<构建号>`（只在「关于」里以小字补 `Build 33`），
+> `--dart-define=APP_BUILD=<构建号>`（只在「关于」里以小字补 `Build 38`），
 > 无需在任何 Dart 文件中手工修改版本号。
 > `test/version_single_source_test.dart` 会校验两段各自一致，防止版本号漂移。
 >
