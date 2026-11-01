@@ -156,6 +156,111 @@ void main() {
           'installed');
     });
   });
+
+  group('v1.36 可选字段（分类 / 标签 / 能力 / 链接）', () {
+    test('缺省可选字段仍合法，toJson 只输出 7 个必填键', () {
+      final e = RegistryPlugin.tryParse(validEntry())!;
+      expect(e.category, isNull);
+      expect(e.categoryLabel, '未分类');
+      expect(e.tags, isEmpty);
+      expect(e.permissions, isEmpty);
+      expect(e.repoUrl, isNull);
+      expect(e.changelogUrl, isNull);
+      expect(e.hasLinks, isFalse);
+      // 最小条目的 JSON 形状不变：老客户端 / 老测试都靠这个契约
+      expect(e.toJson().keys.toSet(), RegistryPlugin.fieldNames);
+    });
+
+    test('完整可选字段可读，且能原样往返', () {
+      final m = validEntry()
+        ..['category'] = '题库工具'
+        ..['tags'] = ['导出', 'anki', '错题']
+        ..['permissions'] = ['kb.search', 'question.generate']
+        ..['repo_url'] = 'https://github.com/someone/x'
+        ..['changelog_url'] = 'https://gitee.com/someone/x/releases';
+      final e = RegistryPlugin.tryParse(m)!;
+      expect(e.categoryLabel, '题库工具');
+      expect(e.tags, ['导出', 'anki', '错题']);
+      expect(e.permissions, ['kb.search', 'question.generate']);
+      expect(e.repoUrl, 'https://github.com/someone/x');
+      expect(e.hasLinks, isTrue);
+      expect(e.toJson().keys.toSet(),
+          {...RegistryPlugin.fieldNames, ...RegistryPlugin.optionalFieldNames});
+      final back = RegistryPlugin.tryParse(e.toJson())!;
+      expect(back.toJson(), e.toJson());
+    });
+
+    test('可选字段坏值只丢这一项，整条仍然可用', () {
+      final longCategory = List.filled(
+          RegistryPlugin.maxCategoryChars + 1, '字').join();
+      final longTag = List.filled(RegistryPlugin.maxTagChars + 1, '字').join();
+      final m = validEntry()
+        // 分类超长
+        ..['category'] = longCategory
+        // 标签：空串 / 非字符串 / 超长 / 重复都要被过滤
+        ..['tags'] = ['ok', '', '  ', longTag, 42, 'ok', 'again']
+        // 能力：超量只取上限，不报错
+        ..['permissions'] = [for (var i = 0; i < 20; i++) 'cap.$i']
+        // 链接：必须 https + 代码托管域名 + 非根路径
+        ..['repo_url'] = 'http://github.com/someone/x'
+        ..['changelog_url'] = 'https://evil.example.com/x';
+      final e = RegistryPlugin.tryParse(m)!;
+      expect(e.category, isNull);
+      expect(e.categoryLabel, '未分类');
+      expect(e.tags, ['ok', 'again']);
+      expect(e.permissions.length, RegistryPlugin.maxPermissions);
+      expect(e.permissions.first, 'cap.0');
+      expect(e.repoUrl, isNull);
+      expect(e.changelogUrl, isNull);
+      expect(e.hasLinks, isFalse);
+    });
+
+    test('真未知字段仍然拒绝（不靠猜含义做「静默兼容」）', () {
+      for (final key in ['license', 'homepage', 'screenshots']) {
+        final m = validEntry()..[key] = 'x';
+        expect(RegistryPlugin.tryParse(m), isNull, reason: key);
+      }
+    });
+  });
+
+  group('搜索', () {
+    test('matchesQuery 覆盖 id / 名称 / 作者 / 分类 / 标签 / 说明', () {
+      final e = RegistryPlugin.tryParse(validEntry()
+        ..['category'] = '题库工具'
+        ..['tags'] = ['anki'])!;
+      expect(e.matchesQuery(''), isTrue);
+      expect(e.matchesQuery('   '), isTrue);
+      expect(e.matchesQuery('weekly'), isTrue); // id
+      expect(e.matchesQuery('每周'), isTrue); // 名称
+      expect(e.matchesQuery('SOMEONE'), isTrue); // 作者，大小写不敏感
+      expect(e.matchesQuery('题库'), isTrue); // 分类
+      expect(e.matchesQuery('ANKI'), isTrue); // 标签
+      expect(e.matchesQuery('一句话'), isTrue); // 说明
+      expect(e.matchesQuery('不存在的词'), isFalse);
+    });
+  });
+
+  group('本地安装的 id 校验', () {
+    test('isSafePluginId 挡住空 id、路径分隔符与 ..', () {
+      for (final bad in [
+        '',
+        '  ',
+        'ab',
+        'A-b',
+        '../etc',
+        'a/b',
+        r'a\b',
+        '..',
+        '-x.y',
+      ]) {
+        expect(PluginRegistryService.isSafePluginId(bad), isFalse,
+            reason: 'id=$bad 不能当目录名');
+      }
+      for (final ok in ['abc', 'weekly-stats', 'a.b_c-d1', ' com.example.kb ']) {
+        expect(PluginRegistryService.isSafePluginId(ok), isTrue, reason: ok);
+      }
+    });
+  });
 }
 
 PluginInfo _installed(String version) => PluginInfo(
