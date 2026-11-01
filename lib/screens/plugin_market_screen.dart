@@ -126,6 +126,7 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
         _snapshot = snapshot;
         _loading = false;
       });
+      _pruneCategoryFilter();
       await _loadInstalled();
       await _loadStats(force: forceStats);
     } on PluginRegistryException catch (e) {
@@ -206,6 +207,18 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
 
   /// 出现过的分类；只有一个分类时不显示筛选栏
   List<String> get _categories => _categoryCounts.keys.toList();
+
+  /// 分类筛选是**跟着数据走**的（见 [_categoryCounts]），所以刷新后某一类可能整类消失
+  /// （作者改了分类、插件下架、换了一张登记表）。
+  ///
+  /// 这时如果还锁着旧分类，列表会一直是空的，而顶部又看不到那一项（只剩一个分类时
+  /// 筛选栏整体隐藏），用户连「怎么退回去」都找不到——所以这里自动回到「全部分类」。
+  void _pruneCategoryFilter() {
+    final selected = _category;
+    if (selected == null) return;
+    if (_categoryCounts.containsKey(selected)) return;
+    setState(() => _category = null);
+  }
 
   List<RegistryPlugin> get _visible {
     final entries = _snapshot?.plugins ?? const <RegistryPlugin>[];
@@ -374,7 +387,7 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
       style: NatsumeType.bodyStyle.copyWith(color: ac.textPrimary),
       decoration: InputDecoration(
         isDense: true,
-        hintText: '搜索插件名 / 作者 / 标签',
+        hintText: '搜索插件名 / 作者 / 分类 / 标签',
         hintStyle: NatsumeType.bodyStyle.copyWith(color: ac.textTertiary),
         prefixIcon: const Icon(Icons.search_rounded, size: 18),
         suffixIcon: _query.isEmpty

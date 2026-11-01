@@ -377,4 +377,66 @@ void main() {
     // 列表页已经拉到的下载量直接带过来，详情页不必再请求一次
     expect(find.text('88 次下载'), findsWidgets);
   });
+
+  // ── v1.39.1 分类跟数据走：登记表里写什么分类，界面就有什么分类 ──
+
+  testWidgets('分类栏由数据生成：写了的分类自动出现，没写的归入「未分类」', (tester) async {
+    setSurface(tester);
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([
+        _entry(id: 'cheat-sheet', name: '考前小抄', category: '考前复习'),
+        _entry(id: 'variant', name: '举一反三', category: null),
+      ]),
+    ));
+    await settle(tester);
+
+    // 分类完全来自数据：没有硬编码选项，写一个就多一个
+    expect(find.widgetWithText(NatsumeChip, '全部分类'), findsOneWidget);
+    expect(find.widgetWithText(NatsumeChip, '考前复习'), findsOneWidget);
+    // 根本没写 category 的那条才落到「未分类」
+    expect(find.widgetWithText(NatsumeChip, '未分类'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(NatsumeChip, '考前复习'));
+    await settle(tester, rounds: 2);
+    expect(find.text('考前小抄'), findsOneWidget);
+    expect(find.text('举一反三'), findsNothing, reason: '点分类要真的过滤');
+
+    // 再点同一个回到全部
+    await tester.tap(find.widgetWithText(NatsumeChip, '考前复习'));
+    await settle(tester, rounds: 2);
+    expect(find.text('举一反三'), findsOneWidget);
+  });
+
+  testWidgets('选中的分类整类消失后自动回到「全部分类」（不会卡在空列表）',
+      (tester) async {
+    setSurface(tester);
+    var calls = 0;
+    await tester.pumpWidget(host(
+      fetcher: () async {
+        calls++;
+        // 第二次刷新时「考前复习」整类没了（作者改了分类 / 插件下架）
+        return calls == 1
+            ? _snapshot([
+                _entry(id: 'aaa-plugin', name: '甲插件', category: '考前复习'),
+                _entry(id: 'bbb-plugin', name: '乙插件', category: '刷题练习'),
+              ])
+            : _snapshot([
+                _entry(id: 'bbb-plugin', name: '乙插件', category: '刷题练习'),
+              ]);
+      },
+    ));
+    await settle(tester);
+
+    await tester.tap(find.widgetWithText(NatsumeChip, '考前复习'));
+    await settle(tester, rounds: 2);
+    expect(find.text('甲插件'), findsOneWidget);
+    expect(find.text('乙插件'), findsNothing);
+
+    // 刷新：筛选锁着的那一类已经不存在了 → 自动回到全部，而不是空列表 + 找不到出口
+    await tester.tap(find.byTooltip('刷新插件表'));
+    await settle(tester);
+    expect(find.text('乙插件'), findsOneWidget);
+    expect(find.text('没有匹配的插件'), findsNothing);
+  });
+
 }
