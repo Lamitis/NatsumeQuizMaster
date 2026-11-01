@@ -64,6 +64,28 @@ class LoadedPlugin {
   });
 }
 
+/// 插件的提示词资产：`prompt.md`（系统提示词）+ `prompts/*.md`（功能模板）。
+///
+/// 与 [LoadedPlugin] 的区别是**只含提示词**：不读 `kb/`、示例题库等大资产，
+/// 供 AI 请求前的轻量刷新使用（见 [PluginLoader.loadPrompts]）。
+class PluginPrompts {
+  final PluginManifest manifest;
+
+  /// `prompt.md` 原文；没有该文件时为 null
+  final String? prompt;
+
+  /// 功能模板：键是 `/` 分隔的相对路径（如 `prompts/cheat_sheet.md`）
+  final Map<String, String> templates;
+
+  const PluginPrompts({
+    required this.manifest,
+    this.prompt,
+    this.templates = const {},
+  });
+
+  bool get isEmpty => (prompt ?? '').trim().isEmpty && templates.isEmpty;
+}
+
 /// 插件加载器（v13 · world-overview）。
 ///
 /// 从 zip 包或目录加载插件：解析 `plugin.json`，读取可选 `prompt.md` 与
@@ -129,6 +151,83 @@ class PluginLoader {
     final manifest = _readManifestFromMap(files);
     if (manifest == null) throw Exception('插件目录缺少有效的 plugin.json');
     return _assemble(manifest, files, dirPath);
+  }
+
+  /// 单次读取的提示词文件上限（256KB）。
+  ///
+  /// 提示词最终是拼进模型请求的，几百 KB 的「提示词」纯属病态输入——既烧
+  /// Token 又撞上下文上限，直接跳过比让请求 400 更好。
+  static const int maxPromptBytes = 256 * 1024;
+
+  /// 只读**提示词相关**文件：`prompt.md` + `prompts/*.md`（v1.37）。
+  ///
+  /// 为什么单独一个入口：安装目录里的 `kb/` 可能有几十 MB 文档，
+  /// [loadFromDirectory] 会把所有文本资产读进内存；AI 每次请求前刷新提示词
+  /// 没必要付这个代价。清单无效（缺 `plugin.json` / 不是合法 JSON）时返回
+  /// null，由调用方跳过该目录。
+  static Future<PluginPrompts?> loadPrompts(String dirPath) async {
+    final dir = Directory(dirPath);
+    if (!dir.existsSync()) return null;
+
+    List<int>? manifestBytes;
+    for (final name in manifestCandidates) {
+      final candidate = File('${dir.path}/$name');
+      if (candidate.existsSync()) {
+        manifestBytes = await candidate.readAsBytes();
+        break;
+      }
+    }
+    if (manifestBytes == null) return null;
+
+    final PluginManifest manifest;
+    try {
+      final json = jsonDecode(utf8.decode(manifestBytes));
+      if (json is! Map) return null;
+      manifest = PluginManifest.fromJson(Map<String, dynamic>.from(json));
+    } catch (_) {
+      return null;
+    }
+
+    Future<String?> readText(File file) async {
+      try {
+        if (!file.existsSync()) return null;
+        if (file.lengthSync() > maxPromptBytes) return null;
+        return await file.readAsString();
+      } catch (_) {
+        // 非 UTF-8 / 读取失败：当这个文件不存在，不拖垮整次刷新
+        return null;
+      }
+    }
+
+    final prompt = await readText(File('${dir.path}/prompt.md'));
+    final templates = <String, String>{};
+    final promptsDir = Directory('${dir.path}/prompts');
+    if (promptsDir.existsSync()) {
+      final files = promptsDir.listSync().whereType<File>().toList()
+        ..sort((a, b) => a.path.compareTo(b.path));
+      for (final file in files) {
+        final lower = file.path.toLowerCase();
+        if (!lower.endsWith('.md') &&
+            !lower.endsWith('.markdown') &&
+            !lower.endsWith('.txt')) {
+          continue;
+        }
+        final text = await readText(file);
+        if (text == null || text.trim().isEmpty) continue;
+        // 键统一成 '/' 分隔的相对路径（与 [LoadedPlugin.assets] 同口径）
+        final name = file.path
+            .substring(promptsDir.path.length)
+            .replaceAll('\\', '/')
+            .replaceAll(RegExp(r'^/+'), '');
+        templates['prompts/$name'] = text;
+      }
+    }
+
+    return PluginPrompts(
+      manifest: manifest,
+      prompt: prompt,
+      templates: templates,
+    );
   }
 
   static PluginManifest? _readManifestFromMap(Map<String, List<int>> files) {

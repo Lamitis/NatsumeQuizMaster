@@ -14,6 +14,7 @@ import 'device_service.dart';
 import '../utils/app_constants.dart';
 import 'database_service.dart';
 import 'debug_log_service.dart';
+import 'plugins/plugin_prompt_service.dart';
 import 'subject_keywords.dart';
 
 /// v1.0.2 设计审查修复：分块解析结果显性化。
@@ -67,6 +68,95 @@ class AIService {
       _ => null,
     };
   }
+
+  // ======================== 系统提示词：宿主底线 + 插件追加（v1.37） ========================
+
+  /// 宿主底线系统提示词。
+  ///
+  /// 插件提示词**只能追加在它后面**（见 [effectiveSystemPrompt]），不能替换、
+  /// 不能前置：插件来自第三方，一旦能改写身份设定，就等于给了它「让模型无视
+  /// 知识库约束、改输出格式」的入口（见 `PLUGIN_DEVELOPMENT.md` §3.5 红线）。
+  static const String baseSystemPrompt =
+      '你是一个专业的学习辅导助手，擅长解析题目、分析学习薄弱点，并提供针对性建议。';
+
+  /// 实际发给模型的 system 内容：宿主底线 + 已启用插件的风格约定（可空）。
+  ///
+  /// 只做纯字符串追加：插件文本读不到 / 全部停用时，返回值与
+  /// [baseSystemPrompt] 完全一致，行为与改造前没有任何区别。
+  ///
+  /// 作用范围是**自由文本输出**的请求（讲解 / 追问 / 薄弱诊断 / 小结 /
+  /// 插件模板任务）。结构化输出的请求（真题解析取 JSON、知识点打标签、
+  /// 学科分类）仍然只发宿主提示词——那些调用的返回要被 `jsonDecode` 或
+  /// 字符串等值比较消费，掺进「讲解风格」只会降低解析成功率。
+  String get effectiveSystemPrompt {
+    final append = PluginPromptService.instance.systemAppend;
+    if (append == null || append.trim().isEmpty) return baseSystemPrompt;
+    return '$baseSystemPrompt\n\n$append';
+  }
+
+  /// 当前是否有插件提示词被注入（UI 用来提示「本次讲解已套用插件口径」）
+  bool get hasPluginPrompts => PluginPromptService.instance.hasPrompts;
+
+  /// 插件模板任务（v1.37 · 宿主代劳）：按模板名取插件模板并填槽。
+  ///
+  /// [template] 支持 `cheat_sheet` / `cheat_sheet.md` / `prompts/cheat_sheet.md`
+  /// 三种写法；[vars] 是占位符取值（`{{ERROR_QUESTIONS}}` → 错题正文）。
+  ///
+  /// 返回 null 表示没有任何已启用插件提供该模板——调用方据此提示用户，
+  /// **不要**静默换用别的提示词（那会让插件看起来「生效了」，实际没生效）。
+  String? buildPluginPrompt(
+    String template,
+    Map<String, String> vars, {
+    String? pluginId,
+  }) =>
+      PluginPromptService.instance.render(template, vars, pluginId: pluginId);
+
+  /// 插件模板任务的流式版本：产出**累计文本**，失败回退一次性请求。
+  ///
+  /// 与 [streamAnalysis] 同一条纪律：模板缺失不抛异常，直接给一句可读的提示，
+  /// 由 UI 原样显示（用户至少知道是「插件没装 / 没启用」，而不是网络问题）。
+  Stream<String> streamPluginTask({
+    required String template,
+    Map<String, String> vars = const {},
+    String? pluginId,
+  }) async* {
+    final userPrompt = buildPluginPrompt(template, vars, pluginId: pluginId);
+    if (userPrompt == null || userPrompt.trim().isEmpty) {
+      yield pluginTemplateMissingMessage(template);
+      return;
+    }
+    try {
+      var last = '';
+      await for (final acc in _streamChat(userPrompt)) {
+        last = acc;
+        yield acc;
+      }
+      if (last.isEmpty || isAiError(last)) {
+        yield await _callAI(userPrompt);
+      }
+    } catch (e) {
+      DebugLogService.instance.log('AI', '插件模板流式失败，回退一次性请求: $e');
+      yield await _callAI(userPrompt);
+    }
+  }
+
+  /// 插件模板任务的一次性版本（无流式需求的场景，如导出前的预处理）。
+  Future<String> runPluginTask({
+    required String template,
+    Map<String, String> vars = const {},
+    String? pluginId,
+  }) async {
+    final userPrompt = buildPluginPrompt(template, vars, pluginId: pluginId);
+    if (userPrompt == null || userPrompt.trim().isEmpty) {
+      return pluginTemplateMissingMessage(template);
+    }
+    return _callAI(userPrompt);
+  }
+
+  /// 模板缺失时给用户看的话（不伪装成 AI 结论，避免被当成生成结果保存）
+  static String pluginTemplateMissingMessage(String template) =>
+      '插件模板缺失：没有已启用的插件提供 `prompts/$template.md`。'
+      '请到「世界总览 → 插件市场」安装并启用对应插件后重试。';
 
   /// 使用 AI 从原始文本中批量解析题目。
   /// 返回 [AIParseResult]（成功题目 + 失败分块原因），调用方据此显性提示。
@@ -928,14 +1018,13 @@ $kpRule
   /// 流式对话：产出**累计文本**（每次都给出到目前为止的全文），
   /// 调用方直接赋值即可，不必自己拼接。
   ///
-  /// [systemPrompt] 为空时用默认的「学习辅导助手」人设；陪伴插件
-  /// （v1.32）会传入自己的角色设定，复用同一条传输以保住多接口兼容与
+  /// [systemPrompt] 为空时用宿主底线 + 插件追加（[effectiveSystemPrompt]）；
+  /// 陪伴插件（v1.32）会传入自己的角色设定，复用同一条传输以保住多接口兼容与
   /// 非流式回退。
   ///
   /// 任一步失败即抛异常，由 [streamAnalysis] / [streamFollowUp] 负责回退。
   Stream<String> _streamChat(String userPrompt, {String? systemPrompt}) async* {
-    final sysPrompt = systemPrompt ??
-        '你是一个专业的学习辅导助手，擅长解析题目、分析学习薄弱点，并提供针对性建议。';
+    final sysPrompt = systemPrompt ?? effectiveSystemPrompt;
     final provider = _chatProvider;
     if (provider != null) {
       yield* provider.chatStream(AiChatRequest(
@@ -1503,8 +1592,7 @@ $marking
         final resp = await provider.chat(AiChatRequest(
           model: _settings.model,
           messages: [
-            const AiMessage('system',
-                '你是一个专业的学习辅导助手，擅长解析题目、分析学习薄弱点，并提供针对性建议。'),
+            AiMessage('system', effectiveSystemPrompt),
             AiMessage('user', userPrompt),
           ],
           temperature: 0.3,
@@ -1526,7 +1614,7 @@ $marking
           'messages': [
             {
               'role': 'system',
-              'content': '你是一个专业的学习辅导助手，擅长解析题目、分析学习薄弱点，并提供针对性建议。'
+              'content': effectiveSystemPrompt,
             },
             {'role': 'user', 'content': userPrompt},
           ],

@@ -14,6 +14,7 @@ import '../services/integrity_service.dart';
 import '../services/knowledge_base/kb_service.dart';
 import '../services/plugins/builtin_plugins.dart';
 import '../services/plugins/plugin_loader.dart';
+import '../services/plugins/plugin_prompt_service.dart';
 import '../services/plugins/plugin_registry.dart';
 import '../services/plugins/world_service.dart';
 import '../services/theme_service.dart';
@@ -60,6 +61,9 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   Future<void> _reload() async {
     final worlds = await _db.getAllWorlds();
     final plugins = await _db.getAllPlugins();
+    // v1.37：启停 / 卸载 / 导入后立刻刷新 AI 用的插件提示词快照。
+    // 刚读到的行直接传进去，省掉一次重复查库。
+    await PluginPromptService.instance.refresh(installed: plugins);
     if (!mounted) return;
     setState(() {
       _worlds = worlds;

@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/plugin.dart';
 import '../models/plugin_sort.dart';
 import '../services/plugins/plugin_loader.dart';
+import '../services/plugins/plugin_prompt_service.dart';
 import '../services/plugins/plugin_registry.dart';
 import '../services/plugins/plugin_stats_service.dart';
 import '../services/theme_service.dart';
@@ -177,6 +178,8 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   Future<void> _loadInstalled() async {
     try {
       final map = await PluginRegistryService.instance.installedMap();
+      // v1.37：装 / 更新 / 卸载之后重新读一次插件提示词（AI 侧只读内存快照）
+      await PluginPromptService.instance.refresh(installed: map.values.toList());
       if (!mounted) return;
       setState(() => _installed = map);
     } catch (e) {

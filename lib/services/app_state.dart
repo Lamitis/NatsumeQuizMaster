@@ -34,6 +34,7 @@ import 'export_storage.dart';
 import 'fsrs_service.dart';
 import 'key_crypto.dart';
 import 'plugins/builtin_plugins.dart';
+import 'plugins/plugin_prompt_service.dart';
 import 'net/smart_http_client.dart';
 import 'companion/companion_service.dart';
 import 'knowledge_base/grounding_service.dart';
@@ -809,6 +810,11 @@ class AppState extends ChangeNotifier {
       _companionPluginEnabled = true;
       _schedulePluginEnabled = true;
     }
+
+    // v1.37 插件提示词：把「已启用插件」的 prompt.md / prompts 读进内存快照。
+    // AIService 每次请求只读这份快照（不碰磁盘与数据库），所以启动时刷一次即可；
+    // 启停 / 安装 / 卸载后由对应页面再刷。刷新失败按「没有插件」处理。
+    await PluginPromptService.instance.refresh();
 
     // v1.33：悬浮小鲸的设置（人格 / 接口 / 气泡 / 知识库）。与上面同理，
     // 读不到就按默认设置走——悬浮层只是附加能力，不该拦住启动。
