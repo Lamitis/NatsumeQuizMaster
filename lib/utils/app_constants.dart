@@ -1,43 +1,43 @@
-/// v1.0.2 设计审查修复：魔法数集中管理（此前散落各页面，改一处漏一处）。
+/// v1.0.2 设计审查修复：魔法数集中管理（此前散落各页面，改一处漏一处）�?
 library;
 
-/// 主版本号（首页页脚 / 我的页入口 / 关于弹窗共用）。
+/// 主版本号（首页页�?/ 我的页入�?/ 关于弹窗共用）�?
 ///
-/// **唯一来源是 `pubspec.yaml` 的 `version:` 字段**（形如 `1.35.5+33`）：
-/// 构建脚本与 CI 会传 `--dart-define=APP_VERSION=v<版本名>` 覆盖它，
-/// 因此发布产物里的版本号必然来自 pubspec，不需要第二处手工填写。
+/// **唯一来源�?`pubspec.yaml` �?`version:` 字段**（形�?`1.35.5+33`）：
+/// 构建脚本�?CI 会传 `--dart-define=APP_VERSION=v<版本�?` 覆盖它，
+/// 因此发布产物里的版本号必然来�?pubspec，不需要第二处手工填写�?
 ///
-/// v1.35.5 起**界面上只展示这一段**：`v1.35.4.32` 这种四段式又长又难读，
-/// 业界惯例是把构建号藏在后台——构建号改由 [kAppBuildNumber] 单独承载，
-/// 只在「关于」弹窗里以小字补一句 `Build 33`。
+/// v1.35.5 �?*界面上只展示这一�?*：`v1.35.4.32` 这种四段式又长又难读�?
+/// 业界惯例是把构建号藏在后台——构建号改由 [kAppBuildNumber] 单独承载�?
+/// 只在「关于」弹窗里以小字补一�?`Build 33`�?
 ///
-/// 下面的 defaultValue 只服务本地 `flutter run` / `flutter test`（两者都不传
-/// dart-define）。它与 pubspec 是否一致由 `test/version_single_source_test.dart`
-/// 把关——改了 pubspec 却忘了同步这里，测试会红。这正是「APK versionName 误标」
-/// 那类事故的根因，所以用测试锁住，而不是靠记性。
+/// 下面�?defaultValue 只服务本�?`flutter run` / `flutter test`（两者都不传
+/// dart-define）。它�?pubspec 是否一致由 `test/version_single_source_test.dart`
+/// 把关——改�?pubspec 却忘了同步这里，测试会红。这正是「APK versionName 误标�?
+/// 那类事故的根因，所以用测试锁住，而不是靠记性�?
 const String kAppVersion =
     String.fromEnvironment('APP_VERSION', defaultValue: 'v1.37.0');
 
-/// 构建号（形如 `33`），同样来自 `pubspec.yaml` 的 `+<构建号>`：
-/// CI / 发版脚本注入 `--dart-define=APP_BUILD=<构建号>`。
+/// 构建号（形如 `33`），同样来自 `pubspec.yaml` �?`+<构建�?`�?
+/// CI / 发版脚本注入 `--dart-define=APP_BUILD=<构建�?`�?
 ///
-/// 它**不进主版本字符串**（[kAppVersion] 里不含构建号），只在需要精确定位
-/// 是哪个构建产物时以 `Build 33` 的形式出现——用户看版本、开发者对产物。
+/// �?*不进主版本字符串**（[kAppVersion] 里不含构建号），只在需要精确定�?
+/// 是哪个构建产物时�?`Build 33` 的形式出现——用户看版本、开发者对产物�?
 const String kAppBuildNumber =
     String.fromEnvironment('APP_BUILD', defaultValue: '38');
 
-/// 刷题数量「全部」哨兵值（9999）
+/// 刷题数量「全部」哨兵值（9999�?
 const int kQuestionCountAll = 9999;
 
-/// 日历 PageView 前后可翻页的年份跨度（初始页 = 当月 * 跨度，详见
-/// weekly_stats_board / stats_tab 的 PageController 说明）
+/// 日历 PageView 前后可翻页的年份跨度（初始页 = 当月 * 跨度，详�?
+/// weekly_stats_board / stats_tab �?PageController 说明�?
 const int kYearPageSpan = 200;
 
 /// AI 单题解析成本估算（余额提示文案用，元/题）
 const double kAiCostPerQuestionYuan = 0.002;
 
-/// 底部导航「开始」Tab 的下标。
+/// 底部导航「开始」Tab 的下标�?
 ///
-/// 二级页面里要做「回到开始页」时引这个常量，别写死字面量——主壳
-/// （lib/screens/main_shell.dart）里四个 Tab 的顺序才是唯一权威。
+/// 二级页面里要做「回到开始页」时引这个常量，别写死字面量——主�?
+/// （lib/screens/main_shell.dart）里四个 Tab 的顺序才是唯一权威�?
 const int kQuickStartTabIndex = 1;
