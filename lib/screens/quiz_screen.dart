@@ -22,11 +22,15 @@ import '../widgets/annotation_controller.dart';
 import '../widgets/annotation_toolbar.dart';
 import '../services/debug_log_service.dart';
 import '../services/notes/notes_service.dart';
+import '../services/plugins/plugin_action_engine.dart';
+import '../services/plugins/plugin_prompt_service.dart';
+import '../services/plugins/plugin_ui_extension.dart';
 import 'ai_chat_screen.dart';
 import 'note_editor_screen.dart';
 import 'session_summary_screen.dart';
 import 'settings_screen.dart';
 import '../widgets/answer_sheet_widget.dart';
+import '../widgets/plugin_action_sheet.dart';
 import '../widgets/question_edit_dialog.dart';
 import 'practice_screen.dart';
 
@@ -326,8 +330,8 @@ class _QuizScreenState extends State<QuizScreen> {
                                 color: warn
                                     ? ac.danger
                                     : ac.accent.withOpacity(0.2),
-                                borderRadius:
-                                    BorderRadius.circular(NatsumeRadius.control),
+                                borderRadius: BorderRadius.circular(
+                                    NatsumeRadius.control),
                               ),
                               child: Text(
                                 widget.practiceTiming == PracticeTiming.timed
@@ -337,7 +341,9 @@ class _QuizScreenState extends State<QuizScreen> {
                                 // tabular figures），比例数字会让徽标宽度每秒抖一下；
                                 // 警示态是 danger 实底，前景取语义 onAccent 不写死白
                                 style: NatsumeType.number(
-                                        warn ? NatsumeType.h3 : NatsumeType.caption,
+                                        warn
+                                            ? NatsumeType.h3
+                                            : NatsumeType.caption,
                                         weight: FontWeight.bold)
                                     .copyWith(
                                         color: warn
@@ -420,7 +426,8 @@ class _QuizScreenState extends State<QuizScreen> {
                           appState.quizQuestions.length,
                     ),
                     // 进度推进归动效令牌（原 400ms 散落字面量）
-                    duration: NatsumeMotion.effective(context, NatsumeMotion.slow),
+                    duration:
+                        NatsumeMotion.effective(context, NatsumeMotion.slow),
                     curve: NatsumeMotion.standard,
                     builder: (context, value, _) {
                       return LinearProgressIndicator(
@@ -469,8 +476,8 @@ class _QuizScreenState extends State<QuizScreen> {
                             padding: const EdgeInsets.all(16),
                             child: AnimatedSwitcher(
                               // 切题转场归动效令牌（原 300ms 散落字面量）
-                              duration:
-                                  NatsumeMotion.effective(context, NatsumeMotion.slow),
+                              duration: NatsumeMotion.effective(
+                                  context, NatsumeMotion.slow),
                               transitionBuilder:
                                   (Widget child, Animation<double> animation) {
                                 return SlideTransition(
@@ -572,6 +579,8 @@ class _QuizScreenState extends State<QuizScreen> {
                                         else
                                           _buildShowAnalysisButton(
                                               appState, ac),
+                                        _buildPluginActionButtons(
+                                            appState, question),
                                         if (appState.currentAnalysis !=
                                             null) ...[
                                           const SizedBox(height: 4),
@@ -703,13 +712,15 @@ class _QuizScreenState extends State<QuizScreen> {
   /// 批注保存失败最坏只是「下次进这题看不到笔迹」，不该升级成崩溃，
   /// 所以这里只记一条日志。
   void _saveAnnoQuietly(int questionId, List<InkStroke> strokes) {
-    unawaited(AnnotationService.instance.save(questionId, strokes).catchError(
-        (Object e) => debugPrint('批注保存失败（题 $questionId）：$e')));
+    unawaited(AnnotationService.instance
+        .save(questionId, strokes)
+        .catchError((Object e) => debugPrint('批注保存失败（题 $questionId）：$e')));
   }
 
   /// 批注回读：同上——fire-and-forget 但兜住异常
   /// （页面可能已销毁、库可能已关，读不到就当这题没批注）。
-  void _loadAnnoQuietly(int questionId, void Function(List<InkStroke>) onLoaded) {
+  void _loadAnnoQuietly(
+      int questionId, void Function(List<InkStroke>) onLoaded) {
     unawaited(AnnotationService.instance.load(questionId).then(onLoaded,
         onError: (Object e) => debugPrint('批注回读失败（题 $questionId）：$e')));
   }
@@ -1454,8 +1465,8 @@ class _QuizScreenState extends State<QuizScreen> {
       transitionBuilder: (child, animation) => FadeTransition(
         opacity: animation,
         child: ScaleTransition(
-          scale: Tween<double>(begin: 0.98, end: 1).animate(
-              CurvedAnimation(parent: animation, curve: NatsumeMotion.standard)),
+          scale: Tween<double>(begin: 0.98, end: 1).animate(CurvedAnimation(
+              parent: animation, curve: NatsumeMotion.standard)),
           child: child,
         ),
       ),
@@ -1622,12 +1633,73 @@ class _QuizScreenState extends State<QuizScreen> {
     );
   }
 
+  /// 声明式 UI 插槽（v1.38）：解析按钮区遍历已启用插件的
+  /// `quiz_analysis_actions`，有声明才渲染图标按钮。
+  Widget _buildPluginActionButtons(AppState appState, Question question) {
+    final extensions = PluginPromptService.instance
+        .extensionsFor(PluginSlots.quizAnalysisActions);
+    if (extensions.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: NatsumeSpace.xs),
+      child: Wrap(
+        alignment: WrapAlignment.end,
+        spacing: NatsumeSpace.xxs,
+        children: [
+          for (final extension in extensions)
+            PluginActionIconButton(
+              extension: extension,
+              onPressed: () => _runPluginAction(extension, appState, question),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 动态按钮点击：宿主切片 → 引擎填模板 → 流式请求 → 通用弹层。
+  Future<void> _runPluginAction(
+    PluginUiExtension extension,
+    AppState appState,
+    Question question,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final ai = appState.aiService;
+    if (!appState.settings.isConfigured || ai == null) {
+      messenger.showSnackBar(SnackBar(
+        content: const Text('请先在设置中配置 API Key 后再使用插件功能。'),
+        action: SnackBarAction(label: '去设置', onPressed: _openSettings),
+      ));
+      return;
+    }
+
+    final actionContext = PluginActionContext(
+      questionText: question.title,
+      options: question.options,
+      correctAnswer: question.correctAnswer,
+      userAnswer: appState.lastAnswerRecord?.userAnswer ?? '',
+      analysis: appState.currentAnalysis ?? question.analysis ?? '',
+      knowledgePoint: question.knowledgePoint ?? '',
+    );
+
+    await showPluginActionResultSheet(
+      context,
+      title: extension.label,
+      pluginName: extension.pluginName,
+      stream: PluginActionEngine.streamAction(
+        extension: extension,
+        context: actionContext,
+        ai: ai,
+      ),
+      renderer: extension.action.renderer,
+    );
+  }
+
   Widget _buildRegenerateButton(AppState appState, AppThemeColors ac) {
     return SizedBox(
       width: double.infinity,
       child: OutlinedButton.icon(
         icon: const Icon(Icons.refresh, size: 16),
-        label: const Text('重新生成解析', style: TextStyle(fontSize: NatsumeType.body)),
+        label:
+            const Text('重新生成解析', style: TextStyle(fontSize: NatsumeType.body)),
         style: OutlinedButton.styleFrom(
           foregroundColor: ac.textSecondary,
           padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1877,7 +1949,8 @@ class _QuizScreenState extends State<QuizScreen> {
                   color: ac.accentSoft,
                   borderRadius: NatsumeRadius.smallBorder,
                 ),
-                child: Icon(Icons.edit_note_rounded, size: 18, color: ac.accent),
+                child:
+                    Icon(Icons.edit_note_rounded, size: 18, color: ac.accent),
               ),
               const SizedBox(width: NatsumeSpace.sm),
               Expanded(
@@ -1889,9 +1962,7 @@ class _QuizScreenState extends State<QuizScreen> {
                             .copyWith(color: ac.textPrimary, fontSize: 15)),
                     const SizedBox(height: 2),
                     Text(
-                      enabled
-                          ? '记下题眼与易错点 · 本机保存（无法同步）'
-                          : '笔记插件已停用',
+                      enabled ? '记下题眼与易错点 · 本机保存（无法同步）' : '笔记插件已停用',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: NatsumeType.captionStyle
@@ -2044,7 +2115,8 @@ class _QuizScreenState extends State<QuizScreen> {
       decoration: BoxDecoration(
         color: ac.background,
         // 精密暗色：底栏与内容的分隔用一条发丝线，不用投影
-        border: Border(top: BorderSide(color: ac.border, width: NatsumeLine.width)),
+        border:
+            Border(top: BorderSide(color: ac.border, width: NatsumeLine.width)),
       ),
       child: appState.isLastQuestion
           ? NatsumeButton(

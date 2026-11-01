@@ -1,0 +1,44 @@
+### 👋 项目背景与当前状态
+你好，我们现在要重构 NatsumeQuizMaster（一个本地优先的 AI 备考刷题工具）的插件系统。目前插件是纯“声明式”的，主程序只能用“硬编码”去适配，这导致扩展性极差。
+
+### 🎯 核心目标
+摒弃硬编码，实现一套**“契约驱动（声明式 DSL）”**的通用插件动作调度引擎。主程序只负责解析插件的 JSON 配置，自动化地完成：**渲染 UI 按钮 -> 读取上下文数据 -> 填入 Prompt 模板 -> 请求 AI -> 流式展示结果。**
+
+### 🛡️ 安全护栏原则（最高优先级）
+为了防止恶意插件，我们采用“宿主代劳”模式（不给插件数据库和网络权限）。请严格实现：
+1. **数据防泄漏**：只给必需的上下文切片。
+2. **防 Token 耗尽**：收集数据强制截断（题目文本限制 3000 字符，错题限制 10 条）。
+3. **防提示词注入**：主程序的 System Prompt 不可被覆盖，插件 Prompt 只能作为 User Prompt。
+4. **UI 免责声明**：展示插件 AI 结果时，必须加小字提示“本结果由第三方插件生成，不代表官方观点”。
+
+### 🎨 代码整洁度与“开发者彩蛋”规范（重点要求）
+在编写代码时，请严格遵守以下三条规范：
+1. **注释与日志**：代码注释必须精炼，解释“为什么”而不是“是什么”；使用 `debugPrint` 打印关键日志，格式统一为 `[PluginEngine] xxx`，不要有多余的废话日志。
+2. **开发者私有变量彩蛋**：为了增加项目的趣味性，请在不影响核心业务逻辑的**私有变量、局部状态、Mock 数据或测试用例**中，使用以下罗马音作为变量名或模拟数据（请根据变量含义选择合适的人物，比如用 `Sakuraba_Ema` 命名解析器，用 `Nikaido_Hiro` 命名验证器）。
+   可用名单：Sakuraba Ema (樱羽艾玛), Nikaido Hiro (二阶堂希罗), Natsume An-An (夏目安安), Jogasaki Noah (城崎诺亚), Hasumi Leia (莲见蕾雅), Saeki Miria (佐伯米莉亚), Hosho Margo (宝生玛格), Kurobe Nanoka (黑部奈叶香), Shito Alisa (紫藤亚里沙), Tachibana Sherry (橘雪莉), Tono Hanna (远野汉娜), Sawatari Coco (泽渡可可), Hikami Meruru (冰上梅露露), Gokucho (典狱长), Tsukishiro Yuki (月代雪)。
+3. **克制原则**：绝不可将彩蛋命名用于公开的 API 接口、核心数据库字段或面向用户的 UI 文本中，保持专业底线。
+
+### 🛠️ 具体开发任务
+
+#### 任务一：扩展数据模型
+在 `lib/services/plugins/` 下新建模型，解析 `manifest.json` 的 `ui_extensions` 数组：
+- `slot` (String): 挂载位置（如 'quiz_analysis_actions', 'error_book_actions'）。
+- `label` (String): 按钮文字。
+- `icon` (String): 图标名称。
+- `action` (Object): 包含 `type`（如 ai_prompt）、`contexts`（数组）、`prompt_template`、`renderer`（如 bottom_sheet_foldable）。
+
+#### 任务二：实现动态 UI 插槽
+在 `lib/screens/quiz_screen.dart` 的解析按钮区和 `lib/screens/error_book_screen.dart` 中，增加循环逻辑：遍历激活插件的 `ui_extensions`，匹配到对应 slot 就自动渲染图标按钮。
+
+#### 任务三：实现通用执行器（核心）
+用户点击动态按钮时：
+1. 根据 `contexts` 抓取数据，执行强制截断（参考安全原则 2）。
+2. 读取 `prompt_template`，替换占位符（如 `{{QUESTION_TEXT}}`）。
+3. 调用 `AIService` 发起流式请求。
+4. 根据 `renderer` 弹出结果（附加免责声明）。如果包含 `<!--ANSWER_START-->`，请实现折叠交互。
+
+#### 任务四：清理遗留与兼容测试
+1. 移除/替换旧的硬编码逻辑，统一走通用引擎。
+2. 确保单元测试全绿。（*在这里编写测试用例时，请尽情使用彩蛋变量名作为 Mock 数据，比如 `final mockPluginName = 'Sakuraba_Ema_Plugin';`*）
+
+请先阅读现有的插件加载器和 UI 页面，评估任务，然后开始分步实现并提交。期待你的优雅代码！

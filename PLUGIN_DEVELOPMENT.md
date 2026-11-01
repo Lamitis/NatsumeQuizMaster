@@ -139,6 +139,8 @@
 | 位置 | 谁在用 | 第三方能否插入 |
 |---|---|---|
 | 世界总览 → 插件区（列表 / 启停 / 许可署名） | 内置 + 第三方（登记表） | 只能出现在这个列表里，不能自定义控件 |
+| 答题页解析按钮区（`quiz_analysis_actions`） | 第三方（`ui_extensions`） | ✅ 图标按钮，动作限 `ai_prompt` |
+| 错题本右上角（`error_book_actions`） | 第三方（`ui_extensions`） | ✅ 图标按钮，动作限 `ai_prompt` |
 | 我的 → 学习工具 → 双链笔记 / 小鲸助教 / 日程 | 内置插件 | ❌ |
 | 设置 → 同步与提醒 → 插件内容同步 | 内置插件 | ❌ |
 | 首页同名题库冲突横幅（`widgets/sync_conflict_banner.dart`） | 同步引擎 | ❌ |
@@ -195,6 +197,7 @@ my-plugin/
 | `entry` | string | 可选 | 保留字段。**当前被忽略**：不支持执行入口 |
 | `homepage` | string | 可选 | `https://` 链接，展示用 |
 | `assets` | string[] | 可选 | 声明式资产清单（当前由加载器按扩展名自动收集） |
+| `ui_extensions` | object[] | 可选 | 声明式 UI 按钮（槽位 / 图标 / 内联提示词），见 3.8 |
 
 未知字段**会被保留**（`PluginManifest.raw` 原样存进 `plugins.manifest`），
 但不会被解释——请不要靠未知字段实现功能。
@@ -311,6 +314,72 @@ com.example.pathology-helper/
 验收：把模板里的错题上限改成 3 道 → 进错题本点 ✨ → 小抄只覆盖 3 道错题，且
 `{{...}}` 一个都不剩；停用插件后按钮改为提示安装，不生成内容。
 
+### 3.8 UI 扩展 `ui_extensions`（v1.38 · 契约驱动）
+
+清单里的 `ui_extensions` 让插件在**宿主已实现的槽位**里加一个图标按钮。按钮的
+渲染、取数、填槽、AI 请求与结果弹层全部由宿主完成；插件只提交 JSON：
+
+```json
+{
+  "ui_extensions": [
+    {
+      "slot": "quiz_analysis_actions",
+      "label": "深度解析",
+      "icon": "psychology",
+      "action": {
+        "type": "ai_prompt",
+        "contexts": ["question_text", "question_options", "correct_answer"],
+        "prompt_template": "请用病理学带教的口径解析这道题：\n{{QUESTION_TEXT}}\n选项：\n{{QUESTION_OPTIONS}}\n正确答案：{{CORRECT_ANSWER}}",
+        "renderer": "bottom_sheet_foldable"
+      }
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 规则 |
+|---|---|---|
+| `slot` | string | 只认 `quiz_analysis_actions`（答题页解析区）/ `error_book_actions`（错题本右上角） |
+| `label` | string | 按钮 tooltip，≤ 24 字；超长整条丢弃 |
+| `icon` | string | 宿主图标白名单（`psychology` / `lightbulb` / `school` / `quiz` / `auto_awesome` / `menu_book` / `tips_and_updates` / `translate` / `summarize` / `checklist` / `insights`），未知值回退为扩展图标 |
+| `action.type` | string | 只认 `ai_prompt`；其它动作整条丢弃（不做反射调用） |
+| `action.contexts` | string[] | 只采集声明过的切片，最多 8 个，见下表 |
+| `action.prompt_template` | string | 必填，≤ 8000 字；宿主填槽后作为 **user** 消息 |
+| `action.renderer` | string | `bottom_sheet`（默认）/ `bottom_sheet_foldable`（按 `<!--ANSWER_START-->` 折叠答案） |
+
+可声明并填进模板的上下文（未声明的数据宿主**一个字节都不给**）：
+
+| `contexts` | 占位符 | 内容与上限 |
+|---|---|---|
+| `question_text` | `{{QUESTION_TEXT}}` | 题干，3000 字 |
+| `question_options` | `{{QUESTION_OPTIONS}}` | `A. …` 逐行，合计 1200 字 |
+| `correct_answer` | `{{CORRECT_ANSWER}}` | 正确答案，200 字 |
+| `user_answer` | `{{USER_ANSWER}}` | 本次作答，200 字 |
+| `analysis` | `{{ANALYSIS}}` | 当前 AI 解析 / 题目自带解析，1600 字 |
+| `knowledge_point` | `{{KNOWLEDGE_POINT}}` | 知识点，200 字 |
+| `error_questions` | `{{ERROR_QUESTIONS}}` | 错题块，最多 10 条、合计 6000 字 |
+| `error_count` | `{{ERROR_COUNT}}` | 本次错题数 |
+| `scope` | `{{SCOPE}}` | 当前筛选范围 |
+| `knowledge_points` | `{{KNOWLEDGE_POINTS}}` | 薄弱知识点摘要，600 字 |
+| `date` | `{{DATE}}` | 本地日期 `2026-11-01` |
+
+安全边界（客户端强制）：
+
+- **system 不可覆盖**：插件模板只作为 user 消息发出，system 仍是宿主底线提示词
+  （+ 已启用插件的 `prompt.md` 追加块，见 3.7）；
+- **数据防泄漏**：只按 `contexts` 采集，未知键直接忽略；图片占位符 `{{img:N}}` 一律剥掉；
+- **防 Token 耗尽**：上面的单项上限 + 填槽后整段 12000 字封顶；错题最多 10 条；
+- **防提示词注入**：`prompt_template` 只作为 user 消息，system 永远不可覆盖；恶意文本最多影响这一次回答，改不了程序行为；
+- **UI 免责声明**：结果弹层固定显示「本结果由第三方插件生成，不代表官方观点」；
+- **数量封顶**：单插件最多 8 条扩展、单槽位最多渲染 4 个按钮、全局最多 32 条。
+
+停用插件后按钮立即消失（内存快照在启停 / 安装 / 卸载后刷新）；坏清单、未知字段
+只会让该条扩展不出现，不影响 App 其它功能。
+
+验收：装上声明了 `quiz_analysis_actions` 的插件 → 答题后解析区出现图标按钮 →
+点开流式生成结果且带免责声明；把 `contexts` 里的 `correct_answer` 删掉 →
+请求里不再出现 `{{CORRECT_ANSWER}}` 对应的内容。
+
 
 ---
 
@@ -318,9 +387,10 @@ com.example.pathology-helper/
 
 ### 4.1 现状
 
-**没有实现动态加载**：没有 Dart 热加载、没有 WASM/JS 运行时、没有 dlopen、
-没有外部主题包。第三方能「装」的只有声明式包（第 3 节），
-装完的效果是「新增一条插件登记 + 提供提示词/资产」，**不会新增任何可执行行为**。
+**已落地声明式 UI 扩展（§3.8）**：插件可在宿主已实现的槽位（答题页解析区 /
+错题本右上角）声明图标按钮，动作限 `ai_prompt`——宿主负责取数、填槽、请求与
+渲染。除此之外**没有**动态代码加载：没有 Dart 热加载、没有 WASM/JS 运行时、
+没有 dlopen、没有外部主题包，插件仍然不会新增任意可执行行为。
 
 因此下面的方案都是从零开始的最小路径，按成本从低到高排列。
 
@@ -362,6 +432,10 @@ com.example.pathology-helper/
 缺点：仍然只能改提示词与资产，不能加新界面/新算法。
 
 ### 4.3 方案 B：声明式 UI DSL（1~2 周）
+
+> 状态（v1.38）：已落地**最小子集**——`ui_extensions` 的固定槽位 + `ai_prompt`
+> 动作，见 §3.8。下面的 `pages / blocks` 任意控件树仍未实现（那需要另一套
+> 白名单渲染器与变量作用域，当前没有明确需求）。
 
 目标：插件能在「插件详情页」渲染**自定义卡片**（表单、列表、按钮），
 但控件与动作都在白名单内，仍然是数据不是代码。

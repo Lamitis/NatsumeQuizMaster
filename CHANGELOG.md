@@ -14,6 +14,17 @@
 
 ---
 
+## [Unreleased]
+
+### 新增
+- 插件 `ui_extensions` 声明式 UI 插槽：清单声明槽位 / 按钮 / 内联提示词，答题页解析区与错题本自动渲染图标按钮（`plugin_ui_extension.dart`）。
+- 通用插件动作引擎：按 `contexts` 只采集声明的上下文切片（题目 3000 字、错题最多 10 条），填 `prompt_template` 后走 AI 流式请求（`plugin_action_engine.dart`、`AIService.streamPluginPrompt`）。
+- 通用插件结果弹层：流式富文本、复制 / 另存 `.md`、固定免责声明，支持 `<!--ANSWER_START-->` 折叠答案（`widgets/plugin_action_sheet.dart`）。
+
+### 重构
+- 错题本「考前小抄」与动态插件动作共用上下文采集、执行引擎与结果弹层，移除页面内硬编码小抄弹窗。
+- `PLUGIN_DEVELOPMENT.md` 新增 §3.8：`ui_extensions` 契约、上下文槽位、限长与安全边界。
+
 ## [1.37.0] - 2026-11-01
 
 插件从「装个列表」走到「真的参与回答」：`prompt.md` 进系统提示词，`prompts/*.md` 的槽位由主程序填好数据再交给模型——**插件只给文本，取数与执行都在宿主侧**。第一个消费方是错题本的「考前小抄」。

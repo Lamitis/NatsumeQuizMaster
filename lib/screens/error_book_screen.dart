@@ -1,5 +1,4 @@
-﻿import 'dart:async';
-import 'dart:convert';
+import 'dart:async';
 
 import '../utils/app_constants.dart';
 import '../utils/design_tokens.dart';
@@ -8,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/question.dart';
 import '../services/app_state.dart';
+import '../services/plugins/plugin_action_engine.dart';
 import '../services/plugins/plugin_prompt_service.dart';
+import '../services/plugins/plugin_ui_extension.dart';
 import '../services/docx_export_service.dart';
 import '../services/export_storage.dart';
 import 'package:flutter/services.dart';
@@ -19,9 +20,18 @@ import '../utils/responsive.dart';
 import '../widgets/guide/guide_anchor.dart';
 import '../widgets/guide/guide_steps.dart';
 import '../widgets/ai_response_widget.dart';
+import '../widgets/plugin_action_sheet.dart';
 import '../widgets/kit/natsume_kit.dart';
 import 'error_book_manage_screen.dart';
 import 'quiz_screen.dart';
+
+/// 错题本一行的数据形状（题目 + 作答统计 + FSRS 卡）
+typedef _ErrorCard = ({
+  Question question,
+  int answered,
+  int correct,
+  FSRSCardState? card,
+});
 
 /// 错题本（v1.0.2 重写）
 /// 三个筛选：全部（到期∪收藏去重）/ 错题（纯到期）/ 收藏
@@ -49,6 +59,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   /// v1.37 P1：小抄生成中（读取错题 + 装配模板这段是同步可控的，AI 请求本身
   /// 在弹窗里流式显示，所以这里只挡住按钮被连点）
   bool _cheatSheetLoading = false;
+
+  /// 动态插件动作的防重键（同一时间只跑一条，避免连点重复查库与请求）
+  String? _runningPluginActionKey;
 
   /// 插件功能模板名。宿主只认这个名字，具体内容由插件 `prompts/cheat_sheet.md` 提供
   static const String _cheatSheetTemplate = 'cheat_sheet';
@@ -440,82 +453,131 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
       return;
     }
 
-    final bankIds =
-        _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
     setState(() => _cheatSheetLoading = true);
-    List<({Question question, int answered, int correct, FSRSCardState? card})>
-        cards;
-    try {
-      cards = await appState.getErrorQuestionCards(_filter, bankIds: bankIds);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _cheatSheetLoading = false);
-      messenger.showSnackBar(SnackBar(content: Text('读取错题失败：$e')));
-      return;
-    }
+    final cards = await _loadErrorCards(appState);
     if (!mounted) return;
     setState(() => _cheatSheetLoading = false);
+    if (cards == null) return;
 
-    // 排序口径与「最薄弱知识点」一致：错得越多越该背
-    final picked = cards.where((c) => c.question.id != null).toList()
-      ..sort((a, b) => _wrongCountOf(b).compareTo(_wrongCountOf(a)));
-    if (picked.isEmpty) {
+    final scopeLabel = _scopeLabel;
+    final actionContext = _buildActionContext(cards, scopeLabel);
+    if (actionContext == null) {
       messenger.showSnackBar(
         const SnackBar(content: Text('当前范围下没有错题，先做几道再来生成小抄。')),
       );
       return;
     }
-    final limited = picked.take(_cheatSheetMaxQuestions).toList();
 
-    final label = _filters.firstWhere((f) => f.$1 == _filter).$2;
-    final scopeLabel = _selectedBanks.isEmpty
-        ? '$label（全部题库）'
-        : '$label · ${_selectedBanks.length} 个题库';
-    final vars = <String, String>{
-      'ERROR_QUESTIONS': _formatCheatSheetQuestions(limited),
-      'ERROR_COUNT': '${limited.length}',
-      'SCOPE': scopeLabel,
-      'DATE': _dateStamp(DateTime.now()),
-      // 知识点面板的当前口径（没有就留空串：模板里那一行会变成空行，不会报错）
-      'KNOWLEDGE_POINTS':
-          _kpStats.take(6).map((s) => '${s['kp']}（${s['cnt']} 题）').join('、'),
-    };
-
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _CheatSheetDialog(
-        scopeLabel: scopeLabel,
-        questionCount: limited.length,
-        stream: ai.streamPluginTask(
-          template: _cheatSheetTemplate,
-          vars: vars,
-        ),
+    await showPluginActionResultSheet(
+      context,
+      title: '考前小抄',
+      subtitle: '$scopeLabel · ${actionContext.errorCount} 道错题',
+      stream: PluginActionEngine.streamTemplate(
+        template: _cheatSheetTemplate,
+        vars: actionContext.select(PluginContextKeys.cheatSheet),
+        ai: ai,
       ),
     );
   }
 
+  /// 读取当前筛选 / 已选题库下的错题卡；失败提示并返回 null（调用方不再往下走）。
+  Future<List<_ErrorCard>?> _loadErrorCards(AppState appState) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final bankIds =
+        _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
+    try {
+      return await appState.getErrorQuestionCards(_filter, bankIds: bankIds);
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('读取错题失败：$e')));
+      return null;
+    }
+  }
+
+  String get _scopeLabel {
+    final label = _filters.firstWhere((f) => f.$1 == _filter).$2;
+    return _selectedBanks.isEmpty
+        ? '$label（全部题库）'
+        : '$label · ${_selectedBanks.length} 个题库';
+  }
+
+  /// 动态按钮的统一入口：查库 → 切片 → 引擎流式请求 → 通用弹层。
+  Future<void> _runPluginAction(PluginUiExtension extension) async {
+    final appState = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    if (_guard(appState)) return;
+    final ai = appState.aiService;
+    if (ai == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('请先在「设置」里配置 AI 的 API Key')),
+      );
+      return;
+    }
+    if (_runningPluginActionKey != null) return;
+
+    setState(() => _runningPluginActionKey = extension.key);
+    final cards = await _loadErrorCards(appState);
+    if (!mounted) return;
+    setState(() => _runningPluginActionKey = null);
+    if (cards == null) return;
+
+    final scopeLabel = _scopeLabel;
+    final actionContext = _buildActionContext(cards, scopeLabel);
+    if (actionContext == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('当前范围下没有错题。')),
+      );
+      return;
+    }
+
+    await showPluginActionResultSheet(
+      context,
+      title: extension.label,
+      pluginName: extension.pluginName,
+      subtitle: scopeLabel,
+      stream: PluginActionEngine.streamAction(
+        extension: extension,
+        context: actionContext,
+        ai: ai,
+      ),
+      renderer: extension.action.renderer,
+    );
+  }
+
+  /// 错题本的动作上下文：按「错得最多」挑最多 10 道，其余切片留给引擎截断。
+  PluginActionContext? _buildActionContext(
+      List<_ErrorCard> cards, String scopeLabel) {
+    final picked = cards.where((c) => c.question.id != null).toList()
+      ..sort((a, b) => _wrongCountOf(b).compareTo(_wrongCountOf(a)));
+    if (picked.isEmpty) return null;
+    final limited = picked.take(_cheatSheetMaxQuestions).toList();
+    return PluginActionContext(
+      errorQuestions: _formatCheatSheetQuestionBlocks(limited),
+      errorCount: limited.length,
+      scope: scopeLabel,
+      // 知识点面板的当前口径（没有就留空：模板里那一行会变成空行，不会报错）
+      knowledgePoints:
+          _kpStats.take(6).map((s) => '${s['kp']}（${s['cnt']} 题）').join('、'),
+      date: _dateStamp(DateTime.now()),
+    );
+  }
+
   /// 错了几次（作答次数 - 答对次数；答对次数缺失时按 0 算）
-  static int _wrongCountOf(
-      ({Question question, int answered, int correct, FSRSCardState? card})
-          it) {
+  static int _wrongCountOf(_ErrorCard it) {
     final wrong = it.answered - it.correct;
     return wrong < 0 ? 0 : wrong;
   }
 
-  /// 填进 `{{ERROR_QUESTIONS}}` 的错题正文。
+  /// 每道错题一段；拼进 `{{ERROR_QUESTIONS}}` 后由引擎统一编号并再次限长。
   ///
   /// 只写「背什么」必需的信息：题干、选项、正确答案、解析、错了几次。
   /// 知识点写进标题行——小抄按知识点聚堆才好记。
-  String _formatCheatSheetQuestions(
-    List<({Question question, int answered, int correct, FSRSCardState? card})>
-        items,
-  ) {
-    final buffer = StringBuffer();
-    for (var i = 0; i < items.length; i++) {
-      final it = items[i];
+  List<String> _formatCheatSheetQuestionBlocks(List<_ErrorCard> items) {
+    final blocks = <String>[];
+    for (final it in items) {
       final q = it.question;
+      final buffer = StringBuffer();
       final kp = (q.knowledgePoint ?? '').trim();
-      buffer.writeln('${i + 1}. ${stripImageTokens(q.title).trim()}'
+      buffer.writeln('${stripImageTokens(q.title).trim()}'
           '${kp.isEmpty ? '' : '【知识点：$kp】'}');
       for (var j = 0; j < q.options.length; j++) {
         buffer.writeln(
@@ -526,8 +588,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
           q.analysis == null ? '' : stripImageTokens(q.analysis!).trim();
       if (analysis.isNotEmpty) buffer.writeln('   解析：$analysis');
       buffer.writeln('   我的成绩：做过 ${it.answered} 次，错 ${_wrongCountOf(it)} 次');
+      blocks.add(buffer.toString().trimRight());
     }
-    return buffer.toString().trimRight();
+    return blocks;
   }
 
   /// 小抄里的日期戳（本地时区，形如 2026-11-01）
@@ -585,8 +648,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                     style: NatsumeType.h2Style.copyWith(color: ac.textPrimary)),
                 const SizedBox(height: NatsumeSpace.xxs),
                 Text('导出为 .json，可再导入回NatsumeQuizMaster；默认按「错得最多」排序，各选项另有说明',
-                    style:
-                        NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+                    style: NatsumeType.captionStyle
+                        .copyWith(color: ac.textSecondary)),
                 const SizedBox(height: NatsumeSpace.md),
                 _ExportOption(
                   icon: Icons.filter_alt_outlined,
@@ -698,8 +761,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                     style: NatsumeType.h2Style.copyWith(color: ac.textPrimary)),
                 const SizedBox(height: NatsumeSpace.xxs),
                 Text('导出「${scope.label}」的 Word 打印稿（.docx），可以直接打印成纸质题',
-                    style:
-                        NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+                    style: NatsumeType.captionStyle
+                        .copyWith(color: ac.textSecondary)),
                 const SizedBox(height: NatsumeSpace.md),
                 const _AnswerStylePreview(),
                 const SizedBox(height: NatsumeSpace.md),
@@ -763,7 +826,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                 Row(
                   children: [
                     Text('选择要导出的错题',
-                        style: NatsumeType.h2Style.copyWith(color: ac.textPrimary)),
+                        style: NatsumeType.h2Style
+                            .copyWith(color: ac.textPrimary)),
                     const Spacer(),
                     TextButton(
                       onPressed: () => setSheet(() {
@@ -775,8 +839,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                       }),
                       child: Text(
                           selected.length == cards.length ? '取消全选' : '全选',
-                          style:
-                              NatsumeType.captionStyle.copyWith(color: ac.accent)),
+                          style: NatsumeType.captionStyle
+                              .copyWith(color: ac.accent)),
                     ),
                   ],
                 ),
@@ -1088,6 +1152,17 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         ),
         title: const Text('错题本'),
         actions: [
+          // 声明式 UI 插槽（v1.38）：已启用插件声明了 error_book_actions 就渲染图标按钮。
+          // AppBar 还有小抄 / 管理 / 导出三个固定动作，动态按钮最多 2 个，避免窄屏挤爆。
+          for (final extension in PluginPromptService.instance.extensionsFor(
+              PluginSlots.errorBookActions,
+              limit: 2))
+            PluginActionIconButton(
+              extension: extension,
+              onPressed: _runningPluginActionKey == null
+                  ? () => _runPluginAction(extension)
+                  : null,
+            ),
           // v1.37 P1：考前小抄（模板来自已启用插件，数据由宿主查库填槽）
           IconButton(
             tooltip: '生成考前小抄',
@@ -1250,7 +1325,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                                 const SizedBox(width: 6),
                                                 Text('薄弱知识点',
                                                     style: TextStyle(
-                                                        fontSize: NatsumeType.body,
+                                                        fontSize:
+                                                            NatsumeType.body,
                                                         fontWeight:
                                                             FontWeight.w600,
                                                         color: ac.textPrimary)),
@@ -1270,7 +1346,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                               alignment: Alignment.centerLeft,
                                               child: Text('优先复习知识点',
                                                   style: TextStyle(
-                                                      fontSize: NatsumeType.caption,
+                                                      fontSize:
+                                                          NatsumeType.caption,
                                                       color: ac.textSecondary)),
                                             ),
                                             const SizedBox(height: 10),
@@ -1284,7 +1361,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                                   InkWell(
                                                     borderRadius:
                                                         BorderRadius.circular(
-                                                            NatsumeRadius.small),
+                                                            NatsumeRadius
+                                                                .small),
                                                     onTap: () =>
                                                         _showKpQuestions(
                                                             kp['kp'] as String),
@@ -1450,7 +1528,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                 _selectedBanks.isEmpty
                                     ? '全题库重刷（共 $_totalCount 题）'
                                     : '开始重刷（已选 $_totalSelected 题）',
-                                style: const TextStyle(fontSize: NatsumeType.h3),
+                                style:
+                                    const TextStyle(fontSize: NatsumeType.h3),
                               ),
                             ),
                           ),
@@ -1545,7 +1624,8 @@ class _BankErrorCard extends StatelessWidget {
                                 color: ac.textSecondary)),
                       Text('$bookmark 收藏',
                           style: TextStyle(
-                              fontSize: NatsumeType.body, color: ac.textSecondary)),
+                              fontSize: NatsumeType.body,
+                              color: ac.textSecondary)),
                       // v1.0.2 FSRS 可见化：最早到期的卡（SQL 只取 <= now 的卡，
                       // 所以这一定是「已到期/今天」，写「下次到期」自相矛盾）
                       if (nextDueAt != null) ...[
@@ -1615,8 +1695,8 @@ class _ExportOption extends StatelessWidget {
                   Text(subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style:
-                          NatsumeType.microStyle.copyWith(color: ac.textSecondary)),
+                      style: NatsumeType.microStyle
+                          .copyWith(color: ac.textSecondary)),
                 ],
               ),
             ),
@@ -1869,193 +1949,4 @@ class _AnswerStylePainter extends CustomPainter {
       old.line != line ||
       old.accent != accent ||
       old.faint != faint;
-}
-
-/// v1.37 P1：考前小抄弹窗。
-///
-/// 内容是**流式**的：AI 一边生成一边显示，用户不必等整段完成；
-/// 拿到第一段文本后「复制」与「保存为 .md」即可用。
-///
-/// 关掉弹窗就断流（[dispose] 里 cancel）：没人看的生成没必要跑完、更没必要
-/// 继续烧 token。
-class _CheatSheetDialog extends StatefulWidget {
-  const _CheatSheetDialog({
-    required this.scopeLabel,
-    required this.questionCount,
-    required this.stream,
-  });
-
-  /// 范围说明（如「错题 · 2 个题库」）
-  final String scopeLabel;
-
-  /// 本次塞进模板的错题数
-  final int questionCount;
-
-  /// 插件模板任务的流（产出累计文本）
-  final Stream<String> stream;
-
-  @override
-  State<_CheatSheetDialog> createState() => _CheatSheetDialogState();
-}
-
-class _CheatSheetDialogState extends State<_CheatSheetDialog> {
-  StreamSubscription<String>? _sub;
-  String _text = '';
-  String? _error;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _sub = widget.stream.listen(
-      (acc) {
-        if (!mounted) return;
-        setState(() => _text = acc);
-      },
-      onError: (Object e) {
-        if (!mounted) return;
-        setState(() => _error = '$e');
-      },
-      onDone: () {
-        // 空产出（模型没给内容）也当失败说清楚，不留一个永远转圈的弹窗
-        if (!mounted) return;
-        if (_text.trim().isEmpty && _error == null) {
-          setState(() => _error = '模型没有返回内容，请稍后重试');
-        }
-      },
-      cancelOnError: true,
-    );
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    _sub = null;
-    super.dispose();
-  }
-
-  bool get _ready => _text.trim().isNotEmpty;
-
-  Future<void> _copy() async {
-    final messenger = ScaffoldMessenger.of(context);
-    await Clipboard.setData(ClipboardData(text: _text));
-    messenger.showSnackBar(const SnackBar(
-      duration: Duration(seconds: 2),
-      content: Text('小抄已复制到剪贴板'),
-    ));
-  }
-
-  /// 存成 .md：走与错题导出同一套「另存为」（桌面原生对话框 / Android SAF），
-  /// 取消不报成功，落到默认目录则把目录告诉用户，别让他去找。
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    final messenger = ScaffoldMessenger.of(context);
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    final stamp = '${now.year}${two(now.month)}${two(now.day)}_'
-        '${two(now.hour)}${two(now.minute)}';
-    final result = await ExportStorage.saveAsBytes(
-      Uint8List.fromList(utf8.encode(_text)),
-      fileName: '考前小抄_$stamp.md',
-      dialogTitle: '保存考前小抄',
-    );
-    if (!mounted) return;
-    setState(() => _saving = false);
-    if (!result.saved) {
-      messenger.showSnackBar(const SnackBar(content: Text('已取消保存')));
-      return;
-    }
-    final path = result.path!;
-    messenger.showSnackBar(SnackBar(
-      duration: const Duration(seconds: 8),
-      content: Text('已保存：${ExportStorage.folderOf(path)}',
-          maxLines: 2, overflow: TextOverflow.ellipsis),
-      action: SnackBarAction(
-        label: '复制路径',
-        onPressed: () => Clipboard.setData(ClipboardData(text: path)),
-      ),
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final ac = AppThemeColors.of(context);
-    return NatsumeDialog(
-      title: '考前小抄',
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${widget.scopeLabel} · ${widget.questionCount} 道错题',
-            style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary),
-          ),
-          const SizedBox(height: NatsumeSpace.sm),
-          ConstrainedBox(
-            // 限高：小抄可能很长，弹窗不能顶到屏幕外（大字号下更明显）
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.5,
-              minHeight: 72,
-            ),
-            child: SingleChildScrollView(child: _body(ac)),
-          ),
-        ],
-      ),
-      actions: [
-        NatsumeButton(
-          label: '复制',
-          kind: NatsumeButtonKind.secondary,
-          dense: true,
-          icon: Icons.copy_all_outlined,
-          onPressed: _ready ? _copy : null,
-        ),
-        NatsumeButton(
-          label: _saving ? '保存中…' : '保存为 .md',
-          kind: NatsumeButtonKind.secondary,
-          dense: true,
-          icon: Icons.save_alt,
-          onPressed: _ready && !_saving ? _save : null,
-        ),
-        NatsumeButton(
-          label: '关闭',
-          dense: true,
-          onPressed: () => Navigator.pop(context),
-        ),
-      ],
-    );
-  }
-
-  Widget _body(AppThemeColors ac) {
-    final error = _error;
-    if (error != null) {
-      return Text(
-        '生成失败：$error',
-        style: TextStyle(fontSize: NatsumeType.body, color: ac.danger),
-      );
-    }
-    if (!_ready) {
-      return Row(
-        children: [
-          const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: NatsumeSpace.sm),
-          Expanded(
-            child: Text(
-              '正在按插件模板生成…',
-              style:
-                  TextStyle(fontSize: NatsumeType.body, color: ac.textSecondary),
-            ),
-          ),
-        ],
-      );
-    }
-    // 复用解析/建议那套富文本渲染：小抄里的 ## 小标题、**粗体**、表格都按格式显示
-    return SelectionArea(
-      child: AiResponseWidget(text: _text, fontSize: NatsumeType.body),
-    );
-  }
 }

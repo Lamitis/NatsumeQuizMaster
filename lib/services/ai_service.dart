@@ -158,6 +158,36 @@ class AIService {
       '插件模板缺失：没有已启用的插件提供 `prompts/$template.md`。'
       '请到「世界总览 → 插件市场」安装并启用对应插件后重试。';
 
+  /// 声明式 DSL 动作的提示词为空时给用户看的话（不发空请求）
+  static const String pluginActionEmptyMessage =
+      '插件动作缺少可用的提示词模板，已取消本次请求。';
+
+  /// 声明式 DSL 动作（v1.38）：user 消息来自清单内联模板，宿主已填好槽。
+  ///
+  /// system 仍是 [effectiveSystemPrompt]（宿主底线 + 插件风格追加）——插件
+  /// 没有覆盖 system 的入口，这是「防提示词注入」的硬边界。与
+  /// [streamPluginTask] 同一条回退纪律：流式失败退回一次性请求。
+  Stream<String> streamPluginPrompt(String userPrompt) async* {
+    final prompt = userPrompt.trim();
+    if (prompt.isEmpty) {
+      yield pluginActionEmptyMessage;
+      return;
+    }
+    try {
+      var last = '';
+      await for (final acc in _streamChat(prompt)) {
+        last = acc;
+        yield acc;
+      }
+      if (last.isEmpty || isAiError(last)) {
+        yield await _callAI(prompt);
+      }
+    } catch (e) {
+      DebugLogService.instance.log('AI', '插件动作流式失败，回退一次性请求: $e');
+      yield await _callAI(prompt);
+    }
+  }
+
   /// 使用 AI 从原始文本中批量解析题目。
   /// 返回 [AIParseResult]（成功题目 + 失败分块原因），调用方据此显性提示。
   /// v1.27 提速：题目边界感知切块（题干/答案不会被切断）+
