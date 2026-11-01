@@ -7,6 +7,7 @@ import 'package:natsume_quiz_master/screens/plugin_market_screen.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/export_storage.dart';
 import 'package:natsume_quiz_master/services/plugins/plugin_registry.dart';
+import 'package:natsume_quiz_master/services/plugins/plugin_stats_service.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
 import 'package:natsume_quiz_master/widgets/kit/natsume_kit.dart';
 
@@ -53,6 +54,18 @@ RegistrySnapshot _snapshot(List<RegistryPlugin> plugins) => RegistrySnapshot(
       disclaimer: '登记不等于审核，装不装由你决定。',
       plugins: plugins,
     );
+
+/// 统计的默认注入值：一条都没有（页面显示「没有数字」，而不是等真联网）
+Future<PluginStatsSnapshot> _noStats(
+  List<RegistryPlugin> entries, {
+  bool forceRefresh = false,
+}) async =>
+    const PluginStatsSnapshot();
+
+/// 只给指定插件下载量的注入值
+PluginStatsBatchLoader _statsOf(Map<String, PluginStats> byId) =>
+    (entries, {bool forceRefresh = false}) async =>
+        PluginStatsSnapshot(byPluginId: byId);
 
 void main() {
   late Directory tmp;
@@ -101,10 +114,16 @@ void main() {
   Widget host({
     required RegistryFetcher fetcher,
     RegistryInstaller? installer,
+    PluginStatsBatchLoader? statsLoader,
   }) =>
       MaterialApp(
         theme: ThemeService().themeData,
-        home: PluginMarketScreen(fetcher: fetcher, installer: installer),
+        home: PluginMarketScreen(
+          fetcher: fetcher,
+          installer: installer,
+          // 默认不联网：统计一律注入空结果
+          statsLoader: statsLoader ?? _noStats,
+        ),
       );
 
   void setSurface(WidgetTester tester) {
@@ -238,5 +257,124 @@ void main() {
     );
     expect(find.widgetWithText(TextButton, '复制下载地址'), findsOneWidget);
     expect(find.widgetWithText(TextButton, '从本地安装'), findsOneWidget);
+  });
+
+  // ── v1.36 市场增强：下载量 / 排序 / 分类侧栏 / 详情页入口 ──
+
+  testWidgets('卡片显示下载量与最近更新时间（GitHub 统计）', (tester) async {
+    setSurface(tester);
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([_entry()]),
+      statsLoader: _statsOf({
+        'weekly-stats': PluginStats(
+          downloadCount: 1234,
+          latestReleaseAt: DateTime(2026, 10, 20),
+          exact: true,
+        ),
+      }),
+    ));
+    await waitFor(tester, find.text('1,234 次下载'));
+
+    expect(find.text('1,234 次下载'), findsOneWidget);
+    expect(find.text('2026-10-20 更新'), findsOneWidget);
+  });
+
+  testWidgets('没有同名发布包时下载量按「约 N 万」显示，不编造精确值', (tester) async {
+    setSurface(tester);
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([_entry()]),
+      // exact: false = 退回「全部 asset 之和」，口径偏大，只能写「约」
+      statsLoader: _statsOf({
+        'weekly-stats': const PluginStats(downloadCount: 12000),
+      }),
+    ));
+    await waitFor(tester, find.text('约 1.2 万 次下载'));
+
+    expect(find.text('约 1.2 万 次下载'), findsOneWidget);
+  });
+
+  testWidgets('排序下拉切到「下载最多」后列表按下载量重排', (tester) async {
+    setSurface(tester);
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([
+        _entry(id: 'aaa-plugin', name: '甲插件'),
+        _entry(id: 'bbb-plugin', name: '乙插件'),
+      ]),
+      statsLoader: _statsOf({
+        'aaa-plugin': const PluginStats(downloadCount: 10, exact: true),
+        'bbb-plugin': const PluginStats(downloadCount: 900, exact: true),
+      }),
+    ));
+    await waitFor(tester, find.text('900 次下载'));
+
+    // 默认按登记表顺序：甲在前
+    expect(
+      tester.getTopLeft(find.text('甲插件')).dy,
+      lessThan(tester.getTopLeft(find.text('乙插件')).dy),
+    );
+
+    await tester.tap(find.byTooltip('排序方式'));
+    // PopupMenu 有 300ms 弹出动画，等它落位再点，否则点到的是遮罩
+    await settle(tester, rounds: 6);
+    await tester.tap(find.text('下载最多').last);
+    await settle(tester, rounds: 6);
+
+    expect(
+      tester.getTopLeft(find.text('乙插件')).dy,
+      lessThan(tester.getTopLeft(find.text('甲插件')).dy),
+      reason: '下载量高的应该排到前面',
+    );
+  });
+
+  testWidgets('宽屏：左侧分类栏常驻、带条目数，点一下就地筛选', (tester) async {
+    tester.view.physicalSize = const Size(1100, 1200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([
+        _entry(id: 'aaa-plugin', name: '甲插件', category: '题库工具'),
+        _entry(id: 'bbb-plugin', name: '乙插件', category: '界面美化'),
+      ]),
+    ));
+    await settle(tester);
+
+    expect(find.byKey(const ValueKey('plugin-sidebar-all')), findsOneWidget);
+    expect(find.text('全部分类'), findsOneWidget);
+    // 宽屏分类在左侧栏，胶囊条不再重复一遍
+    expect(find.widgetWithText(NatsumeChip, '全部分类'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('plugin-sidebar-界面美化')));
+    await settle(tester, rounds: 2);
+
+    expect(find.text('乙插件'), findsOneWidget);
+    expect(find.text('甲插件'), findsNothing, reason: '侧栏筛选要真的过滤');
+
+    // 再点同一个分类回到全部
+    await tester.tap(find.byKey(const ValueKey('plugin-sidebar-界面美化')));
+    await settle(tester, rounds: 2);
+    expect(find.text('甲插件'), findsOneWidget);
+  });
+
+  testWidgets('点卡片进详情页（统计沿用列表已经拉到的结果）', (tester) async {
+    setSurface(tester);
+    await tester.pumpWidget(host(
+      fetcher: () async => _snapshot([_entry()]),
+      statsLoader: _statsOf({
+        'weekly-stats': const PluginStats(downloadCount: 88, exact: true),
+      }),
+    ));
+    await settle(tester);
+
+    await tester.tap(find.text('每周统计'));
+    await waitFor(tester, find.text('插件详情'));
+
+    expect(find.text('插件详情'), findsOneWidget);
+    expect(find.text('插件信息'), findsOneWidget);
+    // 列表页已经拉到的下载量直接带过来，详情页不必再请求一次
+    expect(find.text('88 次下载'), findsWidgets);
   });
 }

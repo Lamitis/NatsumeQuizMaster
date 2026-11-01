@@ -4,12 +4,16 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/plugin.dart';
+import '../models/plugin_sort.dart';
 import '../services/plugins/plugin_loader.dart';
 import '../services/plugins/plugin_registry.dart';
+import '../services/plugins/plugin_stats_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
 import '../widgets/kit/natsume_kit.dart';
+import '../widgets/plugin_install_flow.dart';
+import 'plugin_detail_screen.dart';
 
 /// 拉表函数（测试注入，避免真联网）
 typedef RegistryFetcher = Future<RegistrySnapshot> Function();
@@ -41,6 +45,7 @@ class PluginMarketScreen extends StatefulWidget {
     super.key,
     this.fetcher,
     this.installer,
+    this.statsLoader,
   });
 
   /// 缺省走 [PluginRegistryService.instance.fetch]
@@ -48,6 +53,9 @@ class PluginMarketScreen extends StatefulWidget {
 
   /// 缺省走 [PluginRegistryService.instance.install]
   final RegistryInstaller? installer;
+
+  /// 缺省走 [PluginStatsService.instance.load]（下载量 / 版本历史）
+  final PluginStatsBatchLoader? statsLoader;
 
   @override
   State<PluginMarketScreen> createState() => _PluginMarketScreenState();
@@ -66,11 +74,27 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   String? _category; // null = 全部分类
   String _filter = _filterAll;
 
+  /// 排序方式（v1.36）：默认沿用登记表原顺序，用户切了才变
+  PluginSortMode _sort = PluginSortMode.registry;
+
+  /// GitHub 统计（下载量 / 版本历史）：拿不到就是没数字，不影响列表
+  Map<String, PluginStats> _stats = {};
+  bool _statsLoading = false;
+
+  /// 统计没拉全的原因（一行小字，不弹窗）
+  String? _statsNote;
+
   /// 正在安装的插件 id（按钮转圈，防重复点）
   final Set<String> _busy = {};
 
   /// 本地安装进行中（选文件 + 解包），防连点
   bool _localBusy = false;
+
+  /// 安装流程与详情页共用：来源说明 / 确认弹窗 / 失败兜底只有一份实现
+  late final PluginInstallFlow _flow = PluginInstallFlow(
+    install: widget.installer ?? PluginRegistryService.instance.install,
+    onInstallFromFile: _installFromFile,
+  );
 
   @override
   void initState() {
@@ -87,11 +111,8 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   Future<RegistrySnapshot> _doFetch() =>
       (widget.fetcher ?? PluginRegistryService.instance.fetch)();
 
-  Future<PluginInstallResult> _doInstall(RegistryPlugin entry) =>
-      (widget.installer ?? PluginRegistryService.instance.install)(entry);
-
-  /// 拉表：失败只提示，不清空 [_snapshot]。
-  Future<void> _refresh() async {
+  /// 拉表：失败只提示，不清空 [_snapshot]。统计随后单独拉，失败不影响列表。
+  Future<void> _refresh({bool forceStats = false}) async {
     if (_loading) return;
     setState(() {
       _loading = true;
@@ -105,6 +126,7 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
         _loading = false;
       });
       await _loadInstalled();
+      await _loadStats(force: forceStats);
     } on PluginRegistryException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -117,6 +139,36 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
         _loading = false;
         _error = '插件表读取失败：$e';
       });
+    }
+  }
+
+  /// 下载量 / 版本历史：一天缓存命中就不联网（见 [PluginStatsService]）。
+  ///
+  /// 这里**永远不抛**：统计只是锦上添花，失败就少一行数字，绝不挡住浏览与安装。
+  Future<void> _loadStats({bool force = false}) async {
+    final snapshot = _snapshot;
+    if (snapshot == null || snapshot.plugins.isEmpty || _statsLoading) return;
+    setState(() {
+      _statsLoading = true;
+      if (force) _statsNote = null;
+    });
+    try {
+      final loader = widget.statsLoader ?? PluginStatsService.instance.load;
+      final result = await loader(snapshot.plugins, forceRefresh: force);
+      if (!mounted) return;
+      setState(() {
+        _stats = {..._stats, ...result.byPluginId};
+        if (result.rateLimited) {
+          _statsNote = 'GitHub API 限额了，下载量先按本地缓存显示';
+        } else if (result.failure != null) {
+          _statsNote = result.failure;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _statsNote = '下载量没拉到：$e');
+    } finally {
+      if (mounted) setState(() => _statsLoading = false);
     }
   }
 
@@ -136,23 +188,25 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
   String _actionFor(RegistryPlugin entry) =>
       PluginRegistryService.actionFor(entry, _installed[entry.id]);
 
-  /// 出现过的分类（条目多的排前面，同数量按名字）；只有一个分类时不显示
-  List<String> get _categories {
+  /// 分类 → 条目数（按名字排序，侧边栏与胶囊条共用）。
+  ///
+  /// v1.36 起改成「按名字排」而不是「条目多的在前」：分类栏是导航，
+  /// 位置固定才记得住；数量用数字显示，不用排序表达。
+  Map<String, int> get _categoryCounts {
     final counts = <String, int>{};
     for (final e in _snapshot?.plugins ?? const <RegistryPlugin>[]) {
       counts.update(e.categoryLabel, (v) => v + 1, ifAbsent: () => 1);
     }
-    final names = counts.keys.toList()
-      ..sort((a, b) {
-        final byCount = counts[b]!.compareTo(counts[a]!);
-        return byCount != 0 ? byCount : a.compareTo(b);
-      });
-    return names;
+    final names = counts.keys.toList()..sort();
+    return {for (final name in names) name: counts[name]!};
   }
+
+  /// 出现过的分类；只有一个分类时不显示筛选栏
+  List<String> get _categories => _categoryCounts.keys.toList();
 
   List<RegistryPlugin> get _visible {
     final entries = _snapshot?.plugins ?? const <RegistryPlugin>[];
-    return entries.where((e) {
+    final filtered = entries.where((e) {
       if (_category != null && e.categoryLabel != _category) return false;
       if (!e.matchesQuery(_query)) return false;
       switch (_filter) {
@@ -166,6 +220,7 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
           return true;
       }
     }).toList();
+    return sortRegistryPlugins(filtered, _sort, _stats);
   }
 
   bool get _hasFilter =>
@@ -201,33 +256,65 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
           IconButton(
             icon: const Icon(Icons.refresh_rounded),
             tooltip: '刷新插件表',
-            onPressed: _loading ? null : _refresh,
+            onPressed: _loading ? null : () => _refresh(forceStats: true),
           ),
         ],
       ),
       body: ResponsivePage(
-        child: ListView(
-          padding: const EdgeInsets.all(NatsumeSpace.md),
+        child: isWideLayout(context) ? _wideBody(ac) : _mainList(ac),
+      ),
+    );
+  }
+
+  /// 宽屏（≥840dp）：左侧分类栏常驻，右侧照旧单列（限宽由 [ResponsivePage] 管）
+  Widget _wideBody(AppThemeColors ac) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(width: NatsumeSpace.md),
+        _sidebar(ac),
+        Expanded(child: _mainList(ac, showCategoryBar: false)),
+      ],
+    );
+  }
+
+  Widget _mainList(AppThemeColors ac, {bool showCategoryBar = true}) {
+    return ListView(
+      padding: const EdgeInsets.all(NatsumeSpace.md),
+      children: [
+        _header(ac),
+        const SizedBox(height: NatsumeSpace.sm),
+        _searchBar(ac),
+        // 宽屏的分类在左侧栏里，胶囊条就不再重复一遍
+        if (showCategoryBar && _categories.length > 1) ...[
+          const SizedBox(height: NatsumeSpace.xs),
+          _categoryBar(),
+        ],
+        const SizedBox(height: NatsumeSpace.xs),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _header(ac),
-            const SizedBox(height: NatsumeSpace.sm),
-            _searchBar(ac),
-            if (_categories.length > 1) ...[
-              const SizedBox(height: NatsumeSpace.xs),
-              _categoryBar(),
-            ],
-            const SizedBox(height: NatsumeSpace.xs),
-            _statusBar(ac),
-            if (_error != null) ...[
-              const SizedBox(height: NatsumeSpace.xs),
-              _errorBanner(ac),
-            ],
-            const SizedBox(height: NatsumeSpace.sm),
-            ..._content(ac),
-            const SizedBox(height: NatsumeSpace.lg),
+            Expanded(child: _statusBar(ac)),
+            const SizedBox(width: NatsumeSpace.xxs),
+            _sortMenu(ac),
           ],
         ),
-      ),
+        if (_statsLoading || _statsNote != null) ...[
+          const SizedBox(height: NatsumeSpace.xxs),
+          Text(
+            _statsLoading ? '正在读取下载量…' : '下载量：${_statsNote!}',
+            style: NatsumeType.microStyle
+                .copyWith(color: ac.textTertiary, height: 1.4),
+          ),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: NatsumeSpace.xs),
+          _errorBanner(ac),
+        ],
+        const SizedBox(height: NatsumeSpace.sm),
+        ..._content(ac),
+        const SizedBox(height: NatsumeSpace.lg),
+      ],
     );
   }
 
@@ -331,6 +418,134 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  /// 排序下拉（v1.36）：只影响当前列表顺序，不改登记表也不改已装状态
+  Widget _sortMenu(AppThemeColors ac) {
+    return PopupMenuButton<PluginSortMode>(
+      tooltip: '排序方式',
+      initialValue: _sort,
+      onSelected: (mode) => setState(() => _sort = mode),
+      itemBuilder: (context) => [
+        for (final mode in PluginSortMode.values)
+          PopupMenuItem<PluginSortMode>(
+            value: mode,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 16,
+                  child: mode == _sort
+                      ? Icon(Icons.check_rounded, size: 14, color: ac.accent)
+                      : null,
+                ),
+                const SizedBox(width: NatsumeSpace.xxs),
+                Text(mode.label,
+                    style: NatsumeType.captionStyle.copyWith(
+                        color: mode == _sort ? ac.accent : ac.textPrimary)),
+              ],
+            ),
+          ),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+            horizontal: NatsumeSpace.xxs, vertical: NatsumeSpace.xxs),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.swap_vert_rounded, size: 14, color: ac.textSecondary),
+            const SizedBox(width: 2),
+            Text(_sort.label,
+                style: NatsumeType.microStyle.copyWith(color: ac.textSecondary)),
+            Icon(Icons.arrow_drop_down_rounded, size: 16, color: ac.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 宽屏左侧分类栏：常驻、带条目数，点一下就地筛选（再点同一个回到全部）
+  Widget _sidebar(AppThemeColors ac) {
+    final counts = _categoryCounts;
+    final total = _snapshot?.plugins.length ?? 0;
+    return SizedBox(
+      width: 168,
+      child: ListView(
+        padding: const EdgeInsets.symmetric(vertical: NatsumeSpace.md),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(
+                left: NatsumeSpace.xs, bottom: NatsumeSpace.xxs),
+            child: Text('分类',
+                style: NatsumeType.eyebrowStyle
+                    .copyWith(color: ac.textTertiary)),
+          ),
+          _sidebarTile(
+            ac,
+            tileKey: const ValueKey('plugin-sidebar-all'),
+            label: '全部分类',
+            count: total,
+            selected: _category == null,
+            onTap: () => setState(() => _category = null),
+          ),
+          for (final entry in counts.entries)
+            _sidebarTile(
+              ac,
+              tileKey: ValueKey('plugin-sidebar-${entry.key}'),
+              label: entry.key,
+              count: entry.value,
+              selected: _category == entry.key,
+              onTap: () => setState(
+                  () => _category = _category == entry.key ? null : entry.key),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _sidebarTile(
+    AppThemeColors ac, {
+    required Key tileKey,
+    required String label,
+    required int count,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        key: tileKey,
+        color: selected ? ac.accentSoft : Colors.transparent,
+        borderRadius: BorderRadius.circular(NatsumeRadius.small),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(NatsumeRadius.small),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+                horizontal: NatsumeSpace.xs, vertical: NatsumeSpace.xs),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NatsumeType.captionStyle.copyWith(
+                      color: selected ? ac.accent : ac.textSecondary,
+                      fontWeight:
+                          selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: NatsumeSpace.xxs),
+                Text('$count',
+                    style: NatsumeType.microStyle.copyWith(
+                        color: selected ? ac.accent : ac.textTertiary)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -465,8 +680,12 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
     final installed = _installed[entry.id];
     final action = _actionFor(entry);
     final busy = _busy.contains(entry.id);
+    final stats = _stats[entry.id];
     return NatsumeSurface(
       padding: const EdgeInsets.all(NatsumeSpace.sm),
+      // 点卡片进详情：安装按钮仍在卡片里，点按钮不会误触卡片（按钮吃掉手势）
+      onTap: () => _openDetail(entry),
+      semanticLabel: '${entry.name}，查看详情',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -547,6 +766,28 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
             ),
           ],
           const SizedBox(height: NatsumeSpace.xs),
+          // 下载量 / 最近更新：GitHub 统计拿不到就整行不显示（不写「0 次」骗人）
+          if (stats != null) ...[
+            Row(
+              children: [
+                Icon(Icons.download_rounded, size: 12, color: ac.textTertiary),
+                const SizedBox(width: NatsumeSpace.xxs),
+                Text(
+                  stats.downloadText,
+                  style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                ),
+                if (stats.latestReleaseAt != null) ...[
+                  const SizedBox(width: NatsumeSpace.xs),
+                  Text(
+                    '${PluginStats.formatDate(stats.latestReleaseAt)} 更新',
+                    style:
+                        NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: NatsumeSpace.xxs),
+          ],
           // 链接 + 操作一起右对齐，窄屏自动换行（不做 Spacer，避免溢出）
           Wrap(
             alignment: WrapAlignment.end,
@@ -629,176 +870,42 @@ class _PluginMarketScreenState extends State<PluginMarketScreen> {
     if (!ok) _toast('没有找到可用的浏览器');
   }
 
-  /// 安装前的一次性来源说明（与服务层同一个 key，看一次就够）。返回 true 才继续。
-  Future<bool> _ensureDisclaimer(RegistrySnapshot? snapshot) async {
-    if (await PluginRegistryService.instance.hasAcceptedDisclaimer()) {
-      return true;
-    }
-    if (!mounted) return false;
-    final text = (snapshot?.disclaimer ?? '').isEmpty
-        ? '本表只登记插件信息，不审核、不托管插件文件，也不保证插件安全。'
-            '插件由各自作者开发和发布，安装与使用风险自负。'
-        : snapshot!.disclaimer;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('插件来源说明'),
-        content: SingleChildScrollView(
-          child: Text('$text\n\n'
-              '客户端只会做两件机械校验：下载地址必须属于 GitHub 系域名、'
-              '下载后重算 sha256 与登记表一致。校验通过不代表代码安全，'
-              '装不装由你决定（不会自动安装、不会静默升级）。'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('先不装')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('我已经了解')),
-        ],
+  /// 打开详情页：统计、已装版本都带上，进去不用重新请求
+  Future<void> _openDetail(RegistryPlugin entry) async {
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PluginDetailScreen(
+        entry: entry,
+        installed: _installed[entry.id],
+        installer: widget.installer,
+        stats: _stats[entry.id],
+        statsLoader: widget.statsLoader,
+        onInstallFromFile: _installFromFile,
+        disclaimer: _snapshot?.disclaimer,
       ),
-    );
-    if (ok == true) {
-      await PluginRegistryService.instance.acceptDisclaimer();
-    }
-    return ok == true;
+    ));
+    if (!mounted) return;
+    // 详情页里可能装/更新过，回来刷新一次
+    await _loadInstalled();
   }
 
-  /// 登记表安装 / 更新：来源说明 → 清单确认 → 下载校验 → 提示结果。
+  /// 安装 / 更新（市场卡片入口）：流程与详情页共用 [PluginInstallFlow]，
+  /// 保证两个入口问的问题、给的信息一字不差。
   Future<void> _install(RegistryPlugin entry) async {
-    final installed = _installed[entry.id];
-    final action = _actionFor(entry);
-    if (!await _ensureDisclaimer(_snapshot)) return;
-    if (!mounted) return;
-
-    // 安装/更新都要用户点确认：登记表证明不了代码安全
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(action == 'update'
-            ? '更新插件「${entry.name}」？'
-            : '安装插件「${entry.name}」？'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('作者：${entry.author}'),
-              Text('登记版本：${entry.version}'),
-              if (installed != null) Text('本机版本：${installed.version}'),
-              if (entry.category != null) Text('分类：${entry.category}'),
-              const SizedBox(height: NatsumeSpace.xs),
-              Text(entry.description),
-              if (entry.permissions.isNotEmpty) ...[
-                const SizedBox(height: NatsumeSpace.xs),
-                Text('作者声明会用到的能力：${entry.permissions.join('、')}',
-                    style: NatsumeType.microStyle.copyWith(
-                        color: AppThemeColors.of(ctx).textSecondary,
-                        height: 1.5)),
-              ],
-              const SizedBox(height: NatsumeSpace.sm),
-              Text('下载地址（仅 GitHub 域名）',
-                  style: NatsumeType.microStyle
-                      .copyWith(color: AppThemeColors.of(ctx).textTertiary)),
-              Text(entry.downloadUrl,
-                  style: NatsumeType.microStyle
-                      .copyWith(color: AppThemeColors.of(ctx).textSecondary)),
-              const SizedBox(height: NatsumeSpace.xs),
-              Text('sha256：${entry.sha256}',
-                  style: NatsumeType.microStyle
-                      .copyWith(color: AppThemeColors.of(ctx).textTertiary)),
-              const SizedBox(height: NatsumeSpace.sm),
-              Text('安装时会在本机重算 sha256 比对，不一致直接拒绝；'
-                  '插件是声明式包，不执行任意第三方代码。',
-                  style: NatsumeType.microStyle.copyWith(
-                      color: AppThemeColors.of(ctx).danger, height: 1.5)),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(action == 'update' ? '更新' : '安装')),
-        ],
-      ),
-    );
-    if (ok != true || !mounted) return;
-
+    if (_busy.contains(entry.id)) return;
     setState(() => _busy.add(entry.id));
     try {
-      final result = await _doInstall(entry);
-      await _loadInstalled();
+      await _flow.run(
+        context,
+        entry,
+        installed: _installed[entry.id],
+        disclaimer: _snapshot?.disclaimer,
+      );
       if (!mounted) return;
-      final version = result.loaded.manifest.version;
-      _toast(result.updated
-          ? '已更新「${result.entry.name}」到 v$version'
-          : '已安装「${result.entry.name}」v$version');
-    } on PluginRegistryException catch (e) {
-      await _showInstallFailure(e);
-    } catch (e) {
-      _toast('安装失败：$e');
+      // 成功要刷新「已安装」；失败也刷新一次，防止「其实已装过」的版本冲突
+      await _loadInstalled();
     } finally {
       if (mounted) setState(() => _busy.remove(entry.id));
     }
-  }
-
-  /// 安装失败的兜底出口：复制原始地址 / 改用本地 zip。
-  Future<void> _showInstallFailure(PluginRegistryException e) async {
-    if (!mounted) return;
-    final url = e.downloadUrl;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('安装没有完成'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(e.message),
-              if (url != null) ...[
-                const SizedBox(height: NatsumeSpace.sm),
-                Text(
-                  '所有下载源都没成功。可以复制原始下载地址，'
-                  '用浏览器下载后点右上角「从本地文件安装」：',
-                  style: NatsumeType.microStyle.copyWith(
-                      color: AppThemeColors.of(ctx).textSecondary, height: 1.5),
-                ),
-                const SizedBox(height: NatsumeSpace.xxs),
-                SelectableText(url,
-                    style: NatsumeType.microStyle.copyWith(
-                        color: AppThemeColors.of(ctx).textTertiary)),
-              ],
-            ],
-          ),
-        ),
-        actions: [
-          if (url != null)
-            TextButton(
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: url));
-                if (!ctx.mounted) return;
-                Navigator.pop(ctx);
-                _toast('下载地址已复制');
-              },
-              child: const Text('复制下载地址'),
-            ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              _installFromFile();
-            },
-            child: const Text('从本地安装'),
-          ),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
-        ],
-      ),
-    );
   }
 
   /// 本地安装：选 zip → 只读清单让用户确认 → 安装（没有 sha256 参照）。
