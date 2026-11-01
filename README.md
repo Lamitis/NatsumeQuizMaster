@@ -146,7 +146,8 @@ NatsumeQuizMaster 是一个面向备考场景的本地刷题工具，目标是�
 
 > 插件开发见 [docs/插件开发指南.md](docs/插件开发指南.md)；签名与分发见
 > [docs/签名与分发.md](docs/签名与分发.md)；同步说明见
-> [docs/同步说明.md](docs/同步说明.md)。
+> [docs/同步说明.md](docs/同步说明.md)；插件表与下载加速见
+> [docs/网络加速.md](docs/网络加速.md)。
 
 ---
 

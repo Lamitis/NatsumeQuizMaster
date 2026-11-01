@@ -34,6 +34,7 @@ import 'export_storage.dart';
 import 'fsrs_service.dart';
 import 'key_crypto.dart';
 import 'plugins/builtin_plugins.dart';
+import 'net/smart_http_client.dart';
 import 'companion/companion_service.dart';
 import 'knowledge_base/grounding_service.dart';
 import 'knowledge_base/kb_retriever.dart';
@@ -972,6 +973,8 @@ class AppState extends ChangeNotifier {
     // v1.35 用户自定义知识点体系（空 = AI 自行判断，旧行为）
     final knowledgePointTypes = AppSettings.decodeKnowledgePointTypes(
         await _db.getSetting('knowledge_point_types'));
+    // v1.36 网络加速：自定义镜像（空 = 只用内置加速池）
+    final customMirror = await _db.getSetting('custom_mirror') ?? '';
     _settings = AppSettings(
       apiKey: apiKey,
       apiEndpoint: apiEndpoint,
@@ -988,7 +991,10 @@ class AppState extends ChangeNotifier {
       mineruToken: mineruToken,
       analysisGrounding: analysisGrounding,
       knowledgePointTypes: knowledgePointTypes,
+      customMirror: customMirror,
     );
+    // v1.36：网络加速配置同步给全局客户端（插件表 / 插件包都从这里取）
+    SmartHttpClient.instance.customMirror = customMirror;
     // v1.0.2 新增设置
     _vacationModeEnabled =
         (await _db.getSetting('vacation_mode_enabled') ?? '0') == '1';
@@ -1031,6 +1037,9 @@ class AppState extends ChangeNotifier {
     // v1.35 知识点体系：JSON 数组，空列表 = 交回 AI 自行判断
     await _db.setSetting('knowledge_point_types',
         jsonEncode(newSettings.knowledgePointTypes));
+    // v1.36 网络加速：自定义镜像（空 = 只用内置加速池）；立刻生效，无需重启
+    await _db.setSetting('custom_mirror', newSettings.customMirror);
+    SmartHttpClient.instance.customMirror = newSettings.customMirror;
     _initAIService();
     notifyListeners();
   }

@@ -119,6 +119,13 @@ class AppSettings {
   /// 非空时打标签 / 导入解析都只在这个清单里选，保证全库标签口径统一。
   List<String> knowledgePointTypes;
 
+  /// v1.36 网络加速：用户自定义镜像（空前缀 = 只用内置加速池）。
+  ///
+  /// 两种写法：前缀 `https://ghfast.top/`（自动补尾斜杠）或模板
+  /// `https://my.proxy/?url={url}`。只影响「拉插件表 / 下插件包」，
+  /// 不改任何 AI 接口地址。见 `lib/services/net/smart_http_client.dart`。
+  String customMirror;
+
   AppSettings({
     this.apiKey = '',
     this.apiEndpoint = defaultApiEndpoint,
@@ -134,6 +141,7 @@ class AppSettings {
     this.mineruToken = '',
     this.analysisGrounding = true,
     this.knowledgePointTypes = const [],
+    this.customMirror = '',
   });
 
   bool get isConfigured => apiKey.isNotEmpty;
@@ -156,6 +164,8 @@ class AppSettings {
       'analysis_grounding': analysisGrounding ? '1' : '0',
       // 知识点体系：JSON 数组（不是凭据，明文存，备份可携带）
       'knowledge_point_types': jsonEncode(knowledgePointTypes),
+      // v1.36 网络加速：自定义镜像（不是凭据，随备份带走）
+      'custom_mirror': customMirror,
     };
   }
 
@@ -185,6 +195,8 @@ class AppSettings {
       analysisGrounding: map['analysis_grounding'] != '0',
       // 老用户没有知识点体系：空列表 = 沿用 AI 自行判断
       knowledgePointTypes: decodeKnowledgePointTypes(map['knowledge_point_types']),
+      // v1.36：老备份没有这个键 → 空 = 只用内置加速池
+      customMirror: map['custom_mirror'] ?? '',
     );
   }
 
@@ -221,6 +233,7 @@ class AppSettings {
     String? mineruToken,
     bool? analysisGrounding,
     List<String>? knowledgePointTypes,
+    String? customMirror,
   }) {
     return AppSettings(
       apiKey: apiKey ?? this.apiKey,
@@ -237,6 +250,7 @@ class AppSettings {
       mineruToken: mineruToken ?? this.mineruToken,
       analysisGrounding: analysisGrounding ?? this.analysisGrounding,
       knowledgePointTypes: knowledgePointTypes ?? this.knowledgePointTypes,
+      customMirror: customMirror ?? this.customMirror,
     );
   }
 }

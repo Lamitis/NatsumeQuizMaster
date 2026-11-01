@@ -16,6 +16,7 @@ import '../services/reminder_service.dart';
 import '../models/app_settings.dart';
 import '../models/plugin_sync_scope.dart';
 import '../services/device_service.dart';
+import '../services/net/smart_http_client.dart';
 import '../services/sync/sync_engine.dart';
 import '../services/sync/lan_address.dart';
 import '../services/theme_service.dart';
@@ -75,7 +76,8 @@ enum SettingsGroup {
         // 33 = v1.35 新增的「插件内容同步」卡片（追加在 sections 末尾，
         // 这样不会打乱已有索引——加卡片时改这张表的老坑别再踩一遍）
         SettingsGroup.sync => const [12, 13, 14, 15, 16, 17, 31, 33],
-        SettingsGroup.advanced => const [8, 9, 10, 11, 18, 19, 28, 29, 30],
+        // 34 = v1.36「网络加速」；同样追加在末尾
+        SettingsGroup.advanced => const [8, 9, 10, 11, 18, 19, 28, 29, 30, 34],
       };
 }
 
@@ -154,6 +156,9 @@ class _SettingsScreenState extends State<SettingsScreen>
 
   /// 对端识别码输入框（2026-10-08：接入端必须输入识别码才能同步）
   final _peerCodeController = TextEditingController();
+
+  /// 自定义镜像输入框（v1.36 · 网络加速；留空 = 只用内置加速池）
+  final _mirrorController = TextEditingController();
 
   /// 临时码倒计时的秒级刷新定时器（仅有效期内运行）
   Timer? _tempCodeTicker;
@@ -426,6 +431,7 @@ class _SettingsScreenState extends State<SettingsScreen>
       _modelController.text = settings.model;
       _nicknameController.text = settings.nickname;
       _mineruTokenController.text = settings.mineruToken;
+      _mirrorController.text = settings.customMirror;
       setState(() {
         _detail = settings.analysisDetail;
         _keywordHighlight = settings.keywordHighlight;
@@ -476,6 +482,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     _nicknameController.dispose();
     _mineruTokenController.dispose();
     _peerCodeController.dispose();
+    _mirrorController.dispose();
     _stopTempCodeTicker();
     _endpointFocus.dispose();
     super.dispose();
@@ -2554,6 +2561,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                   ),
                 ),
 
+                // v1.36 网络加速：插件表 / 插件包的多源回退（追加在末尾，索引 34）
+                _networkAccelCard(ac),
+
               ];
               // 按分组过滤：非 all 时只保留该组的 sections（索引表见 SettingsGroup.indices）
               final sections = widget.group == SettingsGroup.all
@@ -2592,6 +2602,132 @@ class _SettingsScreenState extends State<SettingsScreen>
             }),
           ),
         ),
+      ),
+    );
+  }
+
+  /// 保存自定义镜像（v1.36 网络加速）。
+  ///
+  /// 只做格式把关：必须是 http(s) 绝对地址。前缀式会自动补尾斜杠，
+  /// 模板式（含 `{url}`）原样保留；写库与同步给 [SmartHttpClient] 由
+  /// `AppState.updateSettings` 负责，保存后立刻生效。
+  Future<void> _saveCustomMirror() async {
+    final app = context.read<AppState>();
+    final messenger = ScaffoldMessenger.of(context);
+    var raw = _mirrorController.text.trim();
+    if (raw.isNotEmpty) {
+      final probe = Uri.tryParse(raw.replaceAll('{url}', 'x'));
+      if (probe == null ||
+          (probe.scheme != 'http' && probe.scheme != 'https') ||
+          probe.host.isEmpty) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('镜像地址需以 http:// 或 https:// 开头')),
+        );
+        return;
+      }
+      raw = SmartHttpClient.normalizeCustomMirror(raw);
+    }
+    await app.updateSettings(app.settings.copyWith(customMirror: raw));
+    if (!mounted) return;
+    setState(() => _mirrorController.text = raw);
+    messenger.showSnackBar(SnackBar(
+      content: Text(raw.isEmpty ? '已恢复内置镜像自动回退' : '已保存自定义镜像，后续请求优先使用'),
+    ));
+  }
+
+  /// 清空自定义镜像，回到「内置池自动回退」。
+  Future<void> _clearCustomMirror() async {
+    final app = context.read<AppState>();
+    await app.updateSettings(app.settings.copyWith(customMirror: ''));
+    if (!mounted) return;
+    setState(() => _mirrorController.text = '');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已恢复内置镜像自动回退')),
+    );
+  }
+
+  /// 网络加速（v1.36）。
+  ///
+  /// 插件装不上，九成不是插件坏了，而是 GitHub 直连超时。内置池已经会自动
+  /// 换源，这里只把「换了哪些、还能自己加什么」摊开说明，并给一个自定义
+  /// 入口（优先级最高，适合校园网自己的代理）。
+  Widget _networkAccelCard(AppThemeColors ac) {
+    final current = context.watch<AppState>().settings.customMirror;
+    final builtin = SmartHttpClient.acceleratorPrefixes
+        .map((p) => Uri.parse(p).host)
+        .join(' / ');
+    return _SettingsCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.bolt_outlined, color: ac.accent, size: 20),
+              const SizedBox(width: 8),
+              Text('网络加速',
+                  style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: NatsumeType.h3,
+                      color: ac.textPrimary)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '拉取插件表与下载插件包时自动换源，单个源 8 秒超时：'
+            '原始 GitHub → jsDelivr → $builtin。'
+            '直连超时会自己往下试，不需要手动点重试。',
+            style: TextStyle(
+                fontSize: NatsumeType.body,
+                color: ac.textSecondary,
+                height: 1.4),
+          ),
+          const SizedBox(height: NatsumeSpace.sm),
+          Text('自定义镜像（可选，优先级最高）',
+              style: TextStyle(
+                  fontSize: NatsumeType.body,
+                  fontWeight: FontWeight.w500,
+                  color: ac.textPrimary)),
+          const SizedBox(height: 6),
+          TextField(
+            key: const ValueKey('settings-custom-mirror'),
+            controller: _mirrorController,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: 'https://ghfast.top/（留空 = 只用内置镜像）',
+              helperText: '支持前缀（自动补 /）或模板 https://你的代理/?url={url}',
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(NatsumeRadius.small)),
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            ),
+            style: const TextStyle(fontSize: NatsumeType.body),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              FilledButton.tonalIcon(
+                key: const ValueKey('settings-custom-mirror-save'),
+                icon: const Icon(Icons.save_outlined, size: 16),
+                label: const Text('保存'),
+                onPressed: _saveCustomMirror,
+              ),
+              if (current.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  key: const ValueKey('settings-custom-mirror-reset'),
+                  onPressed: _clearCustomMirror,
+                  child: const Text('恢复自动'),
+                ),
+              ],
+            ],
+          ),
+          if (current.isNotEmpty)
+            Text('当前生效：$current',
+                style: TextStyle(
+                    fontSize: NatsumeType.caption,
+                    color: ac.textTertiary,
+                    height: 1.4)),
+        ],
       ),
     );
   }

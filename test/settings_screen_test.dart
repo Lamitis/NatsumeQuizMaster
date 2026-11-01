@@ -186,7 +186,7 @@ void main() {
     SettingsGroup.ai: ['AI 接口配置', '扫描件识别增强（MinerU）', 'AI 提供方'],
     SettingsGroup.appearance: ['主题外观', '深色模式'],
     SettingsGroup.sync: ['局域网同步', '提醒与复习'],
-    SettingsGroup.advanced: ['调试日志', '使用说明'],
+    SettingsGroup.advanced: ['调试日志', '使用说明', '网络加速'],
   };
 
   for (final entry in groupMarkers.entries) {
@@ -273,5 +273,37 @@ void main() {
             .value,
         isFalse);
     expect(find.textContaining('提醒不可用'), findsOneWidget);
+  });
+
+  testWidgets('网络加速：自定义镜像保存后补全尾斜杠并即时生效', (tester) async {
+    final app = FakeSettingsState();
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced);
+    final field = find.byKey(const ValueKey('settings-custom-mirror'));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, 'https://my.proxy');
+    final save = find.byKey(const ValueKey('settings-custom-mirror-save'));
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(app.settings.customMirror, 'https://my.proxy/');
+    expect(find.textContaining('已保存自定义镜像'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('网络加速：非法镜像不写设置并提示', (tester) async {
+    final app = FakeSettingsState();
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced);
+    final field = find.byKey(const ValueKey('settings-custom-mirror'));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, 'ghfast.top');
+    final save = find.byKey(const ValueKey('settings-custom-mirror-save'));
+    await tester.ensureVisible(save);
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(app.settings.customMirror, isEmpty);
+    expect(find.textContaining('镜像地址需以'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

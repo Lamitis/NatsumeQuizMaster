@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +8,7 @@ import 'package:path/path.dart' as p;
 import '../../models/plugin.dart';
 import '../database_service.dart';
 import '../export_storage.dart';
+import '../net/smart_http_client.dart';
 import 'plugin_loader.dart';
 
 /// 第三方插件表（Natsume-Registry）客户端（v1.35）。
@@ -201,9 +201,13 @@ class PluginInstallResult {
 
 /// 拉表 / 安装失败的用户可读错误
 class PluginRegistryException implements Exception {
-  const PluginRegistryException(this.message);
+  const PluginRegistryException(this.message, {this.downloadUrl});
 
   final String message;
+
+  /// 下载全部镜像都失败时保留**原始**下载地址：UI 可以复制给用户，
+  /// 让用户用浏览器下载后用「本地安装」导入。
+  final String? downloadUrl;
 
   @override
   String toString() => message;
@@ -215,46 +219,53 @@ class PluginRegistryService {
 
   static final PluginRegistryService instance = PluginRegistryService._();
 
-  /// 登记表地址（客户端唯一读的地址）
-  static const String registryUrl =
-      'https://raw.githubusercontent.com/Lamitis/Natsume-Registry/main/registry.json';
+  /// 登记表地址（客户端唯一读的地址；镜像只是它的加速，不改变「以 GitHub 为准」）
+  static const String registryUrl = SmartHttpClient.registryRawUrl;
 
   /// 「已看过 disclaimer」的标记键：只认一次，之后安装不再反复弹
   static const String disclaimerAckKey = 'plugin_registry_disclaimer_ack_v1';
 
-  static const Duration defaultTimeout = Duration(seconds: 12);
+  /// 单个源的超时（v1.36：8 秒换下一个源，见 [SmartHttpClient]）
+  static const Duration defaultTimeout = SmartHttpClient.defaultTimeout;
+
+  /// 插件包单源下载超时：包比 JSON 大，给宽一点
+  static const Duration defaultDownloadTimeout =
+      SmartHttpClient.defaultDownloadTimeout;
 
   final DatabaseService _db = DatabaseService.instance;
 
   /// 拉表。任何失败都抛 [PluginRegistryException]：
   /// 调用方据此提示「本次没拉到」，但**保留上一次成功的列表**。
+  ///
+  /// v1.36：不传 [url] 时走多源回退（原始 → jsDelivr → 4 个加速），
+  /// 传了 [url] 就只试那一个（开发者 / 测试用的确定行为）。
+  /// [customMirror] 缺省取 [SmartHttpClient.instance] 里的用户配置。
   Future<RegistrySnapshot> fetch({
     String? url,
     http.Client? client,
     Duration timeout = defaultTimeout,
+    String? customMirror,
   }) async {
-    final ownClient = client == null;
-    final c = client ?? http.Client();
+    final smart = SmartHttpClient(
+      client: client,
+      customMirror: customMirror ?? SmartHttpClient.instance.customMirror,
+    );
     try {
-      final resp = await c.get(
-        Uri.parse(url ?? registryUrl),
-        headers: const {
-          'Accept': 'application/json',
-          'User-Agent': 'NatsumeQuizMaster',
-        },
-      ).timeout(timeout);
-      if (resp.statusCode != 200) {
-        throw PluginRegistryException('插件表读取失败（HTTP ${resp.statusCode}）');
-      }
-      return RegistrySnapshot.parse(utf8.decode(resp.bodyBytes));
-    } on TimeoutException {
-      throw const PluginRegistryException('插件表读取超时，稍后自动重试');
+      final result = url == null
+          ? await smart.fetchRegistry(timeout: timeout)
+          : await smart.getFirst(
+              [SmartSource('指定地址', url)],
+              timeout: timeout,
+              headers: SmartHttpClient.jsonHeaders,
+              originalUrl: url,
+              failurePrefix: '插件表读取失败',
+              validate: SmartHttpClient.looksLikeJson,
+            );
+      return RegistrySnapshot.parse(result.text);
+    } on SmartHttpException catch (e) {
+      throw PluginRegistryException(e.message);
     } on FormatException catch (e) {
       throw PluginRegistryException('插件表格式异常：${e.message}');
-    } on http.ClientException catch (e) {
-      throw PluginRegistryException('插件表连不上：${e.message}');
-    } finally {
-      if (ownClient) c.close();
     }
   }
 
@@ -323,25 +334,35 @@ class PluginRegistryService {
   ///
   /// 任何一步失败都会抛 [PluginRegistryException]，且**不留下半装状态**：
   /// 先解到 staging，id 也对得上才替换正式目录。
+  ///
+  /// v1.36：下载走 [SmartHttpClient]，逐个镜像尝试；每个镜像的响应都先算
+  /// sha256，不匹配就丢弃该镜像继续下一个，绝不会先落盘再校验。
   Future<PluginInstallResult> install(
     RegistryPlugin entry, {
     http.Client? client,
-    Duration timeout = defaultTimeout,
+    Duration timeout = defaultDownloadTimeout,
+    String? customMirror,
   }) async {
-    final ownClient = client == null;
-    final c = client ?? http.Client();
+    final smart = SmartHttpClient(
+      client: client,
+      customMirror: customMirror ?? SmartHttpClient.instance.customMirror,
+    );
     final root = await pluginRoot();
     final installDir = Directory(p.join(root.path, entry.id));
     Directory? staging;
     try {
-      final resp = await c.get(Uri.parse(entry.downloadUrl)).timeout(timeout);
-      if (resp.statusCode != 200) {
-        throw PluginRegistryException('插件包下载失败（HTTP ${resp.statusCode}）');
+      final SmartHttpResult download;
+      try {
+        download = await smart.downloadVerified(
+          url: entry.downloadUrl,
+          expectedSha256: entry.sha256,
+          timeout: timeout,
+        );
+      } on SmartHttpException catch (e) {
+        // 带上原始地址：全部镜像失败时，UI 可以让用户复制后用浏览器下载
+        throw PluginRegistryException(e.message, downloadUrl: entry.downloadUrl);
       }
-      final bytes = resp.bodyBytes;
-      if (!verifySha256(bytes, entry.sha256)) {
-        throw const PluginRegistryException('sha256 校验失败：下载内容与登记表不一致，已拒绝安装');
-      }
+      final bytes = download.bytes;
 
       staging = Directory.systemTemp.createTempSync('natsume_plugin_');
       final zip = File(p.join(staging.path, '${entry.id}.zip'))
@@ -366,6 +387,9 @@ class PluginRegistryService {
           'sha256': entry.sha256,
           'version': entry.version,
           'author': entry.author,
+          // v1.36：记下实际命中的源，排查「镜像给了个坏包」时有据可查
+          'source': download.label,
+          'source_url': download.url,
           'installed_at': DateTime.now().toIso8601String(),
         },
       };
@@ -387,14 +411,11 @@ class PluginRegistryService {
         installedDir: installDir.path,
         updated: existing != null,
       );
-    } on TimeoutException {
-      throw const PluginRegistryException('插件包下载超时，请稍后重试');
     } on PluginRegistryException {
       rethrow;
     } catch (e) {
       throw PluginRegistryException('安装失败：$e');
     } finally {
-      if (ownClient) c.close();
       if (staging != null && staging.existsSync()) {
         try {
           staging.deleteSync(recursive: true);
