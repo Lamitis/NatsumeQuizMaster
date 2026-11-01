@@ -132,13 +132,11 @@ class _GuideTourState extends State<GuideTour> {
       _hole = null;
     }
 
-    final tab = _step.tab;
-    if (tab != null && tab != _guide.currentTab) {
-      // 帧后再请求切页：initState 里同步 setState 到祖先会炸
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _guide.requestTab(tab);
-      });
-    }
+    // 帧后再准备场景（切 Tab / 打开目的地页）：initState 里同步 setState
+    // 到祖先会炸，push 也要等主壳首帧布局落定
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _guide.prepareCurrentStep();
+    });
     _measureSoon();
   }
 
@@ -392,7 +390,8 @@ class _GuideTourState extends State<GuideTour> {
         children: [
           Row(
             children: [
-              NatsumeTag('第 ${index + 1} 步 / 共 $total 步', tone: NatsumeTagTone.accent),
+              NatsumeTag('第 ${index + 1} 步 / 共 $total 步',
+                  tone: NatsumeTagTone.accent),
               const Spacer(),
               // 跳过永远可用：引导不能把人困住
               NatsumeButton(
@@ -417,7 +416,8 @@ class _GuideTourState extends State<GuideTour> {
               Expanded(
                 child: Text(
                   _hint(),
-                  style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                  style:
+                      NatsumeType.microStyle.copyWith(color: ac.textTertiary),
                 ),
               ),
               // 导航步（awaitAction）不给「下一步」：这一步的进展是用户真的点进去，
@@ -425,8 +425,7 @@ class _GuideTourState extends State<GuideTour> {
               if (!step.awaitAction) ...[
                 const SizedBox(width: NatsumeSpace.xs),
                 NatsumeButton(
-                  label: step.nextLabel ??
-                      (index == total - 1 ? '完成' : '下一步'),
+                  label: step.nextLabel ?? (index == total - 1 ? '完成' : '下一步'),
                   icon: index == total - 1
                       ? Icons.check_rounded
                       : Icons.arrow_forward,
@@ -454,8 +453,8 @@ class _GuideTourState extends State<GuideTour> {
       child: card,
     );
 
-    final width =
-        math.min(380.0, math.max(240.0, media.size.width - NatsumeSpace.md * 2));
+    final width = math.min(
+        380.0, math.max(240.0, media.size.width - NatsumeSpace.md * 2));
 
     if (hole == null) {
       return Positioned.fill(

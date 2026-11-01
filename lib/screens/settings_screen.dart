@@ -1,4 +1,6 @@
 ﻿import '../utils/design_tokens.dart';
+import '../widgets/guide/guide_anchor.dart';
+import '../widgets/guide/guide_steps.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -632,24 +634,27 @@ class _SettingsScreenState extends State<SettingsScreen>
                               fontWeight: FontWeight.w500,
                               color: ac.textPrimary)),
                       const SizedBox(height: 6),
-                      TextField(
-                        controller: _apiKeyController,
-                        obscureText: _obscureKey,
-                        decoration: InputDecoration(
-                          hintText: 'sk-xxxxxxxxxxxxxxxxxxxxxxxx',
-                          border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.small)),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 12),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                                _obscureKey
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                                size: 20),
-                            onPressed: () =>
-                                setState(() => _obscureKey = !_obscureKey),
+                      GuideAnchor(
+                        id: GuideAnchorIds.settingsApiKey,
+                        child: TextField(
+                          controller: _apiKeyController,
+                          obscureText: _obscureKey,
+                          decoration: InputDecoration(
+                            hintText: 'sk-xxxxxxxxxxxxxxxxxxxxxxxx',
+                            border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                    NatsumeRadius.small)),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 12),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                  _obscureKey
+                                      ? Icons.visibility_off
+                                      : Icons.visibility,
+                                  size: 20),
+                              onPressed: () =>
+                                  setState(() => _obscureKey = !_obscureKey),
+                            ),
                           ),
                         ),
                       ),

@@ -151,9 +151,12 @@ class _ProfileTabState extends State<ProfileTab> {
             ),
             const SizedBox(height: NatsumeSpace.lg),
             // ── 学习工具（v13：知识库 / 自动出题 / 世界总览）──
-            const NatsumeSectionHeader(
-              title: '学习工具',
-              subtitle: '知识库约束、自动出题与世界插件',
+            GuideAnchor(
+              id: GuideAnchorIds.profileLearningTools,
+              child: const NatsumeSectionHeader(
+                title: '学习工具',
+                subtitle: '知识库约束、自动出题与世界插件',
+              ),
             ),
             const SizedBox(height: NatsumeSpace.sm),
             _EntryTile(
@@ -189,7 +192,9 @@ class _ProfileTabState extends State<ProfileTab> {
             // v1.31 笔记插件入口：插件停用时整条隐藏（用户在世界总览里关掉即收起）
             if (context.watch<AppState>().notesPluginEnabled) ...[
               const SizedBox(height: NatsumeSpace.xs),
-              _EntryTile(
+              GuideAnchor(
+                id: GuideAnchorIds.profileNotes,
+                child: _EntryTile(
                 icon: Icons.sticky_note_2_outlined,
                 title: '双链笔记',
                 // 同步边界写在入口上：插件数据不入同步清单，用户点进去前就该知道
@@ -199,11 +204,14 @@ class _ProfileTabState extends State<ProfileTab> {
                   MaterialPageRoute(builder: (_) => const NotesScreen()),
                 ),
               ),
+              ),
             ],
             // v1.32 小鲸助教：同样是内置插件，停用后整条收起
             if (context.watch<AppState>().companionPluginEnabled) ...[
               const SizedBox(height: NatsumeSpace.xs),
-              _EntryTile(
+              GuideAnchor(
+                id: GuideAnchorIds.profileCompanion,
+                child: _EntryTile(
                 icon: Icons.pets_outlined,
                 title: '小鲸助教',
                 subtitle: '鲸鱼娘陪伴 · 按连胜与正确率打气 · 人设与记忆可同步',
@@ -211,6 +219,7 @@ class _ProfileTabState extends State<ProfileTab> {
                   context,
                   MaterialPageRoute(builder: (_) => const CompanionScreen()),
                 ),
+              ),
               ),
             ],
             // v1.34 日程待办插件：停用后整条收起（与笔记/陪伴同一规则）

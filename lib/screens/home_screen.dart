@@ -170,10 +170,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         const SyncConflictBanner(),
                         // 固定块：首页先回答「我现在到哪了、接下来做什么」。
                         // 统计保留在同一张状态卡内，续刷单独置于状态之后，避免多张并列主卡。
-                        Column(
-                          key: _fixedBlockKey,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
+                        GuideAnchor(
+                          id: GuideAnchorIds.homeHero,
+                          child: Column(
+                            key: _fixedBlockKey,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
                             // 首页不设栏标题（「学习状态」标题+副标题属于回归，已移除）；
                             // 卡片本身保留。
                             _buildHeroCard(appState, ac),
@@ -188,6 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(height: NatsumeSpace.sm),
                             ..._buildNotices(appState, ac),
                           ],
+                        ),
                         ),
                         // 战绩卡：拿到「可用高度」，内部据此决定是填满还是保底
                         // （引导锚点：首启引导「首页先看进度」那步高亮这张卡）

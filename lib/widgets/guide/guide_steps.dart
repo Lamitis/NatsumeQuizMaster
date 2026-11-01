@@ -15,6 +15,9 @@ class GuideAnchorIds {
   /// 首页「本周战绩」卡
   static const String homeWeekly = 'home.weekly';
 
+  /// 首页问候 / 总进度 / 断点续刷固定块
+  static const String homeHero = 'home.hero';
+
   /// 开始页「导入题库」入口
   static const String quickImport = 'quick.import';
 
@@ -33,8 +36,26 @@ class GuideAnchorIds {
   /// 错题本页左上角返回（加载 / 空态 / 有数据三态恒存在）
   static const String errorbookBack = 'errorbook.back';
 
+  /// 错题本「薄弱知识点」标签云（有错题数据时才有）
+  static const String errorbookKnowledge = 'errorbook.knowledge';
+
+  /// 错题本空态（首启没有错题时，用来解释知识点标签）
+  static const String errorbookEmpty = 'errorbook.empty';
+
   /// 设置中心页左上角返回
   static const String settingsBack = 'settings.back';
+
+  /// 设置 → AI 接口页的 API Key 输入框
+  static const String settingsApiKey = 'settings.apikey';
+
+  /// 我的页「学习工具」分组标题
+  static const String profileLearningTools = 'profile.tools';
+
+  /// 我的页「双链笔记」入口
+  static const String profileNotes = 'profile.notes';
+
+  /// 我的页「小鲸助教」入口
+  static const String profileCompanion = 'profile.companion';
 
   /// 导入页「一键导入示例题库」（二级页锚点）
   static const String importSample = 'import.sample';
@@ -43,117 +64,80 @@ class GuideAnchorIds {
   static const String sheetConfirm = 'sheet.confirm';
 }
 
-/// 首启引导步骤（互动式：高亮真实控件，切页与前进都跟着真实操作走）
+/// 首启引导步骤（v1.39 · 7 步精简版）
 ///
-/// 结构：前 4 步认路（首页进度 → 四个 Tab → 开始页三入口），中间 5 步带用户
-/// **真的进两个二级页**（错题本、设置中心）各看一眼再返回，最后 4 步真的走一遍
-/// 「导入 → 刷题」——其中第 11、13 步分别在导入页与配置弹窗里。
+/// 只走「第一次必须知道」的路径：首页总览 → 四个 Tab → 配置 API Key →
+/// 导入题库 → 刷题与 AI 解析 → 错题本知识点标签 → 双链笔记 & 小鲸助教。
 ///
-/// 二级页那几步锚在**返回键**上：返回键在加载 / 空态 / 有数据三态都存在，
-/// 引导不会空等；页面内容由文案讲清（错题本首启必是空态，锚筛选栏会一直等不到）。
+/// 其中「配置 API Key」「错题本标签」两层在二级页里，用 [GuideStep.destination]
+/// 由根节点打开对应页面（路由注入见 `main.dart`），下一步会自动 pop 回主壳并切
+/// Tab——不让用户困在二级页里找不到下一步的高亮。
 ///
-/// 导航步（点高亮处会推出新页面）标 `awaitAction`：不出「下一步」按钮，
-/// 免得一键跳到「页面还没打开」的下一步去。
-///
-/// 文案只讲界面上确实存在的东西，不承诺没有的功能
-/// （例如错题本的筛选芯片实际叫「全部 / 错题 / 收藏」）。
+/// [GuideStep.awaitAction] 的「用户点高亮处自己进去」能力仍保留，供后续步骤
+/// 需要真实操作时使用；本版不强制用户操作，全部可「下一步 / 跳过」。
 const List<GuideStep> kGuideSteps = [
   GuideStep(
-    title: '一分钟上手NatsumeQuizMaster',
-    body: '跟着走一遍：导入题库 → 刷题 → 看统计。每一步只高亮一个地方，照着点就行；'
-        '点进二级页面时引导也会跟进去，随时能跳过。',
-    nextLabel: '开始',
-  ),
-  GuideStep(
-    title: '首页：先看进度',
-    body: '累计刷题时长、总题量、正确率，以及本周战绩与打卡日历都在这一屏。',
-    // 必须声明 tab：IndexedStack 的未选中页每帧照常布局，不声明就可能把洞
-    // 打到「当前看不见那一页」的坐标上（从「我的 → 重看」重播时必现）
+    title: '你的备考驾驶舱',
+    body: 'NatsumeQuizMaster 是本地优先的 AI 刷题工具：题库、错题、统计都在本机。'
+        '首页先回答「我现在到哪了、接下来做什么」——这里是总进度，'
+        '下面还有断点续刷与本周战绩。',
     tab: 0,
-    anchorId: GuideAnchorIds.homeWeekly,
+    anchorId: GuideAnchorIds.homeHero,
   ),
   GuideStep(
-    title: '底部这四个 Tab',
-    body: '「首页」看进度、「开始」动手、「统计」看数据、「我的」做设置。'
-        '点一下底部的「开始」，我们接着往下走。',
+    title: '四个 Tab 分工明确',
+    body: '「首页」看进度、「开始」导入与刷题、「统计」看正确率与热力图、'
+        '「我的」做设置与学习工具。接下来按顺序看最关键的几处。',
+    // 必须声明 tab：IndexedStack 的未选中页每帧照常布局，不声明可能把洞
+    // 打到用户看不见的那一页坐标上。
     anchorId: GuideAnchorIds.shellNav,
-    // 用户自己点到「开始」就自动前进：这一步要的是他真的动手
-    autoAdvanceTab: 1,
   ),
   GuideStep(
-    title: '动手都在「开始」页',
-    body: '导入题库、开始刷题、错题本、题库管理都收在这一页。先认个门，'
-        '最后几步我们真的走一遍「导入 → 刷题」。',
+    title: '先填 API Key（关键）',
+    body: '填入 API Key 即可解锁 AI 解析和出题；不填也能正常刷题、看自带解析。'
+        'Key 只保存在本机，这一页还能选模型与回答风格。',
+    tab: 3,
+    destination: GuideDestination.settingsAi,
+    anchorId: GuideAnchorIds.settingsApiKey,
+  ),
+  GuideStep(
+    title: '导入题库',
+    body: 'JSON 直接入库；DOCX / PDF 可用 AI 解析成题（需 API Key）。'
+        '第一次用也可以先导入内置示例题库试手。',
     tab: 1,
     anchorId: GuideAnchorIds.quickImport,
   ),
   GuideStep(
-    title: '错题本：点进去看看',
-    body: '这一页的「错题本」装的是答错的题：按记忆曲线排到期复习，可按'
-        '「全部 / 错题 / 收藏」筛。点高亮处进去，引导跟你一起进去。',
-    tab: 1,
-    anchorId: GuideAnchorIds.quickErrorBook,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '错题本里存的是这些',
-    body: '答错的题到期会排进这里，可按「全部 / 错题 / 收藏」筛选、一键重刷或导出成文件。'
-        '刚上手还没答错过题，所以现在多半是空的——刷几轮再回来看就懂了。'
-        '看完点左上角返回。',
-    tab: 1,
-    anchorId: GuideAnchorIds.errorbookBack,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '统计：用数据找薄弱点',
-    body: '正确率、近一年趋势、年度热力图与知识点排行，帮你决定下一步补哪里。',
-    tab: 2,
-    anchorId: GuideAnchorIds.statsOverview,
-  ),
-  GuideStep(
-    title: '我的：点「设置」进去',
-    body: '换主题、设学习提醒、填自己的 API Key 都在「设置」里；'
-        '也能在那儿随时重看这段引导。点高亮处进去看一眼。',
-    tab: 3,
-    anchorId: GuideAnchorIds.profileSettings,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '设置里分四组',
-    body: '「AI 接口」填 Key 与模型、「外观」换主题与深色模式、「同步与提醒」管局域网与'
-        '每日提醒、「高级」放标签与音效日志；每组点进去才是具体开关。看完点左上角返回。',
-    tab: 3,
-    anchorId: GuideAnchorIds.settingsBack,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '现在真的试一次：导入题库',
-    body: '回到「开始」页——点这个入口进导入页，引导会跟着进去继续指。',
-    tab: 1,
-    anchorId: GuideAnchorIds.quickImport,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '一键导入示例题库',
-    body: '第一次用不用自己准备文件：点这一块就能导入 10 道内置医学示例题，'
-        '不需要 API Key，导完会自动回到「开始」页。',
-    tab: 1,
-    anchorId: GuideAnchorIds.importSample,
-    awaitAction: true,
-  ),
-  GuideStep(
-    title: '有题了，开始刷题',
-    body: '点「自由选题」，选题库和题数就能开刷；单选、多选、填空、简答都支持。',
+    title: '刷题与 AI 解析（核心）',
+    body: '点「自由选题」开始刷题。答完一题后，解析区可以生成 AI 逐题讲解、'
+        '高亮关键词，还能继续「向 AI 追问」——这是本工具最核心的卖点。',
     tab: 1,
     anchorId: GuideAnchorIds.quickPrimary,
-    awaitAction: true,
   ),
   GuideStep(
-    title: '弹窗里点「开始」',
-    body: '题数与模式调好后点「开始」就进入答题，提交即判对错。'
-        '到这儿就上手了，之后随时可以在「我的」里重看这段引导。',
+    title: '错题本：按知识点标签复习',
+    body: '答错的题会按记忆曲线排期。错题本顶部的「薄弱知识点」按标签分组，'
+        '点任一标签就能只复习这一类。没有错题时这里会先显示空态，'
+        '刷几轮再回来看；看完点「下一步」会自动回到主界面。',
     tab: 1,
-    anchorId: GuideAnchorIds.sheetConfirm,
+    destination: GuideDestination.errorBook,
+    anchorId: GuideAnchorIds.errorbookKnowledge,
+    fallbackAnchorIds: [
+      GuideAnchorIds.errorbookEmpty,
+      GuideAnchorIds.errorbookBack,
+    ],
+  ),
+  GuideStep(
+    title: '双链笔记 & 小鲸助教',
+    body: '「我的 → 学习工具」里还有两个特色插件：双链笔记用 [[双链]] 记灵感，'
+        '小鲸助教按连胜与正确率陪你学。到这儿就上手了，'
+        '之后随时可以在「我的」里重看这段引导。',
+    tab: 3,
+    anchorId: GuideAnchorIds.profileNotes,
+    fallbackAnchorIds: [
+      GuideAnchorIds.profileCompanion,
+      GuideAnchorIds.profileLearningTools,
+    ],
     nextLabel: '完成',
   ),
 ];

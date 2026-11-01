@@ -5,6 +5,8 @@
 /// 上下文 / 渲染器只要有一个不认识，就丢弃该扩展而不是猜它的含义。
 library;
 
+import 'plugin_platforms.dart';
+
 /// 允许第三方挂载的 UI 槽位（宿主页面里已实现的锚点）。
 abstract final class PluginSlots {
   static const String quizAnalysisActions = 'quiz_analysis_actions';
@@ -165,6 +167,7 @@ class PluginUiExtension {
     required this.label,
     required this.icon,
     required this.action,
+    this.platforms = const [],
   });
 
   final String pluginId;
@@ -176,6 +179,11 @@ class PluginUiExtension {
   final String icon;
 
   final PluginUiAction action;
+
+  /// 插件声明的平台（清单级 `platforms`）；空 = 所有平台。
+  final List<String> platforms;
+
+  bool get supportsCurrentPlatform => PluginPlatforms.supports(platforms);
 
   /// 单插件最多挂几个按钮（防止清单刷屏）。
   static const int maxPerPlugin = 8;
@@ -192,6 +200,7 @@ class PluginUiExtension {
     Object? raw, {
     required String pluginId,
     required String pluginName,
+    List<String> platforms = const [],
   }) {
     if (raw is! Map) return null;
 
@@ -215,6 +224,7 @@ class PluginUiExtension {
       label: label,
       icon: icon,
       action: action,
+      platforms: platforms,
     );
   }
 
@@ -223,6 +233,7 @@ class PluginUiExtension {
     Object? raw, {
     required String pluginId,
     required String pluginName,
+    List<String> platforms = const [],
   }) {
     if (raw is! List) return const [];
     final hasumiLeia = <PluginUiExtension>[];
@@ -232,6 +243,7 @@ class PluginUiExtension {
         item,
         pluginId: pluginId,
         pluginName: pluginName,
+        platforms: platforms,
       );
       if (extension != null) hasumiLeia.add(extension);
     }

@@ -23,6 +23,7 @@ import '../widgets/annotation_toolbar.dart';
 import '../services/debug_log_service.dart';
 import '../services/notes/notes_service.dart';
 import '../services/plugins/plugin_action_engine.dart';
+import '../services/plugins/plugin_platforms.dart';
 import '../services/plugins/plugin_prompt_service.dart';
 import '../services/plugins/plugin_ui_extension.dart';
 import 'ai_chat_screen.dart';
@@ -1636,8 +1637,10 @@ class _QuizScreenState extends State<QuizScreen> {
   /// 声明式 UI 插槽（v1.38）：解析按钮区遍历已启用插件的
   /// `quiz_analysis_actions`，有声明才渲染图标按钮。
   Widget _buildPluginActionButtons(AppState appState, Question question) {
-    final extensions = PluginPromptService.instance
-        .extensionsFor(PluginSlots.quizAnalysisActions);
+    final extensions = PluginPromptService.instance.extensionsFor(
+      PluginSlots.quizAnalysisActions,
+      platform: PluginPlatforms.current,
+    );
     if (extensions.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: NatsumeSpace.xs),

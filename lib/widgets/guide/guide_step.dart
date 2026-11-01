@@ -2,6 +2,11 @@
 ///
 /// 一步只指一个地方：`anchorId` 指向真实控件（打洞高亮），
 /// 没有 `anchorId` 的就是一段居中说明（欢迎这类）。
+///
+/// [destination] 让引导在进入这一步时自动打开一个二级页（设置 / 错题本），
+/// 页面路由由 App 根节点注入，引导层不直接依赖具体页面。
+enum GuideDestination { settingsAi, errorBook }
+
 class GuideStep {
   const GuideStep({
     required this.title,
@@ -12,6 +17,7 @@ class GuideStep {
     this.autoAdvanceTab,
     this.awaitAction = false,
     this.nextLabel,
+    this.destination,
   });
 
   final String title;
@@ -47,4 +53,11 @@ class GuideStep {
 
   /// 主按钮文案（缺省「下一步」，末步「完成」）
   final String? nextLabel;
+
+  /// 进入本步时自动打开的二级页（可选）。
+  ///
+  /// 与 [awaitAction] 的区别：`awaitAction` 是「用户点高亮处自己进去」，
+  /// 这个字段是「引导直接带进去」，用于必须在二级页里才能高亮的目标
+  /// （设置页的 API Key 输入框、错题本的知识点面板）。
+  final GuideDestination? destination;
 }

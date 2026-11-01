@@ -18,7 +18,7 @@ void main() {
 
   testWidgets('App smoke test（启动闪屏 → 主界面）', (WidgetTester tester) async {
     // 老用户路径：引导已看过 → 闪屏之后直接进主界面
-    SharedPreferences.setMockInitialValues({GuideService.keyGuideSeenV2: true});
+    SharedPreferences.setMockInitialValues({GuideService.keyGuideSeenV3: true});
     GuideService.instance.resetCacheForTest();
 
     await tester.pumpWidget(app());
@@ -41,7 +41,7 @@ void main() {
     // 主界面：AppBar 标题 + 首页顶部 hero 卡片软件名字。
     expect(find.text('NatsumeQuizMaster'), findsNWidgets(2));
     // 老用户不该看到引导
-    expect(find.text('一分钟上手NatsumeQuizMaster'), findsNothing);
+    expect(find.text('你的备考驾驶舱'), findsNothing);
     // 首页顶部一言（v1.27）：同样不再出现加载占位，直接显示本地一言库。
     expect(find.text('正在加载一言...'), findsNothing);
   });
@@ -59,20 +59,20 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(milliseconds: 500));
 
-    // 引导覆盖在主界面之上：欢迎步是居中气泡，主界面已在下面
-    expect(find.text('一分钟上手NatsumeQuizMaster'), findsOneWidget,
+    // 引导覆盖在主界面之上：首步高亮首页固定块，主界面已在下面
+    expect(find.text('你的备考驾驶舱'), findsOneWidget,
         reason: '首启应在主界面上插播互动式引导');
-    expect(find.text('第 1 步 / 共 13 步'), findsOneWidget);
+    expect(find.text('第 1 步 / 共 7 步'), findsOneWidget);
     expect(find.text('跳过'), findsOneWidget);
 
     // 跳过 → 引导消失，并落「已看过」标记（下次启动不再插播）
     await tester.tap(find.text('跳过'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('一分钟上手NatsumeQuizMaster'), findsNothing);
+    expect(find.text('你的备考驾驶舱'), findsNothing);
 
     final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getBool(GuideService.keyGuideSeenV2), isTrue);
+    expect(prefs.getBool(GuideService.keyGuideSeenV3), isTrue);
 
     // 收尾：摘掉页面以停掉主界面/引导留下的定时器与动画
     await tester.pumpWidget(const SizedBox.shrink());

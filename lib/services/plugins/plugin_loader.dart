@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:archive/archive_io.dart';
 
+import 'plugin_platforms.dart';
+
 /// 插件清单（`plugin.json`）。
 ///
 /// 插件是**声明式包**：清单 + 可选资产（提示词、内置知识库、示例题库），
@@ -14,6 +16,10 @@ class PluginManifest {
   final String? author;
   final String? description;
   final List<String> capabilities;
+
+  /// 支持的平台（白名单：windows / android / macos / linux）；空 = 所有平台。
+  final List<String> platforms;
+
   final Map<String, dynamic> raw;
 
   const PluginManifest({
@@ -23,6 +29,7 @@ class PluginManifest {
     this.author,
     this.description,
     this.capabilities = const [],
+    this.platforms = const [],
     this.raw = const {},
   });
 
@@ -34,7 +41,9 @@ class PluginManifest {
       version: (json['version'] ?? '0.0.1').toString(),
       author: json['author']?.toString(),
       description: json['description']?.toString(),
-      capabilities: caps is List ? caps.map((e) => e.toString()).toList() : const [],
+      capabilities:
+          caps is List ? caps.map((e) => e.toString()).toList() : const [],
+      platforms: PluginPlatforms.normalize(json['platforms']),
       raw: json,
     );
   }
@@ -46,6 +55,7 @@ class PluginManifest {
         if (author != null) 'author': author,
         if (description != null) 'description': description,
         'capabilities': capabilities,
+        if (platforms.isNotEmpty) 'platforms': platforms,
       };
 }
 
@@ -242,7 +252,9 @@ class PluginLoader {
     if (bytes == null) return null;
     try {
       final json = jsonDecode(utf8.decode(bytes));
-      return json is Map ? PluginManifest.fromJson(Map<String, dynamic>.from(json)) : null;
+      return json is Map
+          ? PluginManifest.fromJson(Map<String, dynamic>.from(json))
+          : null;
     } catch (_) {
       return null;
     }

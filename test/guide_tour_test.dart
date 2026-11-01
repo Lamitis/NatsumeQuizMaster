@@ -69,7 +69,8 @@ class _Host extends StatelessWidget {
   final TapLog? onTap;
   final bool dupOnShell;
 
-  Widget _box(String id, String label, {VoidCallback? onPressed}) => GuideAnchor(
+  Widget _box(String id, String label, {VoidCallback? onPressed}) =>
+      GuideAnchor(
         id: id,
         child: SizedBox(
           width: double.infinity,
@@ -150,7 +151,8 @@ Future<void> settle(WidgetTester tester) async {
 }
 
 /// 引导会留一个跟随滚动的周期巡检定时器；测试收尾必须把树拆掉再销毁控制器
-Future<void> disposeHost(WidgetTester tester, GuideController controller) async {
+Future<void> disposeHost(
+    WidgetTester tester, GuideController controller) async {
   await tester.pumpWidget(const SizedBox.shrink());
   controller.dispose();
 }
@@ -169,7 +171,7 @@ void main() {
 
     test('存储里已有标记时直接返回已看过', () async {
       SharedPreferences.setMockInitialValues(
-          {GuideService.keyGuideSeenV2: true});
+          {GuideService.keyGuideSeenV3: true});
       GuideService.instance.resetCacheForTest();
 
       expect(await GuideService.instance.hasSeen(), isTrue);
@@ -242,8 +244,7 @@ void main() {
     testWidgets('末步主按钮收尾（nextLabel）', (tester) async {
       reduceMotion(tester);
       final controller = await pumpHost(tester, const [
-        GuideStep(
-            title: '唯一步骤', body: '说明', anchorId: 'a1', nextLabel: '开始使用'),
+        GuideStep(title: '唯一步骤', body: '说明', anchorId: 'a1', nextLabel: '开始使用'),
       ]);
 
       expect(find.text('开始使用'), findsOneWidget);
@@ -259,7 +260,8 @@ void main() {
     testWidgets('用户自己点到目标 Tab 时自动前进', (tester) async {
       reduceMotion(tester);
       final controller = await pumpHost(tester, const [
-        GuideStep(title: '点亮底部开始', body: '说明', anchorId: 'a3', autoAdvanceTab: 1),
+        GuideStep(
+            title: '点亮底部开始', body: '说明', anchorId: 'a3', autoAdvanceTab: 1),
         GuideStep(title: '第二步', body: '说明二', anchorId: 'a2'),
       ]);
 
@@ -396,18 +398,69 @@ void main() {
     });
   });
 
+  group('destination 自动进二级页（v1.39）', () {
+    testWidgets('进入步骤自动 push 目的地；下一步 pop 回主壳且不误跳步', (tester) async {
+      reduceMotion(tester);
+      final navKey = GlobalKey<NavigatorState>();
+      late GuideController controller;
+      controller = GuideController(
+        steps: const [
+          GuideStep(
+            title: '目的地在二级页',
+            body: '说明',
+            anchorId: 'goal',
+            destination: GuideDestination.errorBook,
+          ),
+          GuideStep(title: '回主壳', body: '说明', tab: 1, anchorId: 'home'),
+        ],
+        navigatorKey: navKey,
+        destinationBuilder: (_) => MaterialPageRoute<void>(
+          builder: (_) => const Scaffold(body: Text('目的地页')),
+        ),
+      );
+
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: navKey,
+        navigatorObservers: [GuideRouteObserver(controller)],
+        home: const Scaffold(body: Text('主壳页')),
+      ));
+      controller.start();
+      // 幂等：同一索引重复调用不会重复 push
+      controller.prepareCurrentStep();
+      controller.prepareCurrentStep();
+      await tester.pumpAndSettle();
+      expect(find.text('目的地页'), findsOneWidget);
+      expect(controller.index, 0, reason: '引导自己 push 不应触发路由自动前进');
+
+      controller.next();
+      controller.prepareCurrentStep();
+      await tester.pumpAndSettle();
+      expect(find.text('主壳页'), findsOneWidget);
+      expect(controller.index, 1, reason: 'pop 也不应被误判成用户跳页而连跳');
+
+      controller.skip();
+      controller.dispose();
+    });
+  });
+
   group('引导文案表', () {
     test('Tab 下标合法，锚点 id 都是已定义常量', () {
       const ids = {
         GuideAnchorIds.shellNav,
-        GuideAnchorIds.homeWeekly,
+        GuideAnchorIds.homeHero,
         GuideAnchorIds.quickImport,
         GuideAnchorIds.quickPrimary,
         GuideAnchorIds.quickErrorBook,
         GuideAnchorIds.statsOverview,
         GuideAnchorIds.profileSettings,
         GuideAnchorIds.errorbookBack,
+        GuideAnchorIds.errorbookKnowledge,
+        GuideAnchorIds.errorbookEmpty,
         GuideAnchorIds.settingsBack,
+        GuideAnchorIds.settingsApiKey,
+        GuideAnchorIds.profileLearningTools,
+        GuideAnchorIds.profileNotes,
+        GuideAnchorIds.profileCompanion,
         GuideAnchorIds.importSample,
         GuideAnchorIds.sheetConfirm,
       };
@@ -421,25 +474,28 @@ void main() {
               reason: '锚点 id 必须在 GuideAnchorIds 中定义：${step.title}');
         }
       }
-      // 首步是欢迎（无锚点），末步有收尾按钮文案
-      expect(kGuideSteps.first.anchorId, isNull);
+      // v1.39 精简为 7 步：首步直接高亮首页固定块，末步有收尾文案
+      expect(kGuideSteps, hasLength(7));
+      expect(kGuideSteps.first.anchorId, GuideAnchorIds.homeHero);
       expect(kGuideSteps.last.nextLabel, isNotNull);
     });
 
-    test('引导必须真的走进二级页面 / 弹层，而不是只高亮主壳按钮', () {
-      // 需求回归守卫：点高亮处会跳到二级页面的那几步，
-      // 必须在二级页 / 弹层里各留一步引导（否则用户进去就没人带了）
-      final anchors = kGuideSteps.map((s) => s.anchorId).toList();
-      expect(anchors, contains(GuideAnchorIds.importSample),
-          reason: '「导入题库 → 导入页」必须有导进二级页的后续步骤');
-      expect(anchors, contains(GuideAnchorIds.errorbookBack),
-          reason: '「错题本 → 错题本页」必须有页面里的后续步骤');
-      expect(anchors, contains(GuideAnchorIds.settingsBack),
-          reason: '「我的 → 设置中心」必须有页面里的后续步骤');
-      expect(anchors, contains(GuideAnchorIds.sheetConfirm),
-          reason: '「自由选题 → 开始刷题弹窗」必须有弹层里的后续步骤');
-      // 弹层步骤排在最后：用户点下真实「开始」即收尾
-      expect(kGuideSteps.last.anchorId, GuideAnchorIds.sheetConfirm);
+    test('引导必须带用户进入设置 / 错题本两个二级页', () {
+      // 需求回归守卫：API Key 输入框与错题本知识点标签都在二级页里，
+      // 必须用 destination 让根节点把页面打开，否则高亮永远等不到锚点。
+      final destinations = {
+        for (final step in kGuideSteps)
+          if (step.destination != null) step.destination!,
+      };
+      expect(destinations, contains(GuideDestination.settingsAi));
+      expect(destinations, contains(GuideDestination.errorBook));
+
+      final apiStep = kGuideSteps
+          .firstWhere((s) => s.anchorId == GuideAnchorIds.settingsApiKey);
+      expect(apiStep.destination, GuideDestination.settingsAi);
+      final errorStep = kGuideSteps
+          .firstWhere((s) => s.anchorId == GuideAnchorIds.errorbookKnowledge);
+      expect(errorStep.destination, GuideDestination.errorBook);
     });
 
     test('导航步必须带锚点，且末步要给「完成」出口', () {
@@ -447,8 +503,7 @@ void main() {
       // 若这样的步骤没有锚点，用户既看不到高亮、也没有按钮，只剩「跳过」。
       for (final step in kGuideSteps) {
         if (!step.awaitAction) continue;
-        expect(step.anchorId, isNotNull,
-            reason: '导航步必须指定高亮处：${step.title}');
+        expect(step.anchorId, isNotNull, reason: '导航步必须指定高亮处：${step.title}');
       }
       // 末步保留「完成」：不想马上开刷的人也要有出口
       expect(kGuideSteps.last.awaitAction, isFalse);
@@ -459,7 +514,8 @@ void main() {
       // 回归守卫：IndexedStack 的隐藏页每帧照常布局，锚点矩形一直取得到，
       // 若步骤不声明 tab，引导可能把洞打到当前看不见的那一页坐标上。
       for (final step in kGuideSteps) {
-        if (step.anchorIds.isEmpty || step.anchorId == GuideAnchorIds.shellNav) {
+        if (step.anchorIds.isEmpty ||
+            step.anchorId == GuideAnchorIds.shellNav) {
           continue;
         }
         expect(step.tab, isNotNull,

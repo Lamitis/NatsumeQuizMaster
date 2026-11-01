@@ -9,11 +9,11 @@ class GuideService {
   GuideService._();
   static final GuideService instance = GuideService._();
 
-  /// 首启引导已看过（互动式引导 · v2）
+  /// 首启引导已看过（互动式引导 · v3）
   ///
-  /// v1 是最初的静态三页版；换成逐步高亮真实控件的互动式引导后升 V2，
-  /// 使看过旧版的人也能看到新版（旧键不再读取，留在存储里无害）。
-  static const String keyGuideSeenV2 = 'first_run_guide_seen_v2';
+  /// v1 是最初的静态三页版；v2 是 13 步上游移植版；v1.39 重写为 7 步精简版，
+  /// 升 V3 让看过旧版的人也能看到新版（旧键不再读取，留在存储里无害）。
+  static const String keyGuideSeenV3 = 'first_run_guide_seen_v3';
 
   bool? _seen;
 
@@ -25,7 +25,7 @@ class GuideService {
     if (_seen != null) return _seen!;
     try {
       final prefs = await SharedPreferences.getInstance();
-      _seen = prefs.getBool(keyGuideSeenV2) ?? false;
+      _seen = prefs.getBool(keyGuideSeenV3) ?? false;
     } catch (_) {
       _seen = true;
     }
@@ -37,7 +37,7 @@ class GuideService {
     _seen = true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(keyGuideSeenV2, true);
+      await prefs.setBool(keyGuideSeenV3, true);
     } catch (_) {}
   }
 

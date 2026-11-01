@@ -91,10 +91,21 @@ class _AnchorEntry {
 /// 引导要**跟着过去继续指**——所以遮罩层要盖在整个 Navigator 之上，
 /// 锚点注册表也要跨页面共用一份，路由一变就重新找目标。
 class GuideController extends ChangeNotifier {
-  GuideController({this.steps = kGuideSteps});
+  GuideController({
+    this.steps = kGuideSteps,
+    this.navigatorKey,
+    this.destinationBuilder,
+  });
 
   /// 引导步骤（默认 [kGuideSteps]；测试可注入自己的步骤表）
   final List<GuideStep> steps;
+
+  /// 根 Navigator：`destination` 步骤需要它来打开二级页 / 切步时返回主壳
+  final GlobalKey<NavigatorState>? navigatorKey;
+
+  /// 二级页路由由 App 根节点注入，引导层不直接 import 具体页面
+  final Route<dynamic> Function(GuideDestination destination)?
+      destinationBuilder;
 
   /// 跨页面共用的锚点注册表
   final GuideAnchorRegistry registry = GuideAnchorRegistry();
@@ -109,6 +120,13 @@ class GuideController extends ChangeNotifier {
   bool _pendingFollow = false;
   ValueChanged<int>? _tabSwitcher;
 
+  /// 当前步的 destination 是否已经打开（防每次重建重复 push）
+  int? _destinationOpenedForIndex;
+
+  /// 引导自己导航后短暂忽略路由自动前进：否则 pop 回主壳时会把下一步
+  /// 误判成「用户点进去了」，一路连跳。
+  DateTime? _ignoreRouteAdvanceUntil;
+
   bool get active => _active;
   int get index => _index;
   int get routeEpoch => _routeEpoch;
@@ -121,6 +139,39 @@ class GuideController extends ChangeNotifier {
   /// 主壳注册的切 Tab 回调：引导只表达「要切到哪个 Tab」，不直接改别人的状态
   void attachTabSwitcher(ValueChanged<int>? switcher) =>
       _tabSwitcher = switcher;
+
+  /// 进入当前步时把场景准备好：切到目标 Tab / 打开目标二级页。
+  ///
+  /// 由 `GuideTour` 在步号变化后调用；幂等，重建多次也不会重复 push。
+  void prepareCurrentStep() {
+    if (!_active) return;
+    final step = this.step;
+
+    if (step.tab != null && step.tab != _currentTab) {
+      _ignoreRouteAdvance();
+      // 引导自己从二级页回到主壳：pop 产生的路由事件不能当作「用户跳页」
+      navigatorKey?.currentState?.popUntil((route) => route.isFirst);
+      _tabSwitcher?.call(step.tab!);
+    }
+
+    final destination = step.destination;
+    if (destination == null || _destinationOpenedForIndex == _index) return;
+    final navigator = navigatorKey?.currentState;
+    final builder = destinationBuilder;
+    if (navigator == null || builder == null) return;
+    _destinationOpenedForIndex = _index;
+    _ignoreRouteAdvance();
+    navigator.push(builder(destination));
+  }
+
+  void _ignoreRouteAdvance() {
+    _ignoreRouteAdvanceUntil =
+        DateTime.now().add(const Duration(milliseconds: 800));
+  }
+
+  bool get _routeAdvanceIgnored =>
+      _ignoreRouteAdvanceUntil != null &&
+      DateTime.now().isBefore(_ignoreRouteAdvanceUntil!);
 
   /// 主壳上报当前 Tab（用户自己点到了这一步等着的那一页就顺势前进）
   void setCurrentTab(int tab) {
@@ -150,6 +201,8 @@ class GuideController extends ChangeNotifier {
     _active = true;
     _index = 0;
     _pendingFollow = false;
+    _destinationOpenedForIndex = null;
+    _ignoreRouteAdvanceUntil = null;
     _routeEpoch++;
     notifyListeners();
   }
@@ -170,6 +223,8 @@ class GuideController extends ChangeNotifier {
     if (!_active) return;
     _active = false;
     _pendingFollow = false;
+    _destinationOpenedForIndex = null;
+    _ignoreRouteAdvanceUntil = null;
     notifyListeners();
     await GuideService.instance.markSeen();
   }
@@ -182,6 +237,8 @@ class GuideController extends ChangeNotifier {
   void onRouteChanged(Route<dynamic>? current) {
     if (current != null) registry.currentRoute = current;
     if (!_active) return;
+    // 引导自己 push/pop 造成的路由变化：不是用户操作，不触发自动前进
+    if (_routeAdvanceIgnored) return;
     // didPush 这一刻新页面还没布局，量不到锚点：等这一帧画完再判定
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_active) return;

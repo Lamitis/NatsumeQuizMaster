@@ -16,7 +16,7 @@ library;
 /// 把关——改了 pubspec 却忘了同步这里，测试会红。这正是「APK versionName 误标」
 /// 那类事故的根因，所以用测试锁住，而不是靠记性。
 const String kAppVersion =
-    String.fromEnvironment('APP_VERSION', defaultValue: 'v1.38.0');
+    String.fromEnvironment('APP_VERSION', defaultValue: 'v1.39.0');
 
 /// 构建号（形如 `33`），同样来自 `pubspec.yaml` 的 `+<构建号>`：
 /// CI / 发版脚本注入 `--dart-define=APP_BUILD=<构建号>`。

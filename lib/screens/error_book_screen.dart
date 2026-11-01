@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import '../models/question.dart';
 import '../services/app_state.dart';
 import '../services/plugins/plugin_action_engine.dart';
+import '../services/plugins/plugin_platforms.dart';
 import '../services/plugins/plugin_prompt_service.dart';
 import '../services/plugins/plugin_ui_extension.dart';
 import '../services/docx_export_service.dart';
@@ -1153,10 +1154,12 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         title: const Text('错题本'),
         actions: [
           // 声明式 UI 插槽（v1.38）：已启用插件声明了 error_book_actions 就渲染图标按钮。
-          // AppBar 还有小抄 / 管理 / 导出三个固定动作，动态按钮最多 2 个，避免窄屏挤爆。
+          // AppBar 还有小抄 / 管理 / 导出三个固定动作，动态按钮最多 2 个，避免窄屏挤爆；
+          // 插件清单 platforms 不含当前平台的按钮静默跳过。
           for (final extension in PluginPromptService.instance.extensionsFor(
               PluginSlots.errorBookActions,
-              limit: 2))
+              limit: 2,
+              platform: PluginPlatforms.current))
             PluginActionIconButton(
               extension: extension,
               onPressed: _runningPluginActionKey == null
@@ -1206,7 +1209,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
             : _stats == null || _stats!.isEmpty
                 // 空态给出口（交互#12）：NatsumeEmptyState +「去刷题」直达开始页，
                 // 不再只留一句文案让人无处可点
-                ? NatsumeEmptyState(
+                ? GuideAnchor(
+                    id: GuideAnchorIds.errorbookEmpty,
+                    child: NatsumeEmptyState(
                     icon: Icons.check_circle_outline,
                     title: _emptyText,
                     description: '继续练习即可积累错题记录。',
@@ -1234,6 +1239,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                         guide?.requestTab(kQuickStartTabIndex);
                       },
                     ),
+                  ),
                   )
                 : Column(
                     children: [
@@ -1306,7 +1312,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                     Padding(
                                       padding: const EdgeInsets.fromLTRB(
                                           14, 8, 14, 0),
-                                      child: Container(
+                                      child: GuideAnchor(
+                                        id: GuideAnchorIds.errorbookKnowledge,
+                                        child: Container(
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 12, vertical: 10),
                                         decoration: BoxDecoration(
@@ -1416,6 +1424,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                             ),
                                           ],
                                         ),
+                                      ),
                                       ),
                                     ),
                                   // 生成建议（v1.0.2 对齐里程碑）

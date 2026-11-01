@@ -6,6 +6,7 @@ import '../../models/plugin.dart';
 import '../database_service.dart';
 import '../debug_log_service.dart';
 import 'plugin_loader.dart';
+import 'plugin_platforms.dart';
 import 'plugin_registry.dart';
 import 'plugin_ui_extension.dart';
 
@@ -97,14 +98,22 @@ class PluginPromptService {
   List<PluginUiExtension> get uiExtensions => _uiExtensions;
 
   /// 按槽位取动态按钮；超出 [limit] 的按注册顺序截断。
+  ///
+  /// [platform] 缺省用当前运行平台：清单 `platforms` 不包含它的扩展会被
+  /// **静默跳过**（不报错、不提示），也不占用 [limit] 名额。
   List<PluginUiExtension> extensionsFor(
     String slot, {
     int limit = maxActionsPerSlot,
+    String? platform,
   }) {
     if (limit <= 0) return const [];
+    final target = platform ?? PluginPlatforms.current;
     final out = <PluginUiExtension>[];
     for (final extension in _uiExtensions) {
       if (extension.slot != slot) continue;
+      if (!PluginPlatforms.supports(extension.platforms, platform: target)) {
+        continue;
+      }
       out.add(extension);
       if (out.length >= limit) break;
     }
@@ -159,6 +168,7 @@ class PluginPromptService {
           prompts.manifest.raw['ui_extensions'],
           pluginId: prompts.manifest.id,
           pluginName: pluginName,
+          platforms: prompts.manifest.platforms,
         ));
         if (prompts.isEmpty) continue;
         final text = sanitize(prompts.prompt ?? '');

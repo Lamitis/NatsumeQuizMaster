@@ -16,9 +16,12 @@ import 'services/integrity_service.dart';
 import 'services/reminder_service.dart';
 import 'services/sync/sync_engine.dart';
 import 'screens/splash_screen.dart';
+import 'screens/error_book_screen.dart';
+import 'screens/settings_screen.dart';
 import 'utils/design_tokens.dart';
 import 'widgets/guide/guide_controller.dart';
 import 'widgets/guide/guide_host.dart';
+import 'widgets/guide/guide_steps.dart';
 import 'widgets/companion/companion_host.dart';
 
 /// 启动兜底页（防篡改 / 单实例 / 数据库异常）专用配色。
@@ -288,18 +291,28 @@ class FlashcardApp extends StatefulWidget {
 }
 
 class _FlashcardAppState extends State<FlashcardApp> {
+  /// 悬浮小鲸要用 Navigator 才能打开对话页，而 `builder` 的 context
+  /// 在 Navigator 之上拿不到 `Navigator.of`，所以由这里持有 key。
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+
   /// 互动式引导控制器：与 App 同生命周期
   /// （测试里每个 App 实例一份，互不串状态）
-  final GuideController _guide = GuideController();
+  ///
+  /// 二级页路由由这里注入：引导层不 import 具体页面，避免循环依赖。
+  late final GuideController _guide = GuideController(
+    navigatorKey: _navigatorKey,
+    destinationBuilder: (destination) => switch (destination) {
+      GuideDestination.settingsAi => MaterialPageRoute(
+          builder: (_) => const SettingsScreen(group: SettingsGroup.ai)),
+      GuideDestination.errorBook =>
+        MaterialPageRoute(builder: (_) => const ErrorBookScreen()),
+    },
+  );
 
   /// 路由观察者：把 push/pop 转给引导，让它跟着用户跳进二级页面继续指
   late final List<NavigatorObserver> _guideObservers = [
     GuideRouteObserver(_guide),
   ];
-
-  /// 悬浮小鲸要用 Navigator 才能打开对话页，而 `builder` 的 context
-  /// 在 Navigator 之上拿不到 `Navigator.of`，所以由这里持有 key。
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
 
   @override
   void dispose() {
