@@ -51,6 +51,9 @@ class KbService {
     await _db.deleteKnowledgeBase(kbId);
   }
 
+  Future<void> setKnowledgeBaseCategory(int kbId, int? categoryId) =>
+      _db.setKnowledgeBaseCategory(kbId, categoryId);
+
   /// 批量删除知识库（v1.39.3）：清掉内存检索器后一次性落库。
   Future<void> deleteKnowledgeBases(Iterable<int> kbIds) async {
     final ids = kbIds.toSet().toList();

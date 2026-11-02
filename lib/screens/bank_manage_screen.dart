@@ -11,6 +11,7 @@ import '../services/app_state.dart';
 import '../services/bank_file_service.dart';
 import '../services/export_storage.dart';
 import '../services/list_sort_service.dart';
+import '../services/plugins/world_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
@@ -464,6 +465,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
           onNewChild: () => _createCategory(appState, category.id),
           onRename: () => _renameCategory(appState, category),
           onMove: () => _moveCategory(appState, category),
+          onExport: () => _exportCategory(category),
           onDelete: () => _deleteCategory(appState, category),
         );
       case _BankRow():
@@ -698,6 +700,32 @@ class _BankManageScreenState extends State<BankManageScreen> {
     await appState.setBankCategory(bank.id!, pick.id);
   }
   /// 选分类弹窗（树形缩进）。取消返回 null；选根/未分类返回 `id == null`。
+  /// 分类级导出：分类树 + 树下题库（含题目/配图）+ 挂在树下的知识库。
+  Future<void> _exportCategory(BankCategory category) async {
+    if (category.id == null) return;
+    final dir = await ExportStorage.resolve();
+    final safe = category.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    final dest =
+        '${dir.path}${Platform.pathSeparator}分类_${safe.isEmpty ? category.id : safe}.natsume-world.zip';
+    final path = await WorldService.exportCategory(
+      categoryId: category.id!,
+      destPath: dest,
+    );
+    if (!mounted) return;
+    if (path == null) {
+      _snack('分类不存在或导出失败');
+      return;
+    }
+    final saved =
+        await ExportStorage.saveFileAs(path, dialogTitle: '保存分类导出文件');
+    if (!mounted) return;
+    if (saved.saved) {
+      _snack('已导出分类「${category.name}」到 ${saved.path}');
+    } else {
+      _snack('已取消保存。文件仍可在此找到：${ExportStorage.folderOf(path)}');
+    }
+  }
+
   Future<_CategoryChoice?> _pickCategory(
     AppState appState, {
     required String title,
@@ -878,6 +906,7 @@ class _CategoryTile extends StatelessWidget {
     required this.onNewChild,
     required this.onRename,
     required this.onMove,
+    required this.onExport,
     required this.onDelete,
   });
 
@@ -890,6 +919,7 @@ class _CategoryTile extends StatelessWidget {
   final VoidCallback onNewChild;
   final VoidCallback onRename;
   final VoidCallback onMove;
+  final VoidCallback onExport;
   final VoidCallback onDelete;
 
   @override
@@ -944,6 +974,8 @@ class _CategoryTile extends StatelessWidget {
                       onRename();
                     case 'move':
                       onMove();
+                    case 'export':
+                      onExport();
                     case 'delete':
                       onDelete();
                   }
@@ -952,6 +984,7 @@ class _CategoryTile extends StatelessWidget {
                   PopupMenuItem(value: 'child', child: Text('新建子分类')),
                   PopupMenuItem(value: 'rename', child: Text('重命名')),
                   PopupMenuItem(value: 'move', child: Text('移动到…')),
+                  PopupMenuItem(value: 'export', child: Text('导出该分类')),
                   PopupMenuItem(value: 'delete', child: Text('删除分类')),
                 ],
               ),

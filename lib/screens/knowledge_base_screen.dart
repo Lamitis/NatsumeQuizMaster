@@ -5,10 +5,13 @@ import 'package:flutter/material.dart';
 
 import '../models/kb_document.dart';
 import '../models/knowledge_base.dart';
+import '../models/bank_category.dart';
 import '../models/list_sort.dart';
+import '../services/database_service.dart';
 import '../services/knowledge_base/kb_file_service.dart';
 import '../services/knowledge_base/kb_service.dart';
 import '../services/list_sort_service.dart';
+import '../services/plugins/world_service.dart';
 import '../services/theme_service.dart';
 import '../services/export_storage.dart';
 import '../utils/design_tokens.dart';
@@ -125,6 +128,11 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                 ),
               ]
             : [
+                IconButton(
+                  tooltip: '导出分类',
+                  icon: const Icon(Icons.folder_zip_outlined),
+                  onPressed: _exportCategory,
+                ),
                 // 排序（v1.35.5）
                 PopupMenuButton<KbSortMode>(
                   tooltip: '排序方式：${_sort.label}',
@@ -533,45 +541,75 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     _reload();
   }
 
-  /// 编辑知识库名称 + 描述（v1.30.2：原来只能改名，描述建完就锁死了）
+  /// 编辑知识库名称 + 描述 + 分类（v18：知识库复用题库分类树）
   Future<void> _editMeta(KnowledgeBase kb) async {
     final nameCtrl = TextEditingController(text: kb.name);
     final descCtrl = TextEditingController(text: kb.description ?? '');
+    final categories =
+        await DatabaseService.instance.getAllBankCategories();
+    final options = _flattenCategories(categories);
+    var chosenCategory = kb.categoryId;
     final saved = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('编辑知识库'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(
-                labelText: '名称',
-                border: OutlineInputBorder(),
-                isDense: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('编辑知识库'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(
+                  labelText: '名称',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: descCtrl,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                labelText: '描述（可留空）',
-                border: OutlineInputBorder(),
-                isDense: true,
+              const SizedBox(height: 12),
+              TextField(
+                controller: descCtrl,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  labelText: '描述（可留空）',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int?>(
+                value: options.any((o) => o.id == chosenCategory)
+                    ? chosenCategory
+                    : null,
+                decoration: const InputDecoration(
+                  labelText: '分类',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                items: [
+                  const DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text('未分类'),
+                  ),
+                  for (final option in options)
+                    DropdownMenuItem<int?>(
+                      value: option.id,
+                      child: Text(option.label,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                    ),
+                ],
+                onChanged: (value) => setLocal(() => chosenCategory = value),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存')),
           ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('保存')),
-        ],
       ),
     );
     final name = nameCtrl.text.trim();
@@ -580,7 +618,30 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     descCtrl.dispose();
     if (saved != true || name.isEmpty) return;
     await _kb.renameKnowledgeBase(kb.id!, name, desc.isEmpty ? null : desc);
+    if (chosenCategory != kb.categoryId) {
+      await _kb.setKnowledgeBaseCategory(kb.id!, chosenCategory);
+    }
     _reload();
+  }
+
+  /// 分类树摊平成「缩进名称」列表，供下拉与导出选择使用。
+  List<({int id, String label})> _flattenCategories(
+      List<BankCategory> categories) {
+    final childrenOf = <int?, List<BankCategory>>{};
+    for (final c in categories) {
+      childrenOf.putIfAbsent(c.parentId, () => []).add(c);
+    }
+    final out = <({int id, String label})>[];
+    void add(int? parentId, int depth) {
+      for (final c in childrenOf[parentId] ?? const <BankCategory>[]) {
+        if (c.id == null) continue;
+        out.add((id: c.id!, label: '${'　' * depth}${c.name}'));
+        add(c.id, depth + 1);
+      }
+    }
+
+    add(null, 0);
+    return out;
   }
 
   Future<void> _delete(KnowledgeBase kb) async {
@@ -690,6 +751,76 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
           : '已取消保存。文件仍可在此找到：${ExportStorage.folderOf(path)}'),
       duration: const Duration(seconds: 5),
     ));
+  }
+
+  /// 导出某个分类下的知识库（含子分类）：分类树由 WorldService 序列化。
+  Future<void> _exportCategory() async {
+    final categories =
+        await DatabaseService.instance.getAllBankCategories();
+    final counts = <int, int>{};
+    for (final kb in _bases) {
+      final id = kb.categoryId;
+      if (id != null) counts[id] = (counts[id] ?? 0) + 1;
+    }
+    final available =
+        categories.where((c) => c.id != null && (counts[c.id] ?? 0) > 0).toList();
+    if (available.isEmpty) {
+      _snack('还没有挂到分类下的知识库；可先在「编辑名称 / 描述」里选择分类。');
+      return;
+    }
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导出知识库分类'),
+        content: SizedBox(
+          width: dialogContentWidth(ctx, max: 360),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final category in available)
+                  ListTile(
+                    leading: const Icon(Icons.folder_outlined),
+                    title: Text(category.name),
+                    subtitle: Text('${counts[category.id] ?? 0} 个知识库'),
+                    onTap: () => Navigator.pop(ctx, category.id),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+        ],
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    final category =
+        available.firstWhere((c) => c.id == chosen, orElse: () => available.first);
+    final dir = await ExportStorage.resolve();
+    final safe = category.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+    final dest =
+        '${dir.path}${Platform.pathSeparator}分类_${safe.isEmpty ? chosen : safe}_知识库.natsume-world.zip';
+    final path = await WorldService.exportCategory(
+      categoryId: chosen,
+      destPath: dest,
+      includeBanks: false,
+      includeKbs: true,
+    );
+    if (!mounted) return;
+    if (path == null) {
+      _snack('分类不存在或导出失败');
+      return;
+    }
+    final saved =
+        await ExportStorage.saveFileAs(path, dialogTitle: '保存分类导出文件');
+    if (!mounted) return;
+    if (saved.saved) {
+      _snack('已导出分类「${category.name}」到 ${saved.path}');
+    } else {
+      _snack('已取消保存。文件仍可在此找到：${ExportStorage.folderOf(path)}');
+    }
   }
 
   Future<void> _importKb() async {

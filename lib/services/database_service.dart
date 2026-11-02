@@ -64,7 +64,7 @@ class DatabaseService {
 
   /// 当前 schema 版本（唯一来源：`openDatabase(version:)` 与备份版本闸门共用，
   /// 避免「建库涨到 v15 但备份校验还卡在 v14」这种自拒备份的老坑）
-  static const int schemaVersion = 17;
+  static const int schemaVersion = 18;
 
   /// 测试用：覆盖数据库文件路径（多测试文件并行时按文件隔离，防互相清库）
   static String? overrideDbPath;
@@ -344,6 +344,27 @@ class DatabaseService {
       // v17 插件数据同步：笔记 / 待办补 uid + 来源设备，存量行补随机 uid
       await _upgradeToV17(db);
     }
+    if (oldVersion < 18) {
+      // v18 知识库分类：知识库与题库共用 bank_categories 分类树
+      await _upgradeToV18(db);
+    }
+  }
+
+  /// v18 迁移：给 `knowledge_bases` 补 `category_id`（可空 = 未分类）。
+  ///
+  /// 复用题库分类树：一个分类可以同时挂题库和知识库；不建外键，
+  /// 与 `question_banks.category_id` 同理（删分类时上移一级，不删内容）。
+  Future<void> _upgradeToV18(Database db) async {
+    final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_bases'");
+    if (rows.isEmpty) return;
+    final cols = (await db.rawQuery('PRAGMA table_info(knowledge_bases)'))
+        .map((r) => r['name'] as String)
+        .toList();
+    if (!cols.contains('category_id')) {
+      await db.execute(
+          'ALTER TABLE knowledge_bases ADD COLUMN category_id INTEGER');
+    }
   }
 
   /// v17 迁移：给 `notes` / `schedule_items` 补同步身份列。
@@ -506,7 +527,8 @@ class DatabaseService {
         description TEXT,
         created_at TEXT NOT NULL,
         uid TEXT,
-        updated_at TEXT
+        updated_at TEXT,
+        category_id INTEGER
       )
     ''');
     await db.execute('''
@@ -1207,6 +1229,9 @@ class DatabaseService {
       await txn.update('bank_categories', {'parent_id': parentId},
           where: 'parent_id = ?', whereArgs: [id]);
       await txn.update('question_banks', {'category_id': parentId},
+          where: 'category_id = ?', whereArgs: [id]);
+      // v18：知识库与题库共用分类树，删分类时同样上移一级
+      await txn.update('knowledge_bases', {'category_id': parentId},
           where: 'category_id = ?', whereArgs: [id]);
       await txn.delete('bank_categories', where: 'id = ?', whereArgs: [id]);
     });
@@ -3525,6 +3550,20 @@ class DatabaseService {
       await txn.delete('kb_documents', where: 'kb_id IN ($marks)', whereArgs: ids);
       await txn.delete('knowledge_bases', where: 'id IN ($marks)', whereArgs: ids);
     });
+  }
+
+  /// 知识库挂到分类下（`null` = 未分类）。
+  Future<void> setKnowledgeBaseCategory(int kbId, int? categoryId) async {
+    final db = await database;
+    await db.update(
+      'knowledge_bases',
+      {
+        'category_id': categoryId,
+        'updated_at': DateTime.now().toIso8601String(),
+      },
+      where: 'id = ?',
+      whereArgs: [kbId],
+    );
   }
 
   Future<int> insertKbDocument(KbDocument doc) async {

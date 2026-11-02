@@ -368,9 +368,13 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
     try {
       final r = await WorldService.importWorld(path);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(
-                '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}')));
+        final message = r.isCategoryExport
+            ? '已成功导入分类【${r.categoryName ?? r.world.name}】，'
+                '包含 ${r.bankCount} 个题库'
+                '${r.kbCount > 0 ? '、${r.kbCount} 个知识库' : ''}'
+            : '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
       _reload();
     } catch (e) {

@@ -105,6 +105,82 @@ void main() {
     expect(worlds.first.id, 'w1');
   });
 
+  test('分类导出/导入：分类树、题库与知识库一起还原', () async {
+    final db = DatabaseService.instance;
+    final root = await db.insertBankCategory(name: '病理学');
+    final child = await db.insertBankCategory(name: '炎症', parentId: root);
+
+    Future<int> addBank(String name, int categoryId) async {
+      final id = await db.insertBank(
+          QuestionBank(name: name, createdAt: now, categoryId: categoryId));
+      await db.insertQuestions([
+        Question(
+          bankId: id,
+          title: '$name-题',
+          correctAnswer: 'A',
+          createdAt: now,
+        ),
+      ]);
+      await db.updateBankQuestionCount(id, 1);
+      return id;
+    }
+
+    Future<int> addKb(String name, int categoryId) async {
+      final kbId = await db.insertKnowledgeBase(KnowledgeBase(
+          name: name, createdAt: now, categoryId: categoryId));
+      final docId = await db.insertKbDocument(KbDocument(
+        kbId: kbId,
+        name: '$name-文档',
+        content: '资料正文',
+        createdAt: now,
+      ));
+      await db.insertKbChunks([
+        KbChunk(
+          docId: docId,
+          kbId: kbId,
+          position: 0,
+          text: '资料正文',
+          createdAt: now,
+        ),
+      ]);
+      return kbId;
+    }
+
+    await addBank('炎症题库', child);
+    await addBank('病理题库', root);
+    await addKb('炎症资料', child);
+    await addKb('病理资料', root);
+
+    final dest = '${tmp.path}/category.natsume-world.zip';
+    final path = await WorldService.exportCategory(
+      categoryId: root,
+      destPath: dest,
+    );
+    expect(path, isNotNull);
+
+    // 换到全新库导入，验证分类会被重新创建而不是复用导出端的 id
+    await db.close();
+    DatabaseService.overrideDbPath = '${tmp.path}/import.db';
+    final result = await WorldService.importWorld(dest);
+
+    expect(result.isCategoryExport, isTrue);
+    expect(result.categoryName, '病理学');
+    expect(result.bankCount, 2);
+    expect(result.kbCount, 2);
+
+    final cats = await db.getAllBankCategories();
+    final importedRoot = cats.firstWhere(
+        (c) => c.name == '病理学' && c.parentId == null);
+    final importedChild = cats.firstWhere(
+        (c) => c.name == '炎症' && c.parentId == importedRoot.id);
+    final banks = await db.getAllBanks();
+    expect(banks.map((b) => b.categoryId).toSet(),
+        {importedRoot.id, importedChild.id});
+    final kbs = await db.getAllKnowledgeBases();
+    expect(kbs.map((k) => k.categoryId).toSet(),
+        {importedRoot.id, importedChild.id});
+  });
+
   test('缺 world.json 的世界包拒绝导入', () async {
     final bad = File('${tmp.path}/bad.zip');
     bad.writeAsBytesSync([1, 2, 3]); // 非 zip

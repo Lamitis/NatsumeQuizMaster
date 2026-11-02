@@ -211,7 +211,7 @@ class BankFileService {
   /// 导入 JSON 文件（分组建库）：返回 (成功组数, 导入题目数, 错误信息, 改名组数)。
   /// [existingNames] 非空时同名组自动加后缀（防重复导入建重复题库）
   static Future<(int, int, String?, int)> importJsonFile(String filePath,
-      {Set<String>? existingNames}) async {
+      {Set<String>? existingNames, int? categoryId}) async {
     final (groups, err) = await parseJsonFile(filePath);
     if (groups.isEmpty) return (0, 0, err, 0);
     final now = DateTime.now().toIso8601String();
@@ -235,6 +235,7 @@ class BankFileService {
         name: name,
         fileSource: 'json',
         createdAt: now,
+        categoryId: categoryId,
       ));
       final questions = entry.value
           .map((q) => q.copyWith(bankId: bankId))

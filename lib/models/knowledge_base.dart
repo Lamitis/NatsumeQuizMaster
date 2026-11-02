@@ -11,6 +11,9 @@ class KnowledgeBase {
   final String? uid; // 局域网/跨端同步：跨设备唯一标识
   final String? updatedAt;
 
+  /// 知识库分类（v18）：与题库共用 `bank_categories` 分类树；`null` = 未分类
+  final int? categoryId;
+
   KnowledgeBase({
     this.id,
     required this.name,
@@ -18,6 +21,7 @@ class KnowledgeBase {
     required this.createdAt,
     this.uid,
     this.updatedAt,
+    this.categoryId,
   });
 
   Map<String, dynamic> toMap() {
@@ -28,6 +32,7 @@ class KnowledgeBase {
       'created_at': createdAt,
       'uid': uid,
       'updated_at': updatedAt,
+      'category_id': categoryId,
     };
   }
 
@@ -39,6 +44,7 @@ class KnowledgeBase {
       createdAt: map['created_at'] as String? ?? '',
       uid: map['uid'] as String?,
       updatedAt: map['updated_at'] as String?,
+      categoryId: map['category_id'] as int?,
     );
   }
 
@@ -49,6 +55,7 @@ class KnowledgeBase {
     String? createdAt,
     String? uid,
     String? updatedAt,
+    int? categoryId,
   }) {
     return KnowledgeBase(
       id: id ?? this.id,
@@ -57,6 +64,7 @@ class KnowledgeBase {
       createdAt: createdAt ?? this.createdAt,
       uid: uid ?? this.uid,
       updatedAt: updatedAt ?? this.updatedAt,
+      categoryId: categoryId ?? this.categoryId,
     );
   }
 }

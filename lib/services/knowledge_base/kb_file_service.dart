@@ -82,10 +82,13 @@ class KbFileService {
   }
 
   /// 导入知识库 JSON 文件：建库 → 逐文档切块落库。返回 (知识库 id, 错误)。
-  static Future<(int, String?)> importKbFile(String filePath) async {
+  /// [categoryId] 非空时直接把新库挂到该分类（分类导出包导入用）。
+  static Future<(int, String?)> importKbFile(String filePath,
+      {int? categoryId}) async {
     final (kb, docs, err) = await parseKbFile(filePath);
     if (kb == null) return (0, err);
-    final kbId = await _db.insertKnowledgeBase(kb);
+    final target = categoryId == null ? kb : kb.copyWith(categoryId: categoryId);
+    final kbId = await _db.insertKnowledgeBase(target);
     final now = DateTime.now().toIso8601String();
     for (final d in docs) {
       final docId = await _db.insertKbDocument(d.copyWith(kbId: kbId));
