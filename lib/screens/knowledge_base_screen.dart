@@ -43,6 +43,10 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   /// 知识库排序方式（v1.35.5）：存档在 SharedPreferences，跨启动记住
   KbSortMode _sort = KbSortMode.createdDesc;
 
+  /// v1.39.3 多选批量操作（知识库模型暂无分类字段，只提供删除/导出）
+  bool _batchMode = false;
+  final Set<int> _batchSelected = {};
+
   @override
   void initState() {
     super.initState();
@@ -82,26 +86,61 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     final ac = AppThemeColors.of(context);
     // 排序在 build 里算：`_bases` 保持数据库顺序，切换排序方式只是换个视图
     final bases = sortKnowledgeBases(_bases, _sort);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('知识库'),
-        actions: [
-          // 排序（v1.35.5）
-          PopupMenuButton<KbSortMode>(
-            tooltip: '排序方式：${_sort.label}',
-            icon: const Icon(Icons.sort),
-            initialValue: _sort,
-            onSelected: _changeSort,
-            itemBuilder: (context) => [
-              for (final mode in KbSortMode.values)
-                CheckedPopupMenuItem<KbSortMode>(
-                  value: mode,
-                  checked: mode == _sort,
-                  child: Text(mode.label),
+    final allIds = _bases.map((b) => b.id).whereType<int>().toSet();
+    final allSelected =
+        allIds.isNotEmpty && _batchSelected.length == allIds.length;
+    return PopScope(
+      canPop: !_batchMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _batchMode) _exitBatch();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+        automaticallyImplyLeading: !_batchMode,
+        leading: _batchMode
+            ? IconButton(
+                tooltip: '退出多选',
+                icon: const Icon(Icons.close),
+                onPressed: _exitBatch,
+              )
+            : null,
+        title: Text(_batchMode ? '已选 ${_batchSelected.length} 项' : '知识库'),
+        actions: _batchMode
+            ? [
+                TextButton(
+                  onPressed: () => setState(() {
+                    if (allSelected) {
+                      _batchSelected.clear();
+                    } else {
+                      _batchSelected
+                        ..clear()
+                        ..addAll(allIds);
+                    }
+                  }),
+                  child: Text(allSelected ? '取消全选' : '全选'),
                 ),
-            ],
-          ),
-        ],
+                TextButton(
+                  onPressed: _exitBatch,
+                  child: const Text('取消'),
+                ),
+              ]
+            : [
+                // 排序（v1.35.5）
+                PopupMenuButton<KbSortMode>(
+                  tooltip: '排序方式：${_sort.label}',
+                  icon: const Icon(Icons.sort),
+                  initialValue: _sort,
+                  onSelected: _changeSort,
+                  itemBuilder: (context) => [
+                    for (final mode in KbSortMode.values)
+                      CheckedPopupMenuItem<KbSortMode>(
+                        value: mode,
+                        checked: mode == _sort,
+                        child: Text(mode.label),
+                      ),
+                  ],
+                ),
+              ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -112,12 +151,14 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                   NatsumeSectionHeader(
                     title: '知识库',
                     subtitle: '导入资料后，AI 出题只依据这些资料（防幻觉）',
-                    trailing: NatsumeButton(
-                      label: '新建',
-                      dense: true,
-                      icon: Icons.add,
-                      onPressed: _create,
-                    ),
+                    trailing: _batchMode
+                        ? null
+                        : NatsumeButton(
+                            label: '新建',
+                            dense: true,
+                            icon: Icons.add,
+                            onPressed: _create,
+                          ),
                   ),
                   const SizedBox(height: NatsumeSpace.sm),
                   if (bases.isEmpty)
@@ -129,11 +170,20 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                     )
                   else
                     for (final kb in bases) ...[
-                      _kbCard(kb, ac),
+                      _kbCard(
+                        kb,
+                        ac,
+                        batchMode: _batchMode,
+                        batchSelected: _batchSelected.contains(kb.id),
+                        onLongPress: _batchMode
+                            ? null
+                            : () => _enterBatch(kb.id!),
+                        onBatchToggle: () => _toggleBatch(kb.id!),
+                      ),
                       const SizedBox(height: NatsumeSpace.xs),
                     ],
                   const SizedBox(height: NatsumeSpace.md),
-                  if (_selectedKbId != null) ...[
+                  if (!_batchMode && _selectedKbId != null) ...[
                     NatsumeSectionHeader(
                       title: '文档',
                       trailing: NatsumeButton(
@@ -181,47 +231,239 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                 ],
               ),
             ),
+        bottomNavigationBar: _batchMode ? _buildBatchBar(ac) : null,
+      ),
+    );
+  }
+  // ======================== 批量操作（v1.39.3） ========================
+
+  List<KnowledgeBase> _selectedBases() => _bases
+      .where((b) => b.id != null && _batchSelected.contains(b.id))
+      .toList();
+
+  void _enterBatch(int kbId) {
+    setState(() {
+      _batchMode = true;
+      _batchSelected
+        ..clear()
+        ..add(kbId);
+    });
+  }
+
+  void _exitBatch() {
+    if (!mounted) return;
+    setState(() {
+      _batchMode = false;
+      _batchSelected.clear();
+    });
+  }
+
+  void _toggleBatch(int kbId) {
+    setState(() {
+      if (!_batchSelected.remove(kbId)) _batchSelected.add(kbId);
+    });
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
   }
 
-  Widget _kbCard(KnowledgeBase kb, AppThemeColors ac) {
-    final selected = kb.id == _selectedKbId;
-    return NatsumeSurface(
-      accentEdge: selected,
-      onTap: () => setState(() {
-        _selectedKbId = kb.id;
-        _reload();
-      }),
-      padding: const EdgeInsets.all(NatsumeSpace.sm),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(kb.name,
-                    style: NatsumeType.h3Style.copyWith(
-                        fontWeight: FontWeight.w600, color: ac.textPrimary)),
-                if (kb.description != null && kb.description!.isNotEmpty) ...[
-                  const SizedBox(height: 2),
-                  Text(kb.description!,
-                      style:
-                          NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
-                ],
-              ],
+  Widget _buildBatchBar(AppThemeColors ac) {
+    final hasSelection = _batchSelected.isNotEmpty;
+    Widget action(
+      IconData icon,
+      String label,
+      Color color,
+      VoidCallback? onPressed,
+    ) =>
+        Expanded(
+          child: TextButton.icon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              visualDensity: VisualDensity.compact,
             ),
           ),
-          NatsumeIconButton(
-            icon: Icons.edit_outlined,
-            tooltip: '编辑名称 / 描述',
-            onPressed: () => _editMeta(kb),
-          ),
-          NatsumeIconButton(
-            icon: Icons.delete_outline,
-            tooltip: '删除',
-            onPressed: () => _delete(kb),
+        );
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: ac.surface,
+          border: Border(top: BorderSide(color: ac.border, width: 0.5)),
+        ),
+        padding: const EdgeInsets.symmetric(
+            horizontal: NatsumeSpace.xs, vertical: NatsumeSpace.xxs),
+        child: Row(
+          children: [
+            action(
+              Icons.delete_outline,
+              '删除',
+              ac.danger,
+              hasSelection ? _batchDelete : null,
+            ),
+            action(
+              Icons.ios_share_outlined,
+              '导出',
+              ac.accent,
+              hasSelection ? _batchExport : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _batchDelete() async {
+    final bases = _selectedBases();
+    if (bases.isEmpty) return;
+    final ac = AppThemeColors.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('批量删除知识库'),
+        content: Text('确定删除选中的 ${bases.length} 个知识库吗？\n'
+            '其下所有文档与切块会一并删除，此操作不可恢复。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: ac.danger),
+            child: const Text('删除'),
           ),
         ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final ids = bases.map((b) => b.id!).toSet();
+    await _kb.deleteKnowledgeBases(ids);
+    if (_selectedKbId != null && ids.contains(_selectedKbId)) {
+      _selectedKbId = null;
+    }
+    if (!mounted) return;
+    _exitBatch();
+    await _reload();
+    if (!mounted) return;
+    _snack('已删除 ${bases.length} 个知识库');
+  }
+
+  Future<void> _batchExport() async {
+    final bases = _selectedBases();
+    if (bases.isEmpty) return;
+    String? pickedDir;
+    try {
+      pickedDir = await FilePicker.getDirectoryPath(
+        dialogTitle: '选择批量导出文件夹',
+      );
+      if (pickedDir == null) return; // 用户取消
+    } catch (_) {
+      // 平台没有目录选择器：落默认导出目录
+      pickedDir = null;
+    }
+    final dir = pickedDir == null || pickedDir.isEmpty
+        ? await ExportStorage.resolve()
+        : Directory(pickedDir);
+    if (!await dir.exists()) await dir.create(recursive: true);
+
+    var exported = 0;
+    var skipped = 0;
+    var failed = 0;
+    for (final kb in bases) {
+      final safeName =
+          kb.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+      final base = safeName.isEmpty ? '知识库_${kb.id}' : safeName;
+      var path = '${dir.path}${Platform.pathSeparator}${base}_知识库.json';
+      if (await File(path).exists()) {
+        path = '${dir.path}${Platform.pathSeparator}$base-${kb.id}_知识库.json';
+      }
+      try {
+        final result = await KbFileService.exportKnowledgeBase(kb.id!, path);
+        if (result == null) {
+          skipped++;
+        } else {
+          exported++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+    if (!mounted) return;
+    _exitBatch();
+    _snack('已导出 $exported 个知识库到 ${dir.path}'
+        '${skipped > 0 ? '；$skipped 个没有文档已跳过' : ''}'
+        '${failed > 0 ? '；$failed 个导出失败' : ''}');
+  }
+
+  Widget _kbCard(
+    KnowledgeBase kb,
+    AppThemeColors ac, {
+    required bool batchMode,
+    required bool batchSelected,
+    required VoidCallback? onLongPress,
+    required VoidCallback onBatchToggle,
+  }) {
+    final selected = kb.id == _selectedKbId;
+    return GestureDetector(
+      onLongPress: onLongPress,
+      child: NatsumeSurface(
+        accentEdge: !batchMode && selected,
+        onTap: () {
+          if (batchMode) {
+            onBatchToggle();
+            return;
+          }
+          setState(() {
+            _selectedKbId = kb.id;
+            _reload();
+          });
+        },
+        padding: const EdgeInsets.all(NatsumeSpace.sm),
+        child: Row(
+          children: [
+            if (batchMode)
+              Checkbox(
+                value: batchSelected,
+                onChanged: (_) => onBatchToggle(),
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(kb.name,
+                      style: NatsumeType.h3Style.copyWith(
+                          fontWeight: FontWeight.w600, color: ac.textPrimary)),
+                  if (kb.description != null && kb.description!.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(kb.description!,
+                        style: NatsumeType.captionStyle
+                            .copyWith(color: ac.textSecondary)),
+                  ],
+                ],
+              ),
+            ),
+            if (!batchMode) ...[
+              NatsumeIconButton(
+                icon: Icons.edit_outlined,
+                tooltip: '编辑名称 / 描述',
+                onPressed: () => _editMeta(kb),
+              ),
+              NatsumeIconButton(
+                icon: Icons.delete_outline,
+                tooltip: '删除',
+                onPressed: () => _delete(kb),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -70,6 +71,10 @@ class _BankManageScreenState extends State<BankManageScreen> {
   /// 题库排序方式（v1.35.5）：存档在 SharedPreferences，跨启动记住
   BankSortMode _sort = BankSortMode.createdDesc;
 
+  /// v1.39.3 批量操作：与「刷题勾选」分开，避免批量删除/移动改动刷题范围
+  bool _batchMode = false;
+  final Set<int> _batchSelected = {};
+
   @override
   void initState() {
     super.initState();
@@ -88,69 +93,292 @@ class _BankManageScreenState extends State<BankManageScreen> {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
-    return Scaffold(
-      backgroundColor: ac.background,
-      appBar: AppBar(
-        title: const Text('题库管理'),
-        actions: [
-          // 排序（v1.35.5）：只在每个分类内部生效，不改变分类树本身的结构
-          PopupMenuButton<BankSortMode>(
-            tooltip: '排序方式：${_sort.label}',
-            icon: const Icon(Icons.sort),
-            initialValue: _sort,
-            onSelected: _changeSort,
-            itemBuilder: (context) => [
-              for (final mode in BankSortMode.values)
-                CheckedPopupMenuItem<BankSortMode>(
-                  value: mode,
-                  checked: mode == _sort,
-                  child: Text(mode.label),
-                ),
-            ],
+    final appState = context.read<AppState>();
+    final allIds =
+        appState.banks.map((b) => b.id).whereType<int>().toSet();
+    final allSelected =
+        allIds.isNotEmpty && _batchSelected.length == allIds.length;
+    return PopScope(
+      // 多选时系统返回键先退多选，而不是直接离开题库管理页
+      canPop: !_batchMode,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _batchMode) _exitBatch();
+      },
+      child: Scaffold(
+        backgroundColor: ac.background,
+        appBar: AppBar(
+          automaticallyImplyLeading: !_batchMode,
+          leading: _batchMode
+              ? IconButton(
+                  tooltip: '退出多选',
+                  icon: const Icon(Icons.close),
+                  onPressed: _exitBatch,
+                )
+              : null,
+          title: Text(_batchMode ? '已选 ${_batchSelected.length} 项' : '题库管理'),
+          actions: _batchMode
+              ? [
+                  TextButton(
+                    onPressed: () => setState(() {
+                      if (allSelected) {
+                        _batchSelected.clear();
+                      } else {
+                        _batchSelected
+                          ..clear()
+                          ..addAll(allIds);
+                      }
+                    }),
+                    child: Text(allSelected ? '取消全选' : '全选'),
+                  ),
+                  TextButton(
+                    onPressed: _exitBatch,
+                    child: const Text('取消'),
+                  ),
+                ]
+              : [
+                  // 排序（v1.35.5）：只在每个分类内部生效，不改变分类树本身的结构
+                  PopupMenuButton<BankSortMode>(
+                    tooltip: '排序方式：${_sort.label}',
+                    icon: const Icon(Icons.sort),
+                    initialValue: _sort,
+                    onSelected: _changeSort,
+                    itemBuilder: (context) => [
+                      for (final mode in BankSortMode.values)
+                        CheckedPopupMenuItem<BankSortMode>(
+                          value: mode,
+                          checked: mode == _sort,
+                          child: Text(mode.label),
+                        ),
+                    ],
+                  ),
+                  IconButton(
+                    tooltip: '新建分类',
+                    icon: const Icon(Icons.create_new_folder_outlined),
+                    onPressed: () =>
+                        _createCategory(context.read<AppState>(), null),
+                  ),
+                  IconButton(
+                    tooltip: '导入题库',
+                    icon: const Icon(Icons.add),
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ImportScreen()),
+                    ),
+                  ),
+                ],
+        ),
+        body: ResponsivePage(
+          child: Consumer<AppState>(
+            builder: (context, appState, _) {
+              if (appState.banks.isEmpty && appState.categories.isEmpty) {
+                return _buildEmptyState(appState, ac);
+              }
+              final rows = _buildRows(appState);
+              return Column(
+                children: [
+                  // 多选模式下不显示刷题设置条：避免用户把「批量勾选」
+                  // 误当成「本轮刷题范围」
+                  if (!_batchMode) _buildQuizSettings(appState, ac),
+                  if (!_batchMode) const Divider(height: 1),
+                  Expanded(
+                    child: ListView.builder(
+                      padding: const EdgeInsets.all(16),
+                      itemCount: rows.length,
+                      itemBuilder: (context, index) =>
+                          _buildRow(appState, rows[index], ac),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
-          IconButton(
-            tooltip: '新建分类',
-            icon: const Icon(Icons.create_new_folder_outlined),
-            onPressed: () => _createCategory(context.read<AppState>(), null),
-          ),
-          IconButton(
-            tooltip: '导入题库',
-            icon: const Icon(Icons.add),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ImportScreen()),
+        ),
+        bottomNavigationBar:
+            _batchMode ? _buildBatchBar(ac, appState) : null,
+      ),
+    );
+  }
+
+
+  // ======================== 批量操作（v1.39.3） ========================
+
+  List<QuestionBank> _selectedBanks(AppState appState) => appState.banks
+      .where((b) => b.id != null && _batchSelected.contains(b.id))
+      .toList();
+
+  void _enterBatch(int bankId) {
+    setState(() {
+      _batchMode = true;
+      _batchSelected
+        ..clear()
+        ..add(bankId);
+      // 进入多选先把折叠展开：否则「全选」会选中看不见的题库
+      _collapsed.clear();
+    });
+  }
+
+  void _exitBatch() {
+    if (!mounted) return;
+    setState(() {
+      _batchMode = false;
+      _batchSelected.clear();
+    });
+  }
+
+  void _toggleBatch(int bankId) {
+    setState(() {
+      if (!_batchSelected.remove(bankId)) _batchSelected.add(bankId);
+    });
+  }
+
+  Widget _buildBatchBar(AppThemeColors ac, AppState appState) {
+    final hasSelection = _batchSelected.isNotEmpty;
+    Widget action(
+      IconData icon,
+      String label,
+      Color color,
+      VoidCallback? onPressed,
+    ) =>
+        Expanded(
+          child: TextButton.icon(
+            onPressed: onPressed,
+            icon: Icon(icon, size: 18),
+            label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            style: TextButton.styleFrom(
+              foregroundColor: color,
+              visualDensity: VisualDensity.compact,
             ),
           ),
-        ],
-      ),
-      body: ResponsivePage(
-        child: Consumer<AppState>(
-          builder: (context, appState, _) {
-            if (appState.banks.isEmpty && appState.categories.isEmpty) {
-              return _buildEmptyState(appState, ac);
-            }
-            final rows = _buildRows(appState);
-            return Column(
-              children: [
-                _buildQuizSettings(appState, ac),
-                const Divider(height: 1),
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: rows.length,
-                    itemBuilder: (context, index) =>
-                        _buildRow(appState, rows[index], ac),
-                  ),
-                ),
-              ],
-            );
-          },
+        );
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: ac.surface,
+          border: Border(top: BorderSide(color: ac.border, width: 0.5)),
+        ),
+        padding: const EdgeInsets.symmetric(
+            horizontal: NatsumeSpace.xs, vertical: NatsumeSpace.xxs),
+        child: Row(
+          children: [
+            action(
+              Icons.delete_outline,
+              '删除',
+              ac.danger,
+              hasSelection ? () => _batchDelete(appState) : null,
+            ),
+            action(
+              Icons.ios_share_outlined,
+              '导出',
+              ac.accent,
+              hasSelection ? () => _batchExport(appState) : null,
+            ),
+            action(
+              Icons.drive_file_move_outline,
+              '移动',
+              ac.accent,
+              hasSelection ? () => _batchMove(appState) : null,
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // ======================== 树 → 行 ========================
+  Future<void> _batchDelete(AppState appState) async {
+    final banks = _selectedBanks(appState);
+    if (banks.isEmpty) return;
+    final ac = AppThemeColors.of(context);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('批量删除题库'),
+        content: Text('确定删除选中的 ${banks.length} 个题库吗？\n'
+            '这些题库下的所有题目、作答记录与批注也会删除，此操作不可恢复。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: ac.danger),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await appState.deleteBanks(banks.map((b) => b.id!));
+    if (!mounted) return;
+    _exitBatch();
+    _snack('已删除 ${banks.length} 个题库');
+  }
+
+  /// 批量导出：先选一次目标文件夹，再把每个题库分别写成 `<题库名>.json`。
+  Future<void> _batchExport(AppState appState) async {
+    final banks = _selectedBanks(appState);
+    if (banks.isEmpty) return;
+    String? pickedDir;
+    try {
+      pickedDir = await FilePicker.getDirectoryPath(
+        dialogTitle: '选择批量导出文件夹',
+      );
+      if (pickedDir == null) return; // 用户取消
+    } catch (_) {
+      // 平台没有目录选择器（或测试环境）：落到默认导出目录，仍然完成导出
+      pickedDir = null;
+    }
+    final dir = pickedDir == null || pickedDir.isEmpty
+        ? await ExportStorage.resolve()
+        : Directory(pickedDir);
+    if (!await dir.exists()) await dir.create(recursive: true);
+
+    var exported = 0;
+    var skipped = 0;
+    var failed = 0;
+    for (final bank in banks) {
+      final safeName =
+          bank.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+      final base = safeName.isEmpty ? '题库_${bank.id}' : safeName;
+      var path = '${dir.path}${Platform.pathSeparator}$base.json';
+      // 同名题库（历史数据/不同分类）不能互相覆盖
+      if (await File(path).exists()) {
+        path = '${dir.path}${Platform.pathSeparator}$base-${bank.id}.json';
+      }
+      try {
+        final result =
+            await BankFileService.exportBank(bank.id!, bank.name, path);
+        if (result == null) {
+          skipped++;
+        } else {
+          exported++;
+        }
+      } catch (_) {
+        failed++;
+      }
+    }
+    if (!mounted) return;
+    _exitBatch();
+    _snack('已导出 $exported 个题库到 ${dir.path}'
+        '${skipped > 0 ? '；$skipped 个没有题目已跳过' : ''}'
+        '${failed > 0 ? '；$failed 个导出失败' : ''}');
+  }
+
+  Future<void> _batchMove(AppState appState) async {
+    final banks = _selectedBanks(appState);
+    if (banks.isEmpty) return;
+    final pick = await _pickCategory(
+      appState,
+      title: '把选中的 ${banks.length} 个题库移动到',
+      rootLabel: '未分类',
+    );
+    if (pick == null || !mounted) return;
+    await appState.moveBanksToCategory(banks.map((b) => b.id!), pick.id);
+    if (!mounted) return;
+    _exitBatch();
+    _snack('已移动 ${banks.length} 个题库');
+  }
 
   List<_Row> _buildRows(AppState appState) {
     final childrenOf = <int?, List<BankCategory>>{};
@@ -241,12 +469,20 @@ class _BankManageScreenState extends State<BankManageScreen> {
       case _BankRow():
         final bank = row.bank;
         final isSelected = appState.selectedBankIds.contains(bank.id);
+        final batchSelected = _batchSelected.contains(bank.id);
         return Padding(
           padding: EdgeInsets.only(left: row.depth * 18.0),
           child: _BankCard(
             bank: bank,
             isSelected: isSelected,
-            onTap: () => appState.toggleBankSelection(bank.id!),
+            batchMode: _batchMode,
+            batchSelected: batchSelected,
+            onTap: _batchMode
+                ? () => _toggleBatch(bank.id!)
+                : () => appState.toggleBankSelection(bank.id!),
+            onLongPress:
+                _batchMode ? null : () => _enterBatch(bank.id!),
+            onBatchToggle: () => _toggleBatch(bank.id!),
             onRename: () => _renameBank(appState, bank),
             onMove: () => _moveBankToCategory(appState, bank),
             onDelete: () => _confirmDelete(context, appState, bank),
@@ -729,7 +965,13 @@ class _CategoryTile extends StatelessWidget {
 class _BankCard extends StatelessWidget {
   final QuestionBank bank;
   final bool isSelected;
+
+  /// 批量操作模式：复选框改为批量选择，长按进入；普通模式保持刷题勾选
+  final bool batchMode;
+  final bool batchSelected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final VoidCallback onBatchToggle;
   final VoidCallback onRename;
   final VoidCallback onMove;
   final VoidCallback onDelete;
@@ -739,7 +981,11 @@ class _BankCard extends StatelessWidget {
   const _BankCard({
     required this.bank,
     required this.isSelected,
+    required this.batchMode,
+    required this.batchSelected,
     required this.onTap,
+    this.onLongPress,
+    required this.onBatchToggle,
     required this.onRename,
     required this.onMove,
     required this.onDelete,
@@ -750,13 +996,15 @@ class _BankCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
+    final selected = batchMode ? batchSelected : isSelected;
     return Semantics(
       button: true,
-      selected: isSelected,
+      selected: selected,
       label:
-          '${bank.name}，${bank.questionCount} 道题目${isSelected ? '，已选中' : '，未选中'}',
+          '${bank.name}，${bank.questionCount} 道题目${selected ? '，已选中' : '，未选中'}',
       child: GestureDetector(
         onTap: onTap,
+        onLongPress: onLongPress,
         child: Padding(
           padding: const EdgeInsets.only(bottom: NatsumeSpace.xs),
           child: NatsumeSurface(
@@ -764,22 +1012,30 @@ class _BankCard extends StatelessWidget {
             padding: const EdgeInsets.all(NatsumeSpace.sm),
             child: Row(
               children: [
-                // Linear 式小方块选择器（与答题页选项一致）
-                Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: isSelected ? ac.accent : Colors.transparent,
-                    border: Border.all(
-                      color: isSelected ? ac.accent : ac.border,
-                      width: 1.2,
+                if (batchMode)
+                  Checkbox(
+                    value: batchSelected,
+                    onChanged: (_) => onBatchToggle(),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  )
+                else
+                  // Linear 式小方块选择器（与答题页选项一致）
+                  Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: isSelected ? ac.accent : Colors.transparent,
+                      border: Border.all(
+                        color: isSelected ? ac.accent : ac.border,
+                        width: 1.2,
+                      ),
+                      borderRadius: NatsumeRadius.chipBorder,
                     ),
-                    borderRadius: NatsumeRadius.chipBorder,
+                    child: isSelected
+                        ? Icon(Icons.check, size: 12, color: ac.onAccent)
+                        : null,
                   ),
-                  child: isSelected
-                      ? Icon(Icons.check, size: 12, color: ac.onAccent)
-                      : null,
-                ),
                 const SizedBox(width: NatsumeSpace.sm),
                 Expanded(
                   child: Column(
@@ -799,38 +1055,40 @@ class _BankCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                IconButton(
-                  tooltip: '查看 / 编辑题目',
-                  icon: Icon(Icons.edit_note, color: ac.textSecondary, size: 20),
-                  padding: EdgeInsets.zero,
-                  constraints:
-                      const BoxConstraints(minWidth: 40, minHeight: 40),
-                  onPressed: onOpenQuestions,
-                ),
-                // 改名 / 移动 / 导出 / 删除收进「更多」：题库卡在窄屏上
-                // 塞四个图标按钮会把题库名挤成一两个字
-                PopupMenuButton<String>(
-                  tooltip: '题库操作',
-                  icon: Icon(Icons.more_vert, color: ac.textSecondary, size: 20),
-                  onSelected: (value) {
-                    switch (value) {
-                      case 'rename':
-                        onRename();
-                      case 'move':
-                        onMove();
-                      case 'export':
-                        onExport();
-                      case 'delete':
-                        onDelete();
-                    }
-                  },
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(value: 'rename', child: Text('重命名')),
-                    PopupMenuItem(value: 'move', child: Text('移动到分类')),
-                    PopupMenuItem(value: 'export', child: Text('导出题库')),
-                    PopupMenuItem(value: 'delete', child: Text('删除题库')),
-                  ],
-                ),
+                if (!batchMode) ...[
+                  IconButton(
+                    tooltip: '查看 / 编辑题目',
+                    icon: Icon(Icons.edit_note, color: ac.textSecondary, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 40, minHeight: 40),
+                    onPressed: onOpenQuestions,
+                  ),
+                  // 改名 / 移动 / 导出 / 删除收进「更多」：题库卡在窄屏上
+                  // 塞四个图标按钮会把题库名挤成一两个字
+                  PopupMenuButton<String>(
+                    tooltip: '题库操作',
+                    icon: Icon(Icons.more_vert, color: ac.textSecondary, size: 20),
+                    onSelected: (value) {
+                      switch (value) {
+                        case 'rename':
+                          onRename();
+                        case 'move':
+                          onMove();
+                        case 'export':
+                          onExport();
+                        case 'delete':
+                          onDelete();
+                      }
+                    },
+                    itemBuilder: (context) => const [
+                      PopupMenuItem(value: 'rename', child: Text('重命名')),
+                      PopupMenuItem(value: 'move', child: Text('移动到分类')),
+                      PopupMenuItem(value: 'export', child: Text('导出题库')),
+                      PopupMenuItem(value: 'delete', child: Text('删除题库')),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

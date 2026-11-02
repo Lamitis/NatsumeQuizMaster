@@ -1676,6 +1676,25 @@ class AppState extends ChangeNotifier {
     await bumpStatsRevision();
   }
 
+  /// 批量删除题库（v1.39.3）：一次事务删完，再刷新列表与统计口径。
+  Future<void> deleteBanks(Iterable<int> bankIds) async {
+    final ids = bankIds.toSet().toList();
+    if (ids.isEmpty) return;
+    await _db.deleteBanks(ids);
+    _selectedBankIds.removeAll(ids);
+    await _loadBanks();
+    await bumpStatsRevision();
+  }
+
+  /// 批量把题库移动到同一个分类（`null` = 未分类）。
+  Future<void> moveBanksToCategory(
+      Iterable<int> bankIds, int? categoryId) async {
+    final ids = bankIds.toSet().toList();
+    if (ids.isEmpty) return;
+    await _db.moveBanksToCategory(ids, categoryId);
+    await _loadBanks();
+  }
+
   void toggleBankSelection(int bankId) {
     if (_selectedBankIds.contains(bankId)) {
       _selectedBankIds.remove(bankId);

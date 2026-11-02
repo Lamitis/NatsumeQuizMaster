@@ -1251,20 +1251,52 @@ class DatabaseService {
         whereArgs: [bankId]);
   }
 
-  Future<void> deleteBank(int bankId) async {
+  Future<void> deleteBank(int bankId) => deleteBanks([bankId]);
+
+  /// 批量删除题库（v1.39.3）：单事务 + IN，避免逐个 deleteBank 的 N 次事务。
+  ///
+  /// 与单条删除共用同一清理口径：作答记录 / 批注 / 错题本 / FSRS / 配图
+  /// 显式删一遍（外键级联只是兜底，不依赖 PRAGMA 一定开启）。
+  Future<void> deleteBanks(List<int> bankIds) async {
+    final ids = bankIds.toSet().toList();
+    if (ids.isEmpty) return;
     final db = await database;
-    // v1.0.2 设计审查修复：单条 IN 删除 + 事务，替代逐题循环（N+1 且无事务）
+    final marks = List.filled(ids.length, '?').join(',');
     await db.transaction((txn) async {
-      // 显式清理 answer_records（外键级联兜底）
+      final questionScope =
+          'question_id IN (SELECT id FROM questions WHERE bank_id IN ($marks))';
       await txn.delete('answer_records',
-          where: 'question_id IN (SELECT id FROM questions WHERE bank_id = ?)',
-          whereArgs: [bankId]);
-      // v1.0.3 手写批注：随题库删除清理（外键级联兜底，与 answer_records 同模式）
+          where: questionScope, whereArgs: ids);
       await txn.delete('question_annotations',
-          where: 'question_id IN (SELECT id FROM questions WHERE bank_id = ?)',
-          whereArgs: [bankId]);
-      await txn.delete('questions', where: 'bank_id = ?', whereArgs: [bankId]);
-      await txn.delete('question_banks', where: 'id = ?', whereArgs: [bankId]);
+          where: questionScope, whereArgs: ids);
+      await txn.delete('error_book',
+          where: questionScope, whereArgs: ids);
+      await txn.delete('fsrs_cards',
+          where: questionScope, whereArgs: ids);
+      await txn.delete('question_images',
+          where: questionScope, whereArgs: ids);
+      await txn.delete('questions', where: 'bank_id IN ($marks)', whereArgs: ids);
+      await txn.delete('question_banks', where: 'id IN ($marks)', whereArgs: ids);
+    });
+  }
+
+  /// 批量把题库移动到同一个分类（`null` = 未分类）（v1.40）。
+  Future<void> moveBanksToCategory(List<int> bankIds, int? categoryId) async {
+    final ids = bankIds.toSet().toList();
+    if (ids.isEmpty) return;
+    final db = await database;
+    final marks = List.filled(ids.length, '?').join(',');
+    final now = DateTime.now().toIso8601String();
+    await db.transaction((txn) async {
+      await txn.update(
+        'question_banks',
+        {
+          'category_id': categoryId,
+          'updated_at': now,
+        },
+        where: 'id IN ($marks)',
+        whereArgs: ids,
+      );
     });
   }
 
@@ -3476,6 +3508,22 @@ class DatabaseService {
           whereArgs: [kbId]);
       await txn.delete('kb_documents', where: 'kb_id = ?', whereArgs: [kbId]);
       await txn.delete('knowledge_bases', where: 'id = ?', whereArgs: [kbId]);
+    });
+  }
+
+  /// 批量删除知识库（v1.39.3）：单事务清理 chunks → documents → bases。
+  Future<void> deleteKnowledgeBases(List<int> kbIds) async {
+    final ids = kbIds.toSet().toList();
+    if (ids.isEmpty) return;
+    final db = await database;
+    final marks = List.filled(ids.length, '?').join(',');
+    await db.transaction((txn) async {
+      await txn.delete('kb_chunks',
+          where:
+              'doc_id IN (SELECT id FROM kb_documents WHERE kb_id IN ($marks))',
+          whereArgs: ids);
+      await txn.delete('kb_documents', where: 'kb_id IN ($marks)', whereArgs: ids);
+      await txn.delete('knowledge_bases', where: 'id IN ($marks)', whereArgs: ids);
     });
   }
 
