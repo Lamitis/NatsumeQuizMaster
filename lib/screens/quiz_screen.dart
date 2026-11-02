@@ -280,11 +280,16 @@ class _QuizScreenState extends State<QuizScreen> {
           // v1.0.2 修复：错题本状态移出 build，改在切题时一次性查询
           final qid = appState.currentQuestion?.id;
           if (qid != null) {
-            appState.isInErrorBook(qid).then((inBook) {
-              if (mounted && _inErrorBook != inBook) {
+            // 关库 / 切题竞态下查询失败只记日志：迟到异常不能冒到 zone 顶层
+            unawaited(() async {
+              try {
+                final inBook = await appState.isInErrorBook(qid);
+                if (!mounted || _inErrorBook == inBook) return;
                 setState(() => _inErrorBook = inBook);
+              } catch (e) {
+                debugPrint('查询错题本失败（题 $qid）：$e');
               }
-            });
+            }());
             // v1.0.3 手写批注：预载新题持久批注（已答/背题进入即可见，REQ-006；
             // 渲染条件仍控制未作答时不显示）
             _loadAnnoQuietly(qid, (strokes) {
@@ -2152,12 +2157,16 @@ class _QuizScreenState extends State<QuizScreen> {
                     ),
                     onPressed: () async {
                       final q = appState.currentQuestion;
-                      if (q?.id != null) {
+                      if (q?.id == null) return;
+                      try {
                         await appState.toggleErrorBook(q!.id!);
-                        if (mounted) {
-                          final inBook = await appState.isInErrorBook(q.id!);
-                          setState(() => _inErrorBook = inBook);
-                        }
+                        if (!mounted) return;
+                        final inBook = await appState.isInErrorBook(q.id!);
+                        if (!mounted) return;
+                        setState(() => _inErrorBook = inBook);
+                      } catch (e) {
+                        // 关库 / 网络无关的本地异常：按钮不应把未捕获异常甩给 zone
+                        debugPrint('切换错题本失败（题 ${q!.id}）：$e');
                       }
                     },
                   ),

@@ -2165,18 +2165,23 @@ class AppState extends ChangeNotifier {
     final q = currentQuestion;
     if (q?.id != null) {
       final qid = q!.id!;
-      _quizService.getQuestionStats(qid).then((stats) {
+      _quizService.getQuestionStats(qid).then<void>((stats) {
         if (_quizService.currentQuestion?.id == qid) {
           _currentQuestionStats = stats;
           notifyListeners();
         }
+      }).catchError((Object e) {
+        // 测试 / 退出时数据库可能已关：迟到查询失败只记日志，不抛到 zone
+        debugPrint('查询题目统计失败（题 $qid）：$e');
       });
       // v1.0.2 FSRS 可见化：切题异步读复习卡（竞态守卫）
-      _db.getFSRSCard(qid).then((card) {
+      _db.getFSRSCard(qid).then<void>((card) {
         if (_quizService.currentQuestion?.id == qid) {
           _currentFsrsCard = card;
           notifyListeners();
         }
+      }).catchError((Object e) {
+        debugPrint('查询 FSRS 卡失败（题 $qid）：$e');
       });
     } else {
       _clearQuestionContext();
