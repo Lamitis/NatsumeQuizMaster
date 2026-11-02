@@ -466,8 +466,8 @@ void main() {
       };
       for (final step in kGuideSteps) {
         if (step.tab != null) {
-          expect(step.tab, inInclusiveRange(0, 3),
-              reason: '引导步骤的 Tab 下标必须是真实的四个 Tab：${step.title}');
+          expect(step.tab, inInclusiveRange(0, 4),
+              reason: '引导步骤的 Tab 下标必须是真实的五个 Tab：${step.title}');
         }
         for (final id in step.anchorIds) {
           expect(ids, contains(id),
@@ -478,6 +478,15 @@ void main() {
       expect(kGuideSteps, hasLength(7));
       expect(kGuideSteps.first.anchorId, GuideAnchorIds.homeHero);
       expect(kGuideSteps.last.nextLabel, isNotNull);
+
+      // 底部导航是五个板块：引导文案必须列全，且高亮锚点覆盖整条导航。
+      final navStep = kGuideSteps
+          .firstWhere((step) => step.anchorId == GuideAnchorIds.shellNav);
+      expect(navStep.title, contains('五'));
+      for (final label in const ['首页', '开始', '统计', '我的', '世界']) {
+        expect(navStep.body, contains(label),
+            reason: '板块引导必须列出「$label」');
+      }
     });
 
     test('引导必须带用户进入设置 / 错题本两个二级页', () {

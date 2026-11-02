@@ -1057,6 +1057,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 导入世界包 / 分类包 / 题库 / 知识库后，强制刷新全局缓存。
+  ///
+  /// 世界包导入不经过 `AppState` 的导入方法，之前只刷新了世界总览页，
+  /// 首页/开始页/题库管理仍看到旧列表，只能重启。这里把题库分类树、题库、
+  /// 首页统计与插件提示词快照一起拉新；知识库列表本身由 `KbService` 直接读库，
+  /// 页面重新进入即可拿到新数据。
+  Future<void> refreshAllDataAfterImport() async {
+    await _loadBanks();
+    try {
+      await PluginPromptService.instance.refresh();
+    } catch (_) {
+      // 插件提示词刷新失败不能拖垮导入后的数据刷新
+    }
+    await _loadHomeStats();
+    notifyListeners();
+  }
+
   // ======================== v1.0.2: 假期模式 / 每日提醒设置 ========================
 
   bool _vacationModeEnabled = false;

@@ -14,7 +14,7 @@ import '../screens/settings_hub_screen.dart';
 
 /// 全局命令面板（Natsume Des 2.0 · Linear 式 ⌘K）
 ///
-/// 键盘优先的入口聚合：不必先在四个 Tab 之间找，直接搜「想做的那件事」。
+/// 键盘优先的入口聚合：不必先在五个 Tab 之间找，直接搜「想做的那件事」。
 /// 触发方式：宽屏按 Ctrl/Cmd+K；窄屏点「开始」页顶部的搜索框。
 class CommandPalette extends StatefulWidget {
   const CommandPalette({super.key});

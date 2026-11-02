@@ -177,10 +177,6 @@ class _BankManageScreenState extends State<BankManageScreen> {
               final rows = _buildRows(appState);
               return Column(
                 children: [
-                  // 多选模式下不显示刷题设置条：避免用户把「批量勾选」
-                  // 误当成「本轮刷题范围」
-                  if (!_batchMode) _buildQuizSettings(appState, ac),
-                  if (!_batchMode) const Divider(height: 1),
                   Expanded(
                     child: ListView.builder(
                       padding: const EdgeInsets.all(16),
@@ -470,18 +466,18 @@ class _BankManageScreenState extends State<BankManageScreen> {
         );
       case _BankRow():
         final bank = row.bank;
-        final isSelected = appState.selectedBankIds.contains(bank.id);
         final batchSelected = _batchSelected.contains(bank.id);
         return Padding(
           padding: EdgeInsets.only(left: row.depth * 18.0),
           child: _BankCard(
             bank: bank,
-            isSelected: isSelected,
             batchMode: _batchMode,
             batchSelected: batchSelected,
+            // v1.39.4：题库管理只负责管理。点击卡片进入题库内部题目管理，
+            // 不再兼任「勾选题库去刷题」——选题统一走「自由选题」。
             onTap: _batchMode
                 ? () => _toggleBatch(bank.id!)
-                : () => appState.toggleBankSelection(bank.id!),
+                : () => _openQuestions(appState, bank),
             onLongPress:
                 _batchMode ? null : () => _enterBatch(bank.id!),
             onBatchToggle: () => _toggleBatch(bank.id!),
@@ -525,64 +521,6 @@ class _BankManageScreenState extends State<BankManageScreen> {
     );
   }
 
-  Widget _buildQuizSettings(AppState appState, AppThemeColors ac) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      color: ac.surfaceAlt,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.tune, size: 18, color: ac.accent),
-              const SizedBox(width: 6),
-              Text('刷题设置',
-                  style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: NatsumeType.h3,
-                      color: ac.textPrimary)),
-              const Spacer(),
-              Text(
-                appState.selectedBankIds.isEmpty
-                    ? '点击题目前方选择框'
-                    : '已选 ${appState.selectedBankIds.length} 个题库',
-                style:
-                    TextStyle(fontSize: NatsumeType.body, color: ac.textSecondary),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text('刷题模式: ',
-                  style: TextStyle(
-                      fontSize: NatsumeType.body, color: ac.textSecondary)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: (appState.selectedBankIds.length > 1
-                          ? ac.textSecondary
-                          : ac.accent)
-                      .withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(NatsumeRadius.chip),
-                ),
-                child: Text(
-                  appState.selectedBankIds.length > 1 ? '混合刷题' : '单题库刷题',
-                  style: TextStyle(
-                    fontSize: NatsumeType.body,
-                    color: appState.selectedBankIds.length > 1
-                        ? ac.textSecondary
-                        : ac.accent,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
   // ======================== 分类操作 ========================
 
   void _snack(String message) {
@@ -997,9 +935,8 @@ class _CategoryTile extends StatelessWidget {
 }
 class _BankCard extends StatelessWidget {
   final QuestionBank bank;
-  final bool isSelected;
 
-  /// 批量操作模式：复选框改为批量选择，长按进入；普通模式保持刷题勾选
+  /// 批量操作模式：左侧复选框用于批量选择，长按进入；普通模式不显示勾选框。
   final bool batchMode;
   final bool batchSelected;
   final VoidCallback onTap;
@@ -1013,7 +950,6 @@ class _BankCard extends StatelessWidget {
 
   const _BankCard({
     required this.bank,
-    required this.isSelected,
     required this.batchMode,
     required this.batchSelected,
     required this.onTap,
@@ -1029,12 +965,12 @@ class _BankCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
-    final selected = batchMode ? batchSelected : isSelected;
+    final selected = batchMode && batchSelected;
     return Semantics(
       button: true,
       selected: selected,
       label:
-          '${bank.name}，${bank.questionCount} 道题目${selected ? '，已选中' : '，未选中'}',
+          '${bank.name}，${bank.questionCount} 道题目${batchMode ? (selected ? '，已选中' : '，未选中') : ''}',
       child: GestureDetector(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -1045,30 +981,14 @@ class _BankCard extends StatelessWidget {
             padding: const EdgeInsets.all(NatsumeSpace.sm),
             child: Row(
               children: [
-                if (batchMode)
+                if (batchMode) ...[
                   Checkbox(
                     value: batchSelected,
                     onChanged: (_) => onBatchToggle(),
                     visualDensity: VisualDensity.compact,
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  )
-                else
-                  // Linear 式小方块选择器（与答题页选项一致）
-                  Container(
-                    width: 20,
-                    height: 20,
-                    decoration: BoxDecoration(
-                      color: isSelected ? ac.accent : Colors.transparent,
-                      border: Border.all(
-                        color: isSelected ? ac.accent : ac.border,
-                        width: 1.2,
-                      ),
-                      borderRadius: NatsumeRadius.chipBorder,
-                    ),
-                    child: isSelected
-                        ? Icon(Icons.check, size: 12, color: ac.onAccent)
-                        : null,
                   ),
+                ],
                 const SizedBox(width: NatsumeSpace.sm),
                 Expanded(
                   child: Column(

@@ -66,7 +66,7 @@ class GuideAnchorIds {
 
 /// 首启引导步骤（v1.39 · 7 步精简版）
 ///
-/// 只走「第一次必须知道」的路径：首页总览 → 四个 Tab → 配置 API Key →
+/// 只走「第一次必须知道」的路径：首页总览 → 五个 Tab → 配置 API Key →
 /// 导入题库 → 刷题与 AI 解析 → 错题本知识点标签 → 双链笔记 & 小鲸助教。
 ///
 /// 其中「配置 API Key」「错题本标签」两层在二级页里，用 [GuideStep.destination]
@@ -85,9 +85,10 @@ const List<GuideStep> kGuideSteps = [
     anchorId: GuideAnchorIds.homeHero,
   ),
   GuideStep(
-    title: '四个 Tab 分工明确',
+    title: '五个板块分工明确',
     body: '「首页」看进度、「开始」导入与刷题、「统计」看正确率与热力图、'
-        '「我的」做设置与学习工具。接下来按顺序看最关键的几处。',
+        '「我的」做设置与学习工具、「世界」管理世界包与插件。'
+        '接下来按顺序看最关键的几处。',
     // 必须声明 tab：IndexedStack 的未选中页每帧照常布局，不声明可能把洞
     // 打到用户看不见的那一页坐标上。
     anchorId: GuideAnchorIds.shellNav,

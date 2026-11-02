@@ -17,7 +17,7 @@ import 'settings_hub_screen.dart';
 import 'stats_tab.dart';
 import 'world_overview_screen.dart';
 
-/// 主壳：底部四 Tab（首页/开始/统计/我的）
+/// 主壳：底部五 Tab（首页/开始/统计/我的/世界）
 ///
 /// 「开始」= 快速开始（原首页快速操作区独立成页）：首页只负责「看」，
 /// 开始页只负责「做」——开始刷题 / 题库管理 / 错题本 / 导入。
@@ -46,7 +46,7 @@ class _MainShellState extends State<MainShell>
 
   int _index = _goto == 'stats' ? 2 : 0;
 
-  // 四个 Tab 各挂 GlobalKey：内容层淡入的 key 随 _index 换血重建时，
+  // 五个 Tab 各挂 GlobalKey：内容层淡入的 key 随 _index 换血重建时，
   // 页面状态随 GlobalKey 迁移（保活语义不丢，见 [_buildPages]）。
   final GlobalKey _homeKey = GlobalKey();
   final GlobalKey _quickStartKey = GlobalKey();
@@ -61,7 +61,7 @@ class _MainShellState extends State<MainShell>
   /// 切 Tab 的内容层过渡进度（0→1）。
   ///
   /// 为什么用控制器而不是「TweenAnimationBuilder + ValueKey(_index)」：
-  /// 换血式 key 会让 IndexedStack 整棵子树重建——四个 Tab 里含热力图（371 格）
+  /// 换血式 key 会让 IndexedStack 整棵子树重建——五个 Tab 里含热力图（371 格）
   /// 与趋势图，等于每次切页都重建全部页面，实测就是切页卡顿的来源。
   /// 现在孩子（IndexedStack）作为 AnimatedBuilder 的 child 缓存，动画 tick
   /// 只改透明度/位移，不触发页面重建。
@@ -190,13 +190,13 @@ class _MainShellState extends State<MainShell>
   /// 内容层：IndexedStack 保活 + 切 Tab 淡入并轻微横向落位。
   ///
   /// 关键：IndexedStack 作为 [AnimatedBuilder] 的 child 传入——动画 tick 只重建
-  /// 外层 Opacity/FractionalTranslation，四个页面（含热力图与趋势图）不会被重建；
+  /// 外层 Opacity/FractionalTranslation，五个页面（含热力图与趋势图）不会被重建；
   /// 之前用 ValueKey 换血触发重建，切页会卡。
-  /// 四个一级页面的**实例缓存**。
+  /// 五个一级页面的**实例缓存**。
   ///
   /// 2026-10-09 真机反馈「一级页面切换明显卡顿」的真根因：切 Tab 会 setState，
   /// 而此前 children 是在 `_buildPages` 里**现场构造**的——每次 setState 都生成
-  /// 四个新的页面 widget，Element 只能逐个 update，于是**四个页面（含统计页的
+  /// 五个新的页面 widget，Element 只能逐个 update，于是**五个页面（含统计页的
   /// 热力图 371 格与趋势图）全部 rebuild**。动画 tick 本身很轻，卡的是切换那一帧。
   ///
   /// 把列表缓存成同一个 List 实例后，children 的元素是 identical 的，

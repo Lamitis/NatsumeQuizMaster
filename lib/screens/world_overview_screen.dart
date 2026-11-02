@@ -47,6 +47,9 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   List<WorldInfo> _worlds = [];
   List<PluginInfo> _plugins = [];
 
+  /// 导入世界 / 分类包期间显示轻量进度并禁用重复点击
+  bool _importing = false;
+
   @override
   void initState() {
     super.initState();
@@ -89,6 +92,11 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
         child: ListView(
           padding: const EdgeInsets.all(NatsumeSpace.md),
           children: [
+            if (_importing)
+              const Padding(
+                padding: EdgeInsets.only(bottom: NatsumeSpace.xs),
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
             NatsumeSectionHeader(
               title: '世界',
               subtitle: '知识库 + 题库 + 插件 打包成单一文件，可分享给同学',
@@ -141,10 +149,10 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
               children: [
                 Expanded(
                   child: NatsumeButton(
-                    label: '导入世界',
+                    label: _importing ? '导入中…' : '导入世界',
                     kind: NatsumeButtonKind.secondary,
                     icon: Icons.download_outlined,
-                    onPressed: _importWorld,
+                    onPressed: _importing ? null : _importWorld,
                   ),
                 ),
                 const SizedBox(width: NatsumeSpace.sm),
@@ -359,29 +367,35 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   }
 
   Future<void> _importWorld() async {
+    final appState = context.read<AppState>();
     final picked = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['zip', 'natsume-world'],
     );
     final path = picked?.path;
-    if (path == null) return;
+    if (path == null || !mounted) return;
+    setState(() => _importing = true);
     try {
       final r = await WorldService.importWorld(path);
-      if (mounted) {
-        final message = r.isCategoryExport
-            ? '已成功导入分类【${r.categoryName ?? r.world.name}】，'
-                '包含 ${r.bankCount} 个题库'
-                '${r.kbCount > 0 ? '、${r.kbCount} 个知识库' : ''}'
-            : '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}';
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(message)));
-      }
-      _reload();
+      // 导入只写了数据库：必须把 AppState 的题库/分类/统计与插件快照一起刷新，
+      // 否则首页、开始页、题库管理仍显示导入前的数据，只能重启才能看到。
+      await appState.refreshAllDataAfterImport();
+      if (!mounted) return;
+      final message = r.isCategoryExport
+          ? '已成功导入分类【${r.categoryName ?? r.world.name}】，'
+              '包含 ${r.bankCount} 个题库'
+              '${r.kbCount > 0 ? '、${r.kbCount} 个知识库' : ''}'
+          : '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}';
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(message)));
+      await _reload();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('导入失败：$e')));
       }
+    } finally {
+      if (mounted) setState(() => _importing = false);
     }
   }
 
