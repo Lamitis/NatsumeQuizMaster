@@ -144,10 +144,40 @@ void main() {
       ]);
       expect(url, 'https://x/setup.exe');
     });
+    test('安装包类型识别：只认 apk / exe，镜像目录页不可应用内安装', () {
+      expect(UpdateService.installerExtension('https://x/a.apk'), '.apk');
+      expect(UpdateService.installerExtension('https://x/a.exe'), '.exe');
+      expect(
+          UpdateService.installerExtension(
+              'https://x/releases/download/v1.0.0/installer',
+              'installer.exe'),
+          '.exe');
+      expect(UpdateService.installerExtension('https://x/bundle.zip'), isNull);
+      expect(UpdateService.installerExtension(UpdateService.mirrorTagUrl('v1.39.2')),
+          isNull);
+    });
+
+    test('canInstallInApp：Windows 只接受 exe，Android 只接受 apk', () {
+      UpdateCheckResult result(String url) => UpdateCheckResult(
+            status: UpdateStatus.updateAvailable,
+            currentVersion: 'v1.39.1',
+            latestVersion: 'v1.39.2',
+            downloadUrl: url,
+          );
+      final apk = result('https://x/app.apk');
+      final exe = result('https://x/setup.exe');
+      if (Platform.isWindows) {
+        expect(UpdateService.canInstallInApp(apk), isFalse);
+        expect(UpdateService.canInstallInApp(exe), isTrue);
+      } else if (Platform.isAndroid) {
+        expect(UpdateService.canInstallInApp(apk), isTrue);
+        expect(UpdateService.canInstallInApp(exe), isFalse);
+      }
+    });
   });
 
   group('check()：镜像优先，GitHub 兜底', () {
-    test('镜像可用时直接返回镜像结果（不去打 GitHub）', () async {
+    test('镜像确认已是最新时不再请求 GitHub', () async {
       var githubHits = 0;
       final client = MockClient((req) async {
         if (req.url.host == 'mirrors.tuna.tsinghua.edu.cn') {
@@ -158,12 +188,45 @@ void main() {
       });
 
       final r =
-          await UpdateService.check(client: client, currentVersion: 'v1.33.0.26');
-      expect(r.status, UpdateStatus.updateAvailable);
+          await UpdateService.check(client: client, currentVersion: 'v1.34.0');
+      expect(r.status, UpdateStatus.upToDate);
       expect(r.source, '清华镜像');
       expect(r.latestVersion, 'v1.34.0');
       expect(r.downloadUrl, UpdateService.mirrorTagUrl('v1.34.0'));
       expect(githubHits, 0);
+    });
+
+    test('镜像发现更新后经 GitHub API 拿资产直链与说明', () async {
+      var githubHits = 0;
+      final client = MockClient((req) async {
+        if (req.url.host == 'mirrors.tuna.tsinghua.edu.cn') {
+          return http.Response.bytes(utf8.encode(mirrorIndexHtml), 200);
+        }
+        githubHits++;
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'tag_name': 'v1.34.0',
+            'body': '应用内更新',
+            'assets': [
+              {
+                'name': 'natsume-v1.34.0.apk',
+                'browser_download_url': 'https://dl/natsume.apk',
+              },
+            ],
+          })),
+          200,
+        );
+      });
+
+      final r = await UpdateService.check(
+          client: client, currentVersion: 'v1.33.0.26');
+      expect(r.status, UpdateStatus.updateAvailable);
+      expect(r.source, 'GitHub');
+      expect(r.latestVersion, 'v1.34.0');
+      expect(r.downloadUrl, 'https://dl/natsume.apk');
+      expect(r.downloadFileName, 'natsume-v1.34.0.apk');
+      expect(r.notes, '应用内更新');
+      expect(githubHits, 1);
     });
 
     test('本地已是最新时不误报更新', () async {

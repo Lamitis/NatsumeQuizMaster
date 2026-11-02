@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show immutable;
@@ -76,6 +77,30 @@ class SmartHttpResult {
 
   /// 按 UTF-8 解码（容错：镜像偶尔塞回一两个坏字节，不该让整张表作废）
   String get text => utf8.decode(bytes, allowMalformed: true);
+}
+
+/// 流式落盘下载的结果：文件已完整写入 [path]。
+class SmartDownloadResult {
+  const SmartDownloadResult({
+    required this.path,
+    required this.url,
+    required this.label,
+    required this.bytes,
+    this.attempts = const [],
+  });
+
+  final String path;
+
+  /// 真正命中的 URL（可能带加速前缀）
+  final String url;
+
+  /// 命中源的名字
+  final String label;
+
+  /// 实际写入的字节数
+  final int bytes;
+
+  final List<SmartAttempt> attempts;
 }
 
 /// 多源请求全部失败。
@@ -333,6 +358,116 @@ class SmartHttpClient {
     throw SmartHttpException(
       '插件包下载失败：${candidates.length} 个源都不可用'
       '（超时 / 非 200 / 校验不通过）',
+      attempts: attempts,
+      originalUrl: url,
+    );
+  }
+
+  /// 流式下载到文件：逐源尝试，边下边写边回报进度。
+  ///
+  /// 与 [downloadVerified] 的区别：
+  /// - 不把整包读进内存（APK / 安装包几十 MB，内存峰值不该跟着涨）；
+  /// - 通过 [onProgress] 暴露 `(已收字节, 总字节?)`，总长拿不到时第二项为 null；
+  /// - 下载失败会删除半截文件，换下一个源重新写同一个路径。
+  ///
+  /// 失败抛出 [SmartHttpException]（带原始 [url]，UI 用作「复制下载链接」兜底）。
+  Future<SmartDownloadResult> downloadToFile({
+    required String url,
+    required String savePath,
+    Duration timeout = defaultDownloadTimeout,
+    String? customMirror,
+    Map<String, String>? headers,
+    void Function(int received, int? total)? onProgress,
+    String failurePrefix = '文件下载失败',
+  }) async {
+    final candidates =
+        downloadCandidates(url, customMirror: customMirror ?? _customMirror);
+    final attempts = <SmartAttempt>[];
+    final file = File(savePath);
+    await file.parent.create(recursive: true);
+
+    for (final source in candidates) {
+      http.Client? ownClient;
+      IOSink? sink;
+      var completed = false;
+      try {
+        final request = http.Request('GET', Uri.parse(source.url))
+          ..headers['User-Agent'] = userAgent;
+        if (headers != null) request.headers.addAll(headers);
+
+        final injected = _client;
+        final client = injected ?? (ownClient = http.Client());
+        final response = await client.send(request).timeout(timeout);
+        if (response.statusCode != 200) {
+          // 释放响应流，别把连接挂到超时
+          try {
+            await response.stream.drain<void>();
+          } catch (_) {}
+          attempts.add(SmartAttempt(
+            label: source.label,
+            url: source.url,
+            statusCode: response.statusCode,
+            error: '非 200，换下一个源',
+          ));
+          continue;
+        }
+
+        final total = response.contentLength;
+        onProgress?.call(0, total);
+        sink = file.openWrite();
+        var received = 0;
+        await for (final chunk in response.stream.timeout(timeout)) {
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+        }
+        await sink.flush();
+        await sink.close();
+        sink = null;
+        completed = true;
+        attempts.add(SmartAttempt(
+          label: source.label,
+          url: source.url,
+          statusCode: 200,
+        ));
+        return SmartDownloadResult(
+          path: savePath,
+          url: source.url,
+          label: source.label,
+          bytes: received,
+          attempts: attempts,
+        );
+      } on TimeoutException {
+        attempts.add(SmartAttempt(
+          label: source.label,
+          url: source.url,
+          error: '超时（${timeout.inSeconds}s）',
+        ));
+      } catch (e) {
+        attempts.add(SmartAttempt(
+          label: source.label,
+          url: source.url,
+          error: '$e',
+        ));
+      } finally {
+        if (sink != null) {
+          try {
+            await sink.close();
+          } catch (_) {}
+        }
+        ownClient?.close();
+        if (!completed) {
+          // 半截文件绝不能留给安装器：下一次尝试会重写同一个路径
+          try {
+            if (await file.exists()) await file.delete();
+          } catch (_) {}
+        }
+      }
+    }
+
+    final detail = attempts.map((a) => a.summary).join('；');
+    throw SmartHttpException(
+      '$failurePrefix（已尝试 ${candidates.length} 个源）：$detail',
       attempts: attempts,
       originalUrl: url,
     );

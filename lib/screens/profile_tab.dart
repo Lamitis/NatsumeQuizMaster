@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../services/app_state.dart';
@@ -414,15 +415,12 @@ class _EntryTile extends StatelessWidget {
   }
 }
 
-/// 「检查更新」对话框（v1.34）。
+/// 「检查更新」对话框（v1.39.2：应用内加速下载）。
 ///
-/// 打开即查一次；三种结果各给一句话 + 下一步动作：
-///   有新版本 → 显示当前/最新版本与说明，主按钮「前往下载」（外部浏览器）
-///   已最新   → 显示当前版本，无主按钮
-///   失败     → 显示两路失败原因，「重试」原地再查（不用关掉重进）
-///
-/// 下载一律走外部浏览器：应用商店/安装包渠道随平台不同，App 内自更新
-/// 在 Android 上还会触发未知来源安装权限，属于另一个量级的功能。
+/// 打开即查一次；发现新版本后可在弹窗内直接下载并拉起安装器：
+///   · 下载走 SmartHttpClient 多源回退，弹窗内显示百分比、速度与进度条；
+///   · Windows 拉起 `.exe`，Android 走 `open_filex` 调系统安装界面；
+///   · 所有源都失败时保留「复制下载链接」，用户可手动浏览器下载。
 class _UpdateDialog extends StatefulWidget {
   const _UpdateDialog();
 
@@ -433,7 +431,13 @@ class _UpdateDialog extends StatefulWidget {
 class _UpdateDialogState extends State<_UpdateDialog> {
   bool _loading = true;
   bool _opening = false;
+  bool _downloading = false;
+  bool _installing = false;
+  bool _installed = false;
   UpdateCheckResult? _result;
+  UpdateDownloadProgress? _progress;
+  UpdateDownloadResult? _download;
+  String? _downloadError;
 
   @override
   void initState() {
@@ -442,7 +446,15 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   }
 
   Future<void> _run() async {
-    setState(() => _loading = true);
+    setState(() {
+      _loading = true;
+      _downloading = false;
+      _installing = false;
+      _installed = false;
+      _progress = null;
+      _download = null;
+      _downloadError = null;
+    });
     final result = await UpdateService.check();
     if (!mounted) return;
     setState(() {
@@ -457,10 +469,107 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     if (!mounted) return;
     setState(() => _opening = false);
     if (!ok) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('无法打开链接，请手动访问：$url')),
-      );
+      _showSnack('无法打开链接，请手动访问：$url');
     }
+  }
+
+  /// 点击「立即更新」：下载 → 自动拉起安装器。
+  Future<void> _startUpdate() async {
+    final result = _result;
+    if (result == null || _downloading) return;
+    setState(() {
+      _downloading = true;
+      _installing = false;
+      _installed = false;
+      _progress = null;
+      _download = null;
+      _downloadError = null;
+    });
+    try {
+      final download = await UpdateService.downloadUpdate(
+        update: result,
+        onProgress: (p) {
+          if (!mounted) return;
+          setState(() => _progress = p);
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _download = download;
+        _installing = true;
+      });
+      await _launchInstaller(download);
+    } on UpdateDownloadException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _downloadError = _shortError(e.message);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _downloadError = _shortError('$e');
+      });
+    }
+  }
+
+  Future<void> _launchInstaller(UpdateDownloadResult download) async {
+    final ok = await UpdateService.installUpdate(download);
+    if (!mounted) return;
+    setState(() {
+      _installing = false;
+      _installed = ok;
+      if (!ok) {
+        _downloadError = '安装程序启动失败，可点「打开安装包」重试，或复制下载链接手动安装。';
+      }
+    });
+    if (ok) {
+      _showSnack('已启动安装程序，请按提示完成安装。');
+    }
+  }
+
+  Future<void> _reopenInstaller() async {
+    final download = _download;
+    if (download == null || _installing) return;
+    setState(() {
+      _installing = true;
+      _downloadError = null;
+    });
+    await _launchInstaller(download);
+  }
+
+  Future<void> _copyDownloadUrl() async {
+    final url = _result?.downloadUrl;
+    if (url == null || url.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: url));
+    if (!mounted) return;
+    _showSnack('下载链接已复制');
+  }
+
+  void _showSnack(String message) {
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  static String _shortError(String message) =>
+      message.length <= 320 ? message : '${message.substring(0, 320)}…';
+
+  static String _fmtBytes(int bytes) {
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(0)} KB';
+    return '$bytes B';
+  }
+
+  static String _fmtSpeed(double bytesPerSecond) {
+    final mb = bytesPerSecond / (1024 * 1024);
+    if (mb >= 1) return '${mb.toStringAsFixed(1)} MB/s';
+    final kb = bytesPerSecond / 1024;
+    return '${kb.toStringAsFixed(0)} KB/s';
   }
 
   @override
@@ -469,6 +578,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     final result = _result;
     final hasUpdate = result?.hasUpdate ?? false;
     final downloadUrl = result?.downloadUrl;
+    final canInApp = result != null && UpdateService.canInstallInApp(result);
 
     return AlertDialog(
       title: const Text('检查更新'),
@@ -490,16 +600,43 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                   ),
                 ],
               )
-            : SingleChildScrollView(child: _buildBody(context, result)),
+            : SingleChildScrollView(
+                child: _buildBody(context, result, canInApp: canInApp)),
       ),
       actions: [
         if (!_loading && result != null && result.failed)
           TextButton(onPressed: _run, child: const Text('重试')),
-        if (hasUpdate && downloadUrl != null)
-          FilledButton(
-            onPressed: _opening ? null : () => _openDownload(downloadUrl),
-            child: Text(_opening ? '正在打开…' : '前往下载'),
-          ),
+        if (!_loading && hasUpdate && downloadUrl != null) ...[
+          if (_downloading)
+            FilledButton(
+              onPressed: null,
+              child: Text(_progress?.percent == null
+                  ? '下载中…'
+                  : '下载中 ${_progress!.percent}%'),
+            )
+          else if (_download != null)
+            FilledButton(
+              onPressed: _installing ? null : _reopenInstaller,
+              child: Text(_installing
+                  ? '正在启动…'
+                  : (_installed ? '再次打开安装包' : '打开安装包')),
+            )
+          else if (canInApp)
+            FilledButton(
+              onPressed: _startUpdate,
+              child: Text(_downloadError == null ? '立即更新' : '重试下载'),
+            )
+          else
+            FilledButton(
+              onPressed: _opening ? null : () => _openDownload(downloadUrl),
+              child: Text(_opening ? '正在打开…' : '前往浏览器下载'),
+            ),
+          if (!_downloading)
+            TextButton(
+              onPressed: _copyDownloadUrl,
+              child: const Text('复制下载链接'),
+            ),
+        ],
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: Text(hasUpdate ? '稍后' : '好的'),
@@ -508,7 +645,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
     );
   }
 
-  Widget _buildBody(BuildContext context, UpdateCheckResult? result) {
+  Widget _buildBody(
+    BuildContext context,
+    UpdateCheckResult? result, {
+    required bool canInApp,
+  }) {
     final ac = AppThemeColors.of(context);
     if (result == null) return const SizedBox.shrink();
 
@@ -579,7 +720,115 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               style: NatsumeType.captionStyle
                   .copyWith(color: ac.textSecondary, height: 1.6)),
         ],
+        if (_downloading) ...[
+          const SizedBox(height: NatsumeSpace.md),
+          _buildProgress(ac),
+        ],
+        if (_download != null) ...[
+          const SizedBox(height: NatsumeSpace.md),
+          _buildDownloaded(ac),
+        ],
+        if (_downloadError != null) ...[
+          const SizedBox(height: NatsumeSpace.md),
+          _buildError(ac, _downloadError!),
+        ],
+        if (!canInApp && _downloadError == null) ...[
+          const SizedBox(height: NatsumeSpace.sm),
+          Text(
+            '当前更新源只提供页面链接，无法应用内自动安装。'
+            '请点「复制下载链接」到浏览器下载安装包。',
+            style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+          ),
+        ],
       ],
+    );
+  }
+
+  Widget _buildProgress(AppThemeColors ac) {
+    final p = _progress;
+    final percent = p?.percent;
+    final total = p?.totalBytes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(NatsumeRadius.chip),
+          child: LinearProgressIndicator(
+            value: p?.fraction,
+            minHeight: 8,
+          ),
+        ),
+        const SizedBox(height: NatsumeSpace.xxs),
+        Row(
+          children: [
+            Text(
+              percent == null ? '正在下载…' : '正在下载 $percent%',
+              style: NatsumeType.captionStyle.copyWith(
+                  fontWeight: FontWeight.w600, color: ac.textPrimary),
+            ),
+            const Spacer(),
+            if (p != null)
+              Text(
+                '${_fmtSpeed(p.bytesPerSecond)} · '
+                '${_fmtBytes(p.receivedBytes)}'
+                '${total == null ? '' : ' / ${_fmtBytes(total)}'}',
+                style:
+                    NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDownloaded(AppThemeColors ac) {
+    final text = _installing
+        ? '下载完成，正在启动安装程序…'
+        : (_installed ? '已启动安装程序，请按提示完成安装。' : '安装包已下载完成。');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      decoration: BoxDecoration(
+        color: ac.successSoft,
+        borderRadius: BorderRadius.circular(NatsumeRadius.small),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle_outline, size: 18, color: ac.success),
+          const SizedBox(width: NatsumeSpace.xs),
+          Expanded(
+            child: Text(
+              text,
+              style: NatsumeType.captionStyle.copyWith(color: ac.textPrimary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildError(AppThemeColors ac, String error) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      decoration: BoxDecoration(
+        color: ac.dangerSoft,
+        borderRadius: BorderRadius.circular(NatsumeRadius.small),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('下载 / 安装失败',
+              style: NatsumeType.captionStyle.copyWith(
+                  fontWeight: FontWeight.w600, color: ac.danger)),
+          const SizedBox(height: 2),
+          Text(
+            error,
+            style: NatsumeType.microStyle.copyWith(
+                color: ac.textSecondary, height: 1.5),
+          ),
+        ],
+      ),
     );
   }
 }

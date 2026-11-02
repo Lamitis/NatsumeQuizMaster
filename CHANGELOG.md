@@ -14,6 +14,19 @@
 
 ---
 
+## [1.39.2] - 2026-11-01
+
+新增应用内安全加速下载更新：发现新版本后直接在弹窗内通过 SmartHttpClient 多源下载，显示百分比与速度，Windows / Android 自动拉起安装器；同时修复了切题异步查询在数据库关闭后抛未捕获异常的问题。
+
+### 新增
+- 应用内更新：`UpdateService` 改用 `SmartHttpClient` 多源回退，按平台挑选 `.exe` / `.apk` 并流式下载到缓存目录。
+- 更新弹窗内显示进度条、百分比、速度与已下载大小；下载完成自动拉起安装程序。
+- Windows 直接打开 `.exe`；Android 通过新增的 `open_filex` 调起系统安装界面（声明 `REQUEST_INSTALL_PACKAGES`）。
+- 所有加速源失败时保留「复制下载链接」兜底，不再只能跳浏览器。
+
+### 修复
+- `QuizScreen` 的 `isInErrorBook` 与 `AppState._restoreAnswerState` 的题目统计 / FSRS 查询补 `catchError`，数据库已关闭时只记日志，不再冒未捕获异常。
+
 ## [1.39.1] - 2026-11-01
 
 插件市场里的「未分类」修掉了：登记表的 `category` 现在能一路传到界面，分类筛选栏也完全跟着数据走。
