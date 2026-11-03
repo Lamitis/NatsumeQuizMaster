@@ -22,6 +22,7 @@ import '../services/net/smart_http_client.dart';
 import '../services/sync/sync_engine.dart';
 import '../services/sync/lan_address.dart';
 import '../services/theme_service.dart';
+import '../utils/platform_support.dart';
 import '../utils/responsive.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../services/sync/sync_code.dart';
@@ -1060,10 +1061,10 @@ class _SettingsScreenState extends State<SettingsScreen>
 
                 const SizedBox(height: 16),
 
-                // v1.30.2：扫描件识别增强（MinerU）
-                // 署名按 MinerU Open Source License 的附加条款写在界面上：
-                // 把本 App 当在线服务提供给第三方时，必须显著标明使用了 MinerU。
-                _SettingsCard(
+                // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
+                // 连开关、Token 与署名提示一起隐藏（导入侧还有运行时门禁兜底）。
+                if (isDesktopPlatform)
+                  _SettingsCard(
                   bordered: true,
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1082,21 +1083,22 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '扫描版 PDF / 图片题库先做版面识别再交给 AI 切题，表格与公式不会散架。'
+                        '开启后无需每次手动选择：桌面端导入 PDF 时会先抽样前几页文字层，'
+                        '只有扫描件/乱码才自动交给 MinerU 做版面识别；电子版直接本地解析，不跑 OCR。'
                         '不填 Token 走官方轻量通道（≤10MB、≤20 页）；填了 Token 走精准解析（≤200MB、≤200 页）。',
                         style: NatsumeType.captionStyle
                             .copyWith(color: ac.textSecondary, height: 1.4),
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '开启后，导入时会把文件上传到 MinerU 官方服务（mineru.net）。',
+                        '识别到扫描件时，会把该文件上传到 MinerU 官方服务（mineru.net）。',
                         style: NatsumeType.microStyle
                             .copyWith(color: ac.textTertiary, height: 1.4),
                       ),
                       SwitchListTile(
                         contentPadding: EdgeInsets.zero,
                         dense: true,
-                        title: Text('启用 MinerU 版面识别',
+                        title: Text('允许扫描件使用 MinerU（桌面端自动判断）',
                             style: TextStyle(
                                 fontSize: NatsumeType.body,
                                 color: ac.textPrimary)),
@@ -1153,7 +1155,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 nickname: _nicknameController.text.trim(),
                                 analysisDetail: _detail,
                                 keywordHighlight: _keywordHighlight,
-                                mineruEnabled: _mineruEnabled,
+                                // 移动端隐藏了开关：绝不把 MinerU 写回开启态
+                                mineruEnabled:
+                                    isDesktopPlatform && _mineruEnabled,
                                 mineruToken:
                                     _mineruTokenController.text.trim(),
                               );

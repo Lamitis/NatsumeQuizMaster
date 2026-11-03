@@ -17,11 +17,13 @@ import '../models/app_settings.dart';
 import 'database_service.dart';
 import 'device_service.dart';
 import '../utils/question_image_tokens.dart';
+import '../utils/platform_support.dart';
 import 'doc_parser_service.dart';
 import 'question_image_service.dart';
 import 'ocr_service.dart';
 import 'mineru_service.dart';
 import 'pdf_import_service.dart';
+import 'import_ocr_policy.dart';
 import 'bank_file_service.dart';
 import 'reminder_service.dart';
 import 'ai_service.dart';
@@ -407,6 +409,10 @@ class AppState extends ChangeNotifier {
 
   /// 解析单个文档 → 预览批次；返回 null 表示这份失败（原因已写进
   /// [_importStatus]）。
+  ///
+  /// v1.41 导入 OCR 重构：PDF 先抽样前 2~3 页文字层 → **只有扫描件/乱码才
+  /// 触发 MinerU**（且仅桌面端）；电子版直接本地抽图文 + 文本切块，不再白跑
+  /// 一遍耗时极长的 OCR。每一步都写状态与进度，失败一律降级而不是卡死。
   Future<PreviewBatch?> _parseFileForPreview(File file) async {
     final fileName = _fileName(file.path);
     var bankName = '';
@@ -415,41 +421,91 @@ class AppState extends ChangeNotifier {
     String rawText = '';
     var imagePool = <int, QuestionImage>{};
     var scannedPdf = false;
+
+    // 当前文件在外层进度区间里的「根区间」：各阶段在内部再切段，
+    // 进度条只向前走（检测 → MinerU/抽取 → 切块），不会来回跳。
+    final rootBase = _bgProgressBase;
+    final rootSpan = _bgProgressSpan;
+    void stage(double from, double to) {
+      _bgProgressBase = rootBase + rootSpan * from;
+      _bgProgressSpan = rootSpan * (to - from);
+    }
+
+    void report(String status, [double? value]) {
+      _importStatus = status;
+      if (value != null) _importProgress = value.clamp(0.0, 1.0);
+      notifyListeners();
+    }
+
+    var mineruTried = false;
     if (isPdf) {
-      // PDF：本地抽图文（图片是题目的一部分，随 {{img:N}} 占位符进解析流）
       bankName =
           fileName.replaceAll(RegExp(r'\.pdf$', caseSensitive: false), '');
-      _importStatus = '正在提取 PDF 图文...';
-      notifyListeners();
+      // ① 抽样前 3 页文字层：只读文本，毫秒级，不渲染不抽图
+      report(ImportOcrPolicy.detectingTextLayer(), rootBase);
+      PdfTextLayerProbe probe;
       try {
-        final extracted = await PdfImportService.extract(file.path);
-        rawText = extracted.rawText;
-        imagePool = extracted.imagePool;
-        // v1.30.2 MinerU：文字层太薄（多半是扫描件/图片字混排）时先让 MinerU
-        // 做版面识别，拿 Markdown 当切题输入——端上 OCR 会丢掉表格/公式/
-        // 双栏结构，MinerU 能保住。配图仍沿用本地抽到的图，挂不上的照旧
-        // 进「待指派」，不静默丢。
-        if (_settings.mineruEnabled && rawText.trim().length < 200) {
-          _importStatus = '文字层偏薄，MinerU 版面识别…';
-          notifyListeners();
-          final mineru = await MineruService.instance.parseFile(file.path,
-              onStatus: (s) {
-            _importStatus = s;
-            notifyListeners();
-          });
-          if (mineru != null) {
-            rawText = mineru.markdown;
-          }
-        }
+        probe = await PdfImportService.probeTextLayer(file.path);
       } on PdfExtractException catch (e) {
-        if (!e.scanned) {
-          _importStatus = '「$fileName」${e.message}';
-          notifyListeners();
-          return null;
-        }
-        // 扫描件/图片字：字画在图里、无文字层——改走视觉切题通道
-        scannedPdf = true;
+        report('「$fileName」${e.message}');
+        return null;
       }
+
+      // ② 扫描件（且桌面端 + 用户已开启）才自动触发 MinerU
+      final useMineru = ImportOcrPolicy.shouldUseMineru(
+        isMobile: isMobilePlatform,
+        enabled: _settings.mineruEnabled,
+        needsOcr: probe.needsOcr,
+      );
+      mineruTried = useMineru;
+      if (useMineru) {
+        stage(0.05, 0.62);
+        report(ImportOcrPolicy.mineruStarting, _bgProgressBase);
+        final mineru = await MineruService.instance.parseFile(
+          file.path,
+          onStatus: (s) => report(s),
+          onPageProgress: (done, total) {
+            _importStatus = ImportOcrPolicy.mineruPage(done, total);
+            _importProgress = (_bgProgressBase +
+                    _bgProgressSpan * (total > 0 ? done / total : 0))
+                .clamp(0.0, 1.0);
+            notifyListeners();
+          },
+        );
+        if (mineru != null && mineru.markdown.trim().isNotEmpty) {
+          rawText = mineru.markdown;
+          report(ImportOcrPolicy.mineruChunking);
+        } else {
+          // 让「已回退」至少能被看见，再继续本地抽取（不阻塞、不红屏）
+          report(ImportOcrPolicy.mineruFallback);
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+      } else if (probe.needsOcr) {
+        report(isMobilePlatform
+            ? ImportOcrPolicy.mobileFallback
+            : ImportOcrPolicy.mineruDisabled);
+      }
+
+      // ③ 没拿到 MinerU 文本时才本地抽图文
+      //（扫描件本来就没有文字层，抽不到会抛 scanned=true，继续走 OCR）
+      if (rawText.trim().isEmpty) {
+        stage(0.05, 0.4);
+        report(ImportOcrPolicy.layoutExtracting, rootBase + rootSpan * 0.12);
+        try {
+          final extracted = await PdfImportService.extract(file.path);
+          rawText = extracted.rawText;
+          imagePool = extracted.imagePool;
+        } on PdfExtractException catch (e) {
+          if (!e.scanned) {
+            report('「$fileName」${e.message}');
+            return null;
+          }
+          scannedPdf = true;
+        }
+      }
+
+      // 文字层不可用（扫描件 / 乱码 / 空文本）→ 走离线 OCR 或视觉切题
+      if (!ImportOcrPolicy.isUsableText(rawText)) scannedPdf = true;
     } else {
       // 检测格式：不允许旧版二进制 .doc
       final format = DocParserService.detectFormat(file.path);
@@ -466,20 +522,24 @@ class AppState extends ChangeNotifier {
       }
       bankName = fileName.replaceAll(
           RegExp(r'\.(docx|doc)$', caseSensitive: false), '');
+      stage(0.05, 0.35);
+      report('正在提取文本：$fileName', rootBase + rootSpan * 0.1);
       rawText = await DocParserService.extractRawText(file.path);
     }
 
     final AIParseResult result;
     if (scannedPdf) {
-      // v1.30.2：扫描件切题抽成独立方法（MinerU 优先 → 端上 OCR → 视觉切题）
-      final scannedResult = await _parseScannedPdf(file, fileName);
+      // 扫描件切题：MinerU（若还没试过）→ 端上 OCR → 视觉切题
+      stage(0.4, 1.0);
+      final scannedResult = await _parseScannedPdf(file, fileName,
+          allowMineru: !mineruTried);
       if (scannedResult == null) return null; // 失败原因已写进 _importStatus
       result = scannedResult;
     } else {
-      _importStatus = 'AI 解析中...';
-      notifyListeners();
+      stage(0.4, 1.0);
+      report(ImportOcrPolicy.chunking, _bgProgressBase);
       result = await _aiService!.parseQuestionsFromRawText(rawText, 0, (d, t) {
-        _importStatus = 'AI 解析中 ($d/$t 块)';
+        _importStatus = ImportOcrPolicy.chunkingProgress(d, t);
         // v1.27 进度精确化：按分块推进进度条（映射到当前阶段跨度内）
         _importProgress =
             (_bgProgressBase + _bgProgressSpan * (t > 0 ? d / t : 0))
@@ -518,32 +578,66 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// 扫描版 PDF 切题（v1.30.2 抽成独立方法）。
+  /// 扫描版 PDF 切题（v1.30.2 抽成独立方法，v1.41 调整退路顺序）。
   ///
   /// 三级退路：
-  /// 1. MinerU 版面识别（用户在设置里开启时）——表格/公式/双栏都保得住，
-  ///    输出 Markdown 直接喂给切题 AI，任何文本模型都能用；
+  /// 1. MinerU 版面识别（桌面端 + 用户已开启 + 调用方还没试过）——
+  ///    表格/公式/双栏都保得住，输出 Markdown 直接喂给切题 AI；
   /// 2. 端上离线 OCR（Android · ML Kit）——免 Key、免流量，但只认「一行行字」；
   /// 3. 视觉切题——把页图直接丢给视觉模型，最贵但兜底。
   ///
-  /// 返回 null 表示这一路走不通，失败原因已写入 [_importStatus]。
-  Future<AIParseResult?> _parseScannedPdf(File file, String fileName) async {
-    String? mineruText;
-    if (_settings.mineruEnabled) {
-      _importStatus = '扫描版 PDF：MinerU 版面识别…';
-      notifyListeners();
-      final mineru = await MineruService.instance.parseFile(file.path,
-          onStatus: (s) {
-        _importStatus = s;
-        notifyListeners();
-      });
-      mineruText = mineru?.markdown;
+  /// [allowMineru] 为 false 表示上层已经试过 MinerU（失败/未开启/移动端），
+  /// 这里不再重复上传一次。
+  Future<AIParseResult?> _parseScannedPdf(File file, String fileName,
+      {bool allowMineru = true}) async {
+    final rootBase = _bgProgressBase;
+    final rootSpan = _bgProgressSpan;
+    void stage(double from, double to) {
+      _bgProgressBase = rootBase + rootSpan * from;
+      _bgProgressSpan = rootSpan * (to - from);
     }
-    if (mineruText != null && mineruText.trim().length >= 100) {
-      _importStatus = '扫描版 PDF：AI 切题…';
+
+    void report(String status, [double? value]) {
+      _importStatus = status;
+      if (value != null) _importProgress = value.clamp(0.0, 1.0);
       notifyListeners();
+    }
+
+    String? mineruText;
+    final canUseMineru = allowMineru &&
+        ImportOcrPolicy.shouldUseMineru(
+          isMobile: isMobilePlatform,
+          enabled: _settings.mineruEnabled,
+          needsOcr: true,
+        );
+    if (canUseMineru) {
+      stage(0.0, 0.55);
+      report(ImportOcrPolicy.mineruStarting, _bgProgressBase);
+      final mineru = await MineruService.instance.parseFile(
+        file.path,
+        onStatus: (s) => report(s),
+        onPageProgress: (done, total) {
+          _importStatus = ImportOcrPolicy.mineruPage(done, total);
+          _importProgress = (_bgProgressBase +
+                  _bgProgressSpan * (total > 0 ? done / total : 0))
+              .clamp(0.0, 1.0);
+          notifyListeners();
+        },
+      );
+      mineruText = mineru?.markdown;
+      if (mineruText == null || mineruText.trim().isEmpty) {
+        // 明确降级提示（不阻塞，继续走 OCR / 视觉）
+        report(ImportOcrPolicy.mineruFallback, _bgProgressBase);
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        mineruText = null;
+      }
+    }
+
+    if (mineruText != null && ImportOcrPolicy.isUsableText(mineruText)) {
+      stage(0.55, 1.0);
+      report(ImportOcrPolicy.chunking, _bgProgressBase);
       return await _aiService!.parseQuestionsFromRawText(mineruText, 0, (d, t) {
-        _importStatus = '扫描版 PDF：AI 切题 ($d/$t 块)';
+        _importStatus = ImportOcrPolicy.chunkingProgress(d, t);
         _importProgress =
             (_bgProgressBase + _bgProgressSpan * (t > 0 ? d / t : 0))
                 .clamp(0.0, 1.0);
@@ -551,34 +645,41 @@ class AppState extends ChangeNotifier {
       });
     }
 
-    _importStatus = '扫描版 PDF：提取页图...';
-    notifyListeners();
+    stage(0.55, 0.7);
+    report('正在提取扫描页图…', _bgProgressBase);
     final pages = await PdfImportService.extractScannedPages(file.path,
         onProgress: (d, t) {
-      _importStatus = '扫描版 PDF：提取页图 ($d/$t 页)';
-      notifyListeners();
+      report(
+          '正在提取扫描页图（$d/$t 页）…',
+          (_bgProgressBase + _bgProgressSpan * (t > 0 ? d / t : 0))
+              .clamp(0.0, 1.0));
     });
     if (pages.isEmpty) {
-      _importStatus = '「$fileName」页面提取失败，无法识别';
-      notifyListeners();
+      report('「$fileName」页面提取失败，无法识别');
       return null;
     }
 
     var ocrText = '';
     if (OcrService.isSupported) {
+      stage(0.7, 0.85);
       final pageTexts = <String>[];
       for (var i = 0; i < pages.length; i++) {
-        _importStatus = '扫描版 PDF：识别文字 (${i + 1}/${pages.length} 页)';
-        notifyListeners();
+        report(
+            '正在识别扫描页文字（${i + 1}/${pages.length} 页）…',
+            (_bgProgressBase +
+                    _bgProgressSpan * (pages.isEmpty ? 0 : i / pages.length))
+                .clamp(0.0, 1.0));
         pageTexts.add(await OcrService.recognizeImage(pages[i]) ?? '');
       }
       ocrText = OcrService.mergePageTexts(pageTexts);
     }
 
-    if (ocrText.trim().length >= 100) {
+    if (ImportOcrPolicy.isUsableText(ocrText)) {
       // OCR 认出了可用文字层：与文字版 PDF 同路，文本模型即可切题
+      stage(0.85, 1.0);
+      report(ImportOcrPolicy.chunking, _bgProgressBase);
       return await _aiService!.parseQuestionsFromRawText(ocrText, 0, (d, t) {
-        _importStatus = '扫描版 PDF：AI 切题 ($d/$t 块)';
+        _importStatus = ImportOcrPolicy.chunkingProgress(d, t);
         _importProgress =
             (_bgProgressBase + _bgProgressSpan * (t > 0 ? d / t : 0))
                 .clamp(0.0, 1.0);
@@ -586,8 +687,11 @@ class AppState extends ChangeNotifier {
       });
     }
     // OCR 不可用/认不出（如 Windows 端或版式太花）：退视觉切题
+    stage(0.85, 1.0);
+    _importStatus = '正在使用视觉模型切题…';
+    notifyListeners();
     return await _aiService!.parseQuestionsFromPageImages(pages, 0, (d, t) {
-      _importStatus = '扫描版 PDF：视觉切题 ($d/$t 页)';
+      _importStatus = '正在使用视觉模型切题（$d/$t 页）…';
       _importProgress =
           (_bgProgressBase + _bgProgressSpan * (t > 0 ? d / t : 0))
               .clamp(0.0, 1.0);

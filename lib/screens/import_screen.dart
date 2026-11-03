@@ -8,6 +8,8 @@ import 'package:file_picker/file_picker.dart';
 import '../services/app_state.dart';
 import '../services/theme_service.dart';
 import '../utils/import_source_filter.dart';
+import '../utils/platform_support.dart';
+import '../widgets/import/import_progress_card.dart';
 import '../widgets/import_drop_zone.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../utils/responsive.dart';
@@ -284,7 +286,8 @@ class _ImportScreenState extends State<ImportScreen> {
                       const SizedBox(width: NatsumeSpace.xs),
                       Expanded(
                         child: Text(
-                          '支持 DOCX / PDF / JSON。DOCX/PDF 解析后先预览题目，可编辑、删除后再确认入库；PDF 自动抽图，插图随题保留。\n旧版 .doc 文件请先用 Word 另存为 .docx。\n扫描版 PDF 也能导入；识别不准时可在「设置 → AI 接口」开启 MinerU 版面识别。',
+                          '支持 DOCX / PDF / JSON。DOCX/PDF 解析后先预览题目，可编辑、删除后再确认入库；PDF 自动抽图，插图随题保留。\n旧版 .doc 文件请先用 Word 另存为 .docx。'
+                          '${isDesktopPlatform ? "\n扫描版 PDF 也能导入：桌面端会先检测文字层，扫描件自动用 MinerU 版面识别（可在设置里允许/关闭）。" : "\n扫描版 PDF 也能导入：移动端使用端上 OCR / 视觉切题，无需额外设置。"}',
                           style: NatsumeType.captionStyle
                               .copyWith(color: ac.textSecondary, height: 1.6),
                         ),
@@ -396,9 +399,8 @@ class _ImportScreenState extends State<ImportScreen> {
 
                 // 已选文件（v1.27：随整页滚动，不再被压在 Expanded 小区域）
                 if (_selectedFiles.isNotEmpty) ...[
-                  // v1.40：选了 DOCX / PDF 才提示 MinerU —— 扫描件/图片多的
-                  // 文档靠纯文本抽取会漏字，先告诉用户开关在哪，比失败后再解释有用
-                  if (_selectedFiles.any(_isAiDoc)) ...[
+                  // v1.41：MinerU 仅在桌面端存在；移动端完全隐藏相关提示
+                  if (isDesktopPlatform && _selectedFiles.any(_isAiDoc)) ...[
                     NatsumeSurface(
                       tone: NatsumeTone.alt,
                       padding: const EdgeInsets.all(NatsumeSpace.sm),
@@ -556,14 +558,16 @@ class _ImportScreenState extends State<ImportScreen> {
                     ),
                   ),
 
-                  // v1.27 进度展示：与首页/开始页同一张任务卡（任务在应用层继续，
-                  // 离开本页后开始页顶部卡片同步展示）
+                  // v1.41 进度展示：实时显示「检测文字层 / MinerU 第 X 页 /
+                  // 切块解析」阶段与百分比；任务在应用层继续，离开本页后
+                  // 开始页顶部卡片同步展示。
                   if (isProcessing && !NatsumeImportTask.discarded)
                     Padding(
                       padding: const EdgeInsets.only(top: NatsumeSpace.sm),
-                      child: NatsumeTaskCard(
+                      child: ImportProgressCard(
                         progress: appState.importProgress,
                         status: appState.importStatus,
+                        title: '正在导入题库，可先去做别的',
                         onCancel: () => _cancelImport(appState),
                       ),
                     ),

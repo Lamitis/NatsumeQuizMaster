@@ -9,6 +9,7 @@ import '../services/question_image_service.dart';
 import '../services/theme_service.dart';
 import '../utils/responsive.dart';
 import '../utils/question_image_tokens.dart';
+import '../widgets/import/import_progress_card.dart';
 import '../widgets/kit/natsume_kit.dart';
 import '../widgets/kit/natsume_rich_question_text.dart';
 import '../widgets/question_image_viewer.dart';
@@ -155,6 +156,25 @@ class _ImportPreviewScreenState extends State<ImportPreviewScreen> {
                               fontSize: NatsumeType.body, color: ac.textSecondary)))
                   : Column(
                       children: [
+                        // v1.41：批量导入时用户可能已经在前一份预览里，
+                        // 后面的文档仍在后台解析——横幅实时显示 MinerU 页码/
+                        // 切块进度，避免「以为卡死」。
+                        if (appState.importTaskActive)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                                NatsumeSpace.sm,
+                                NatsumeSpace.sm,
+                                NatsumeSpace.sm,
+                                0),
+                            child: ImportProgressCard(
+                              compact: true,
+                              progress: appState.importProgress,
+                              status: appState.importStatus,
+                              title: appState.previewQueue.isNotEmpty
+                                  ? '后台继续解析其余文档'
+                                  : '正在解析导入文档',
+                            ),
+                          ),
                         if (_confirmError != null)
                           Padding(
                             padding: const EdgeInsets.all(NatsumeSpace.sm),

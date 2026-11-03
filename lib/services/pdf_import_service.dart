@@ -1,13 +1,15 @@
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:pdfrx/pdfrx.dart';
 
 import '../models/question_image.dart';
 import '../utils/pdf_layout.dart';
 import 'ai_service.dart';
+import 'debug_log_service.dart';
+import 'import_ocr_policy.dart';
 import 'question_image_service.dart';
 
 /// PDF 抽取失败（[message] 可直接展示给用户）。
@@ -40,6 +42,43 @@ class PdfExtractResult {
   final int charCount;
 }
 
+/// 前几页文字层抽样结果（v1.41）。
+///
+/// 只回答一个问题：**这份 PDF 需不需要 OCR**。字段保留页码与每页字数，
+/// 便于日志/测试定位「为什么判成扫描件」，UI 不必展示。
+class PdfTextLayerProbe {
+  const PdfTextLayerProbe({
+    required this.totalPages,
+    required this.sampledPages,
+    required this.charCount,
+    required this.garbled,
+    this.pageCharCounts = const [],
+  });
+
+  final int totalPages;
+
+  /// 实际抽样的页数（文件不足 3 页时就是总页数）
+  final int sampledPages;
+
+  /// 抽样页里的有效字符数（去空白）
+  final int charCount;
+
+  /// 是否整片乱码（替换符 / 私用区 / 控制字符占比过高）
+  final bool garbled;
+
+  /// 每页字符数（诊断用）
+  final List<int> pageCharCounts;
+
+  double get charsPerPage => sampledPages <= 0 ? 0 : charCount / sampledPages;
+
+  /// 是否需要 OCR：乱码 / 无文字层 / 平均每页字数低于阈值
+  bool get needsOcr => ImportOcrPolicy.isScannedPdf(
+        charCount: charCount,
+        sampledPages: sampledPages,
+        garbled: garbled,
+      );
+}
+
 /// PDF 题库抽取：文本行按阅读序交织图区占位符，图区光栅化压缩进图片池。
 ///
 /// 全本地、不依赖 AI：切题/题型仍走既有 AI 结构化链路，占位符随文本流过。
@@ -56,6 +95,89 @@ class PdfImportService {
 
   /// 无文字层判定：整册可抽字符低于此值视为扫描件/图片型 PDF
   static const int _minTextChars = 100;
+
+  /// 抽样检测 PDF 前 [samplePages] 页的文字层（v1.41）。
+  ///
+  /// **只读文字层，不渲染、不抽图**——这一步要足够快（毫秒级），否则
+  /// 「先判断再决定」本身就变成新的卡顿点。打开失败抛 [PdfExtractException]，
+  /// 单页取字失败按 0 字计（不影响整份判断）。
+  ///
+  /// 判定口径见 [ImportOcrPolicy]：平均每页 < 50 字或整片乱码 → 扫描件。
+  static Future<PdfTextLayerProbe> probeTextLayer(
+    String filePath, {
+    int samplePages = ImportOcrPolicy.samplePages,
+  }) async {
+    final PdfDocument doc;
+    try {
+      doc = await PdfDocument.openFile(filePath);
+    } catch (_) {
+      throw PdfExtractException('无法打开 PDF 文件（可能已加密或已损坏）');
+    }
+    try {
+      final total = doc.pages.length;
+      if (total == 0) {
+        throw PdfExtractException('PDF 没有任何页面');
+      }
+      final take = math.min(math.max(1, samplePages), total);
+      final counts = <int>[];
+      final buffer = StringBuffer();
+      for (var i = 0; i < take; i++) {
+        var chars = 0;
+        try {
+          final text = await doc.pages[i].loadText();
+          for (final f in text.fragments) {
+            final value = f.text.trim();
+            if (value.isEmpty) continue;
+            chars += value.length;
+            buffer.write(value);
+          }
+        } catch (_) {
+          // 单页取不出文字：按 0 字算（扫描页本来就取不出）
+        }
+        counts.add(chars);
+      }
+      final charCount = counts.fold<int>(0, (sum, n) => sum + n);
+      final probe = PdfTextLayerProbe(
+        totalPages: total,
+        sampledPages: take,
+        charCount: charCount,
+        garbled: looksGarbled(buffer.toString()),
+        pageCharCounts: counts,
+      );
+      DebugLogService.instance.log(
+        'PDF',
+        '文字层抽样：${probe.sampledPages}/${probe.totalPages} 页，'
+            '$charCount 字，乱码=${probe.garbled}，需OCR=${probe.needsOcr}',
+      );
+      return probe;
+    } finally {
+      await doc.dispose();
+    }
+  }
+
+  /// 文字层是否「全是乱码」。
+  ///
+  /// 判据是**坏字符占比**：Unicode 替换符（U+FFFD，解码失败）、私用区
+  /// （U+E000–U+F8FF，字体私有映射，常见于错误的 CJK 编码）与控制字符。
+  /// 超过 20% 就认为「有字但读不懂」，应改走 OCR——这比按字数判断更贴近
+  /// 用户看到的「一页火星文」。
+  @visibleForTesting
+  static bool looksGarbled(String text) {
+    final value = text.trim();
+    if (value.isEmpty) return false; // 空 = 没文字层，不是乱码
+    final runes = value.runes.toList();
+    var bad = 0;
+    for (final r in runes) {
+      if (r == 0xFFFD) {
+        bad++;
+      } else if (r >= 0xE000 && r <= 0xF8FF) {
+        bad++;
+      } else if (r < 0x20 && r != 0x09 && r != 0x0A && r != 0x0D) {
+        bad++;
+      }
+    }
+    return bad / runes.length > 0.2;
+  }
 
   static Future<PdfExtractResult> extract(String filePath) async {
     final PdfDocument doc;

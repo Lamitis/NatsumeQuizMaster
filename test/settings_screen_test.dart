@@ -10,6 +10,7 @@ import 'package:natsume_quiz_master/services/sync/sync_engine.dart';
 import 'package:natsume_quiz_master/services/sync/sync_models.dart';
 import 'package:natsume_quiz_master/services/sync/sync_pair_payload.dart';
 import 'package:natsume_quiz_master/services/theme_service.dart';
+import 'package:natsume_quiz_master/utils/platform_support.dart';
 
 class FakeSettingsState extends AppState {
   AppSettings current = AppSettings(autoSync: false);
@@ -305,5 +306,28 @@ void main() {
     expect(app.settings.customMirror, isEmpty);
     expect(find.textContaining('镜像地址需以'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('移动端：设置页隐藏 MinerU 开关与 Token；桌面端照常显示',
+      (tester) async {
+    debugMobileOverride = true;
+    addTearDown(() => debugMobileOverride = null);
+    final app = FakeSettingsState();
+
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.ai);
+    expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
+        reason: '移动端必须完全隐藏 MinerU 卡片');
+    expect(find.text('允许扫描件使用 MinerU（桌面端自动判断）'), findsNothing);
+    expect(find.textContaining('MinerU Token'), findsNothing);
+    // 其余 AI 设置照常（别把整组藏没了）
+    expect(find.text('AI 接口配置'), findsOneWidget);
+
+    // 桌面端：同一套 UI，只是平台判定不同 → 卡片出现
+    debugMobileOverride = false;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.ai);
+    expect(find.text('扫描件识别增强（MinerU）'), findsOneWidget);
   });
 }

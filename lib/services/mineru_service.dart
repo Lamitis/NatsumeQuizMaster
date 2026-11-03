@@ -6,9 +6,11 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:http/http.dart' as http;
 
+import '../utils/platform_support.dart';
 import 'api_endpoint.dart';
 import 'database_service.dart';
 import 'debug_log_service.dart';
+import 'import_ocr_policy.dart';
 import 'key_crypto.dart';
 
 /// MinerU 解析结果
@@ -74,9 +76,20 @@ class MineruService {
 
   /// 解析一份本地文件，返回 Markdown；未启用/失败返回 null。
   ///
-  /// [onStatus] 用于把「排队中/解析中」这类阶段进度显示给用户。
+  /// [onStatus] 把「排队中/解析中/下载中」这类阶段进度显示给用户；
+  /// [onPageProgress] 在服务端返回 `extract_progress` 时给出页码（用于
+  /// 「正在使用 MinerU 识别第 X/Y 页版面…」）。
+  ///
+  /// **移动端硬门禁**：MinerU 的版面模型在手机上不可用/极慢，这里在任何
+  /// 网络与数据库访问之前直接返回 null（设置页已隐藏，这里是第二道保险）。
   Future<MineruResult?> parseFile(String path,
-      {void Function(String status)? onStatus}) async {
+      {void Function(String status)? onStatus,
+      void Function(int done, int total)? onPageProgress}) async {
+    if (isMobilePlatform) {
+      onStatus?.call(ImportOcrPolicy.mobileFallback);
+      DebugLogService.instance.log('MINERU', '移动端跳过 MinerU（不适用）');
+      return null;
+    }
     if (!await isEnabled()) return null;
     final file = File(path);
     if (!file.existsSync()) return null;
@@ -89,14 +102,16 @@ class MineruService {
         return null;
       }
       final markdown = token.isEmpty
-          ? await _parseWithAgent(fileName, bytes, onStatus: onStatus)
+          ? await _parseWithAgent(fileName, bytes,
+              onStatus: onStatus, onPageProgress: onPageProgress)
           : await _parseWithPreciseApi(token, fileName, bytes,
-              onStatus: onStatus);
+              onStatus: onStatus, onPageProgress: onPageProgress);
       if (markdown.trim().isEmpty) return null;
       return MineruResult(markdown: markdown, precise: token.isNotEmpty);
     } catch (e) {
       DebugLogService.instance.log('MINERU', '解析失败（$fileName）：$e');
-      onStatus?.call('MinerU 解析失败：$e');
+      // 降级文案由策略层统一（UI 必须能明确告知「已回退」）
+      onStatus?.call(ImportOcrPolicy.mineruFallback);
       return null;
     }
   }
@@ -104,7 +119,8 @@ class MineruService {
 
   /// 提交任务 → PUT 上传 → 轮询 → 取 Markdown
   Future<String> _parseWithAgent(String fileName, Uint8List bytes,
-      {void Function(String)? onStatus}) async {
+      {void Function(String)? onStatus,
+      void Function(int done, int total)? onPageProgress}) async {
     final created = await _createAgentTask(fileName);
     final taskId = '${created['task_id'] ?? ''}';
     final uploadUrl = '${created['file_url'] ?? ''}';
@@ -116,12 +132,20 @@ class MineruService {
 
     final deadline = DateTime.now().add(const Duration(minutes: 8));
     var lastState = '';
+    var lastPageDone = -1;
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(seconds: 3));
-      final resp = await http.get(Uri.parse('$_agentBase/parse/$taskId'));
+      final resp = await http
+          .get(Uri.parse('$_agentBase/parse/$taskId'))
+          .timeout(const Duration(seconds: 30));
       final data = _unwrap(resp);
       final state = '${data['state'] ?? ''}';
-      if (state != lastState) {
+      final page = _pageProgressOf(data);
+      if (page != null && page.done != lastPageDone) {
+        lastPageDone = page.done;
+        onPageProgress?.call(page.done, page.total);
+        onStatus?.call(ImportOcrPolicy.mineruPage(page.done, page.total));
+      } else if (state != lastState) {
         lastState = state;
         onStatus?.call('MinerU：${_stateLabel(state)}');
       }
@@ -130,7 +154,10 @@ class MineruService {
         if (url is! String || url.isEmpty) {
           throw Exception('解析完成但没有 Markdown 链接');
         }
-        final md = await http.get(Uri.parse(url));
+        onStatus?.call(ImportOcrPolicy.mineruDownloading);
+        final md = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 60));
         if (md.statusCode != 200) {
           throw Exception('下载 Markdown 失败（HTTP ${md.statusCode}）');
         }
@@ -163,11 +190,13 @@ class MineruService {
     Object? lastError;
     for (final body in bodies) {
       try {
-        final resp = await http.post(
-          Uri.parse('$_agentBase/parse/file'),
-          headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode(body),
-        );
+        final resp = await http
+            .post(
+              Uri.parse('$_agentBase/parse/file'),
+              headers: const {'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 30));
         return _unwrap(resp);
       } catch (e) {
         lastError = e;
@@ -179,25 +208,28 @@ class MineruService {
 
   Future<String> _parseWithPreciseApi(
       String token, String fileName, Uint8List bytes,
-      {void Function(String)? onStatus}) async {
+      {void Function(String)? onStatus,
+      void Function(int done, int total)? onPageProgress}) async {
     final auth = {
       'Authorization': 'Bearer $token',
       'Content-Type': 'application/json',
     };
-    final resp = await http.post(
-      Uri.parse('$_preciseBase/file-urls/batch'),
-      headers: auth,
-      body: jsonEncode({
-        'enable_formula': true,
-        'language': 'ch',
-        'enable_table': true,
-        // vlm 模型对扫描件/复杂版式更稳（官方推荐）
-        'model_version': 'vlm',
-        'files': [
-          {'name': fileName, 'is_ocr': true},
-        ],
-      }),
-    );
+    final resp = await http
+        .post(
+          Uri.parse('$_preciseBase/file-urls/batch'),
+          headers: auth,
+          body: jsonEncode({
+            'enable_formula': true,
+            'language': 'ch',
+            'enable_table': true,
+            // vlm 模型对扫描件/复杂版式更稳（官方推荐）
+            'model_version': 'vlm',
+            'files': [
+              {'name': fileName, 'is_ocr': true},
+            ],
+          }),
+        )
+        .timeout(const Duration(seconds: 30));
     final created = _unwrap(resp);
     final batchId = '${created['batch_id'] ?? ''}';
     final urls = created['file_urls'];
@@ -209,19 +241,27 @@ class MineruService {
 
     final deadline = DateTime.now().add(const Duration(minutes: 20));
     var lastState = '';
+    var lastPageDone = -1;
     while (DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(const Duration(seconds: 3));
-      final r = await http.get(
-        Uri.parse('$_preciseBase/extract-results/batch/$batchId'),
-        headers: {'Authorization': 'Bearer $token'},
-      );
+      final r = await http
+          .get(
+            Uri.parse('$_preciseBase/extract-results/batch/$batchId'),
+            headers: {'Authorization': 'Bearer $token'},
+          )
+          .timeout(const Duration(seconds: 30));
       final data = _unwrap(r);
       final results = data['extract_result'];
       if (results is! List || results.isEmpty) continue;
       final item = results.first;
       if (item is! Map) continue;
       final state = '${item['state'] ?? ''}';
-      if (state != lastState) {
+      final page = _pageProgressOf(Map<String, dynamic>.from(item));
+      if (page != null && page.done != lastPageDone) {
+        lastPageDone = page.done;
+        onPageProgress?.call(page.done, page.total);
+        onStatus?.call(ImportOcrPolicy.mineruPage(page.done, page.total));
+      } else if (state != lastState) {
         lastState = state;
         onStatus?.call('MinerU：${_stateLabel(state)}');
       }
@@ -230,6 +270,7 @@ class MineruService {
         if (zipUrl is! String || zipUrl.isEmpty) {
           throw Exception('解析完成但没有结果包地址');
         }
+        onStatus?.call(ImportOcrPolicy.mineruDownloading);
         return _markdownFromZip(zipUrl, token: token);
       }
       if (state == 'failed') {
@@ -239,10 +280,24 @@ class MineruService {
     throw Exception('MinerU 解析超时，请稍后重试');
   }
 
+  /// 从服务端轮询结果里取页面进度（MinerU 用 `extract_progress` 返回
+  /// `extracted_pages / total_pages`；不同版本字段可能缺省，取不到就返回 null）。
+  static ({int done, int total})? _pageProgressOf(Map<String, dynamic> data) {
+    final progress = data['extract_progress'];
+    if (progress is! Map) return null;
+    final done = int.tryParse(
+        '${progress['extracted_pages'] ?? progress['done_pages'] ?? ''}');
+    final total = int.tryParse(
+        '${progress['total_pages'] ?? progress['total'] ?? ''}');
+    if (done == null || total == null || total <= 0) return null;
+    return (done: done.clamp(0, total), total: total);
+  }
+
   /// 从结果 zip 里取正文 Markdown（包里同时有 md/json，取最长的那份 md）
   Future<String> _markdownFromZip(String url, {required String token}) async {
     final resp = await http
-        .get(Uri.parse(url), headers: {'Authorization': 'Bearer $token'});
+        .get(Uri.parse(url), headers: {'Authorization': 'Bearer $token'})
+        .timeout(const Duration(seconds: 60));
     if (resp.statusCode != 200) {
       throw Exception('下载解析结果失败（HTTP ${resp.statusCode}）');
     }
@@ -263,11 +318,13 @@ class MineruService {
   // ======================== 公共小工具 ========================
 
   Future<void> _upload(String url, Uint8List bytes) async {
-    final resp = await http.put(
-      Uri.parse(url),
-      headers: const {'Content-Type': 'application/octet-stream'},
-      body: bytes,
-    );
+    final resp = await http
+        .put(
+          Uri.parse(url),
+          headers: const {'Content-Type': 'application/octet-stream'},
+          body: bytes,
+        )
+        .timeout(const Duration(seconds: 60));
     if (resp.statusCode != 200 && resp.statusCode != 201) {
       throw Exception('文件上传失败（HTTP ${resp.statusCode}）');
     }

@@ -1308,6 +1308,15 @@ class NatsumeTaskCard extends StatelessWidget {
   static int _stageOf(String status) {
     if (status.contains('解析完成') || status.contains('预览')) return 2;
     if (status.contains('解析失败')) return -1;
+    // v1.41：MinerU / 端上 OCR / 文字层检测都归在「提取图文」阶段，
+    // 否则这几句状态落在阶段线之外，用户看不出整体走到哪了。
+    if (status.contains('切块')) return 1; // 「MinerU 完成，正在切块…」属 AI 阶段
+    if (status.contains('MinerU') ||
+        status.contains('OCR') ||
+        status.contains('文字层') ||
+        status.contains('识别扫描页')) {
+      return 0;
+    }
     if (status.contains('提取')) return 0;
     if (status.contains('解析') || status.contains('AI')) return 1;
     return -1;

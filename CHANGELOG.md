@@ -14,6 +14,26 @@
 
 ---
 
+## [1.41.0] - 2026-11-03
+
+导入 OCR 重构：PDF 先抽样前 2~3 页文字层，只有扫描件才自动触发 MinerU；移动端彻底隐藏 MinerU；导入进度实时可见，失败一律降级。
+
+### 新增
+- 导入前文字层抽样（`PdfImportService.probeTextLayer`）：平均每页 < 50 字或整片乱码判为扫描件，电子版直接走文本切块，不再白跑一遍耗时极长的 OCR。
+- 桌面端扫描件自动触发 MinerU；轮询新增 `extract_progress` 页码，状态栏显示「正在使用 MinerU 识别第 X/Y 页版面…」与「正在提取图文排版…」。
+- 新增 `ImportProgressCard`：导入页与「导入预览」页统一显示百分比、阶段徽章与实时状态（检测文字层 / MinerU 版面识别 / 端上 OCR / 文本切块 / 视觉切题）。
+- 新增 `ImportOcrPolicy` 与 `platform_support`：判定、状态文案与平台门禁集中管理，测试可注入移动端 / 桌面端。
+
+### 修复
+- 移动端（Android / iOS）设置页与导入页完全隐藏 MinerU 开关、Token 与提示；`MineruService.parseFile` 在任何数据库 / 网络访问之前直接返回 null。
+- MinerU 失败 / 超时统一提示「MinerU 版面识别失败，已回退至普通文本提取模式」，随后继续本地抽取 / 端上 OCR / 视觉切题，不再卡死或红屏。
+- 普通解析路径状态改为「正在检测 PDF 文字层…」「正在提取图文排版…」「正在切块解析题目…」，进度按阶段推进、不回跳。
+
+### 重构
+- `AppState._parseFileForPreview` / `_parseScannedPdf` 重排阶段与进度区间；MinerU 只在上层判定需要时调用一次，失败不重复上传。
+- `NatsumeTaskCard` 阶段映射识别 MinerU / OCR / 文字层状态。
+- 设置页 MinerU 开关更名为「允许扫描件使用 MinerU（桌面端自动判断）」，并说明电子版不会跑 OCR。
+
 ## [1.40.0] - 2026-11-03
 
 工科题渲染升级：Markdown 引擎补齐 LaTeX / 表格 / 代码高亮 / 基础 HTML，笔记编辑器新增富文本工具栏；同时集中修复小鲸助教的气泡时长、输入残留与长回复撑屏问题。
