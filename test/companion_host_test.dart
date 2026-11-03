@@ -193,4 +193,67 @@ void main() {
 
     await teardownTree(tester);
   });
+
+  testWidgets('气泡：右上角 X 立刻关闭；无操作 4 秒自动收', (tester) async {
+    setSurface(tester);
+    final appState = await seed(tester);
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(host(appState, navKey));
+    await settleFrames(tester);
+
+    // 戳一下冒泡
+    await tester.tap(avatar);
+    await settleFrames(tester, rounds: 5);
+    expect(find.byKey(const ValueKey('companionBubble')), findsOneWidget);
+
+    // ① 点 X 立刻消失（v1.40）
+    await tester.tap(find.byKey(const ValueKey('companionBubbleClose')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('companionBubble')), findsNothing,
+        reason: '右上角 X 应该立刻收起气泡');
+
+    // ② 再冒一次，什么都不做：4 秒后自动收（原来 9~10 秒太挡视线）
+    await tester.tap(avatar);
+    await settleFrames(tester, rounds: 5);
+    expect(find.byKey(const ValueKey('companionBubble')), findsOneWidget);
+    await tester.pump(const Duration(seconds: 3));
+    expect(find.byKey(const ValueKey('companionBubble')), findsOneWidget,
+        reason: '3 秒时还在阅读窗口内');
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const ValueKey('companionBubble')), findsNothing,
+        reason: '4 秒后自动收起');
+
+    await teardownTree(tester);
+  });
+
+  testWidgets('发送后面板输入框立刻清空（文字残留回归）', (tester) async {
+    setSurface(tester);
+    final appState = await seed(tester);
+    final navKey = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(host(appState, navKey));
+    await settleFrames(tester);
+
+    // 打开迷你聊天面板
+    await tester.tap(avatar, buttons: kSecondaryButton);
+    await settleFrames(tester, rounds: 2);
+    await tester.tap(find.byKey(const ValueKey('companionChatMenu')));
+    await settleFrames(tester, rounds: 3);
+    expect(find.byKey(const ValueKey('companionChatPanel')), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '你好');
+    await tester.pump();
+    expect(find.byType(TextField), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+    // 只 pump 一帧：清空必须在发送动作的同步段完成
+    await tester.pump();
+
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.controller!.text, isEmpty,
+        reason: '发送后输入框必须立刻为空，接着打字才不会接在旧文字后面');
+
+    // 让这轮「固定文案」回复跑完（打字机把字放完），再拆树
+    await settleFrames(tester, rounds: 4);
+    await teardownTree(tester);
+  });
 }

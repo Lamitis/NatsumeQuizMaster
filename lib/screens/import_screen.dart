@@ -396,6 +396,51 @@ class _ImportScreenState extends State<ImportScreen> {
 
                 // 已选文件（v1.27：随整页滚动，不再被压在 Expanded 小区域）
                 if (_selectedFiles.isNotEmpty) ...[
+                  // v1.40：选了 DOCX / PDF 才提示 MinerU —— 扫描件/图片多的
+                  // 文档靠纯文本抽取会漏字，先告诉用户开关在哪，比失败后再解释有用
+                  if (_selectedFiles.any(_isAiDoc)) ...[
+                    NatsumeSurface(
+                      tone: NatsumeTone.alt,
+                      padding: const EdgeInsets.all(NatsumeSpace.sm),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.lightbulb, size: 16, color: ac.warning),
+                          const SizedBox(width: NatsumeSpace.xs),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '💡 提示：如遇扫描件或图片较多的文档识别不准，'
+                                  '建议前往【设置】开启 MinerU 版面识别开关。',
+                                  style: NatsumeType.captionStyle.copyWith(
+                                      color: ac.textSecondary, height: 1.6),
+                                ),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: TextButton.icon(
+                                    icon: const Icon(Icons.settings, size: 14),
+                                    label: const Text('去设置'),
+                                    onPressed: isProcessing
+                                        ? null
+                                        : () => Navigator.push(
+                                              context,
+                                              MaterialPageRoute(
+                                                builder: (_) => const SettingsScreen(
+                                                    group: SettingsGroup.ai),
+                                              ),
+                                            ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   Text('已选文件',
                       style: TextStyle(
                           fontSize: NatsumeType.body,

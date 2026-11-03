@@ -4,6 +4,7 @@ import '../../models/question_image.dart';
 import '../../services/theme_service.dart';
 import '../../utils/design_tokens.dart';
 import '../../utils/question_image_tokens.dart';
+import '../markdown/natsume_markdown.dart';
 import '../question_image_viewer.dart';
 
 /// 题目图文混排文本：把含 `{{img:N}}` 占位符的题目文本渲染为
@@ -66,8 +67,16 @@ class NatsumeRichQuestionText extends StatelessWidget {
     );
   }
 
-  Widget _buildText(BuildContext context, String value) =>
-      textBuilder?.call(context, value) ?? Text(value, style: style);
+  /// 文字段渲染：默认走统一 Markdown 引擎（v1.40）。
+  ///
+  /// 题干 / 选项里的工科符号（`$F=ma$`、$\ce{H_2SO_4}$、表格、代码）
+  /// 因此和 AI 解析、笔记正文同一套渲染口径；调用方仍可用 [textBuilder]
+  /// 覆盖（解析卡会传 `AiResponseWidget` 以保留结构色）。
+  Widget _buildText(BuildContext context, String value) {
+    final builder = textBuilder;
+    if (builder != null) return builder(context, value);
+    return NatsumeMarkdown(text: value, style: style);
+  }
 }
 
 /// 题干内嵌配图的缩略尺寸：**约 3 行正文 × 3 行正文**。

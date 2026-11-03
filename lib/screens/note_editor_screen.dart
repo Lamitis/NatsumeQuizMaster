@@ -43,7 +43,26 @@ class NoteEditorScreen extends StatefulWidget {
 class _NoteEditorScreenState extends State<NoteEditorScreen> {
   late final TextEditingController _titleCtrl;
   late final TextEditingController _bodyCtrl;
+
+  /// 正文输入焦点：工具栏插入标记后要保住焦点，否则手机键盘一收一弹，
+  /// 连续加粗/高亮就变成「点一下、再点一下输入框」的折磨。
+  final FocusNode _bodyFocus = FocusNode();
+
+  /// 快捷工具栏的配色盘（红 / 蓝 / 绿 …）：插入的是
+  /// `<span style="color: #HEX">…</span>`，渲染引擎据此上色。
+  static const List<({String label, String hex, Color color})> _palette = [
+    (label: '红', hex: '#E5484D', color: Color(0xFFE5484D)),
+    (label: '蓝', hex: '#2F6FEB', color: Color(0xFF2F6FEB)),
+    (label: '绿', hex: '#2E9E5B', color: Color(0xFF2E9E5B)),
+    (label: '橙', hex: '#F0821E', color: Color(0xFFF0821E)),
+    (label: '紫', hex: '#8E4EC6', color: Color(0xFF8E4EC6)),
+    (label: '粉', hex: '#E93D82', color: Color(0xFFE93D82)),
+    (label: '黄', hex: '#D6A400', color: Color(0xFFD6A400)),
+    (label: '灰', hex: '#6B7280', color: Color(0xFF6B7280)),
+  ];
+
   List<Note> _backlinks = const [];
+
   String _bankName = NotesService.ungroupedName;
   String? _questionPreview;
   bool _preview = false;
@@ -94,6 +113,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void dispose() {
     _titleCtrl.dispose();
     _bodyCtrl.dispose();
+    _bodyFocus.dispose();
     super.dispose();
   }
 
@@ -167,7 +187,156 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     setState(() {});
   }
 
-  /// 预览里点双链：已有同名笔记就打开，没有就新建这一页
+  /// 富文本工具栏（v1.40）：把选区包进 [prefix] … [suffix]。
+  ///
+  /// - **选中文字**：自动包裹选中内容（`高亮` → `<mark>高亮</mark>`）；
+  /// - **未选中**：插入一对空标签，光标落在中间，直接开打就是标签内的字。
+  void _wrapSelection(String prefix, String suffix) {
+    final text = _bodyCtrl.text;
+    final selection = _bodyCtrl.selection;
+    final start = selection.start < 0 ? text.length : selection.start;
+    final end = selection.end < 0 ? text.length : selection.end;
+    final selected = start <= end ? text.substring(start, end) : '';
+    final inserted = '$prefix$selected$suffix';
+    _bodyCtrl.value = TextEditingValue(
+      text: text.replaceRange(start, end, inserted),
+      selection: TextSelection.collapsed(
+          offset: start + prefix.length + selected.length),
+      composing: TextRange.empty,
+    );
+    _afterToolbarEdit();
+  }
+
+  /// 行级标记：给选区覆盖的每一行加前缀；没选区就加在当前行。
+  ///
+  /// [ordered] 为 true 时按 `1. 2. 3.` 递增编号（否则统一 `- ` 无序）。
+  void _prefixLines(String prefix, {bool ordered = false}) {
+    final text = _bodyCtrl.text;
+    final selection = _bodyCtrl.selection;
+    final selStart = selection.start < 0 ? text.length : selection.start;
+    final selEnd = selection.end < 0 ? text.length : selection.end;
+
+    // 扩到整行：列表标记必须落在行首
+    var start = selStart;
+    while (start > 0 && text[start - 1] != '\n') {
+      start--;
+    }
+    var end = selEnd;
+    while (end < text.length && text[end] != '\n') {
+      end++;
+    }
+
+    final block = text.substring(start, end);
+    final lines = block.split('\n');
+    final out = <String>[];
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final already = RegExp(r'^\s*(?:[-*+]\s+|\d+\.\s+)').firstMatch(line);
+      final body = already == null ? line : line.substring(already.end);
+      out.add('${ordered ? '${i + 1}. ' : prefix}$body');
+    }
+    final inserted = out.join('\n');
+    _bodyCtrl.value = TextEditingValue(
+      text: text.replaceRange(start, end, inserted),
+      selection: TextSelection(
+          baseOffset: start, extentOffset: start + inserted.length),
+      composing: TextRange.empty,
+    );
+    _afterToolbarEdit();
+  }
+
+  /// 插入代码块：选中内容进围栏，未选中时光标落在围栏中间
+  void _insertCodeBlock() {
+    final selected = _selectedBodyText();
+    if (selected.isEmpty) {
+      _wrapSelection('```\n', '\n```');
+      return;
+    }
+    final needsNewline = !selected.endsWith('\n');
+    _wrapSelection('```\n', needsNewline ? '\n```' : '```');
+  }
+
+  String _selectedBodyText() {
+    final text = _bodyCtrl.text;
+    final selection = _bodyCtrl.selection;
+    if (!selection.isValid || selection.isCollapsed) return '';
+    final start = selection.start.clamp(0, text.length);
+    final end = selection.end.clamp(0, text.length);
+    return start < end ? text.substring(start, end) : '';
+  }
+
+  /// 插入 / 包裹后统一收尾：重绘 + 把焦点还给正文，方便连续排版
+  void _afterToolbarEdit() {
+    setState(() {});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _bodyFocus.requestFocus();
+    });
+  }
+
+  /// 颜色选择：红 / 蓝 / 绿 … → `<span style="color: #HEX">`
+  Future<void> _pickColor() async {
+    final ac = AppThemeColors.of(context);
+    final picked = await showModalBottomSheet<({String label, String hex})>(
+      context: context,
+      backgroundColor: ac.surface,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(NatsumeSpace.md),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('选择文字颜色',
+                  style: NatsumeType.h3Style.copyWith(
+                      fontWeight: FontWeight.w600, color: ac.textPrimary)),
+              const SizedBox(height: NatsumeSpace.xs),
+              Text('选中文字后点颜色即可上色；没选中会插入彩色标签。',
+                  style: NatsumeType.captionStyle
+                      .copyWith(color: ac.textTertiary)),
+              const SizedBox(height: NatsumeSpace.sm),
+              Wrap(
+                spacing: NatsumeSpace.sm,
+                runSpacing: NatsumeSpace.xs,
+                children: [
+                  for (final p in _palette)
+                    Semantics(
+                      button: true,
+                      label: '${p.label}色',
+                      child: InkWell(
+                        key: ValueKey('noteColor${p.label}'),
+                        borderRadius: BorderRadius.circular(24),
+                        onTap: () => Navigator.pop(
+                            ctx, (label: p.label, hex: p.hex)),
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: p.color,
+                            shape: BoxShape.circle,
+                            border:
+                                Border.all(color: ac.border, width: 1),
+                          ),
+                          child: Center(
+                            child: Text(p.label,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 12)),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    _wrapSelection(
+        '<span style="color: ${picked.hex}">', '</span>');
+  }
+
   Future<void> _openTarget(String target) async {
     final notes = await NotesService.instance.list();
     Note? hit;
@@ -187,6 +356,59 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       ),
     );
     if (mounted) setState(() {});
+  }
+
+  /// 富文本快捷工具栏（v1.40）：加粗 / 斜体 / 列表 / 代码块 / 行内公式 /
+  /// 高亮 / 颜色。窄屏可横向滚动，不挤成两行按钮。
+  Widget _noteToolbar(AppThemeColors ac) {
+    return Container(
+      decoration: BoxDecoration(
+        color: ac.surfaceAlt,
+        borderRadius: NatsumeRadius.cardBorder,
+        border: Border.all(color: ac.border, width: NatsumeLine.width),
+      ),
+      padding:
+          const EdgeInsets.symmetric(horizontal: NatsumeSpace.xxs, vertical: 2),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            _toolButton(ac, Icons.format_bold, '加粗',
+                () => _wrapSelection('**', '**')),
+            _toolButton(ac, Icons.format_italic, '斜体',
+                () => _wrapSelection('*', '*')),
+            _toolButton(
+                ac, Icons.format_list_bulleted, '无序列表', () => _prefixLines('- ')),
+            _toolButton(ac, Icons.format_list_numbered, '有序列表',
+                () => _prefixLines('1. ', ordered: true)),
+            _toolButton(ac, Icons.code, '代码块', _insertCodeBlock),
+            _toolButton(ac, Icons.functions, '行内公式',
+                () => _wrapSelection('\$', '\$')),
+            _toolButton(ac, Icons.highlight_alt, '高亮',
+                () => _wrapSelection('<mark>', '</mark>')),
+            _toolButton(ac, Icons.palette_outlined, '文字颜色', _pickColor),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _toolButton(
+    AppThemeColors ac,
+    IconData icon,
+    String tooltip,
+    VoidCallback onTap,
+  ) {
+    return IconButton(
+      icon: Icon(icon, size: 18),
+      color: ac.textSecondary,
+      tooltip: tooltip,
+      visualDensity: VisualDensity.compact,
+      padding: const EdgeInsets.symmetric(horizontal: NatsumeSpace.xs),
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+      // 预览态工具栏不出现（整块都在 else 分支里），这里再挡一层防止误触
+      onPressed: _preview ? null : onTap,
+    );
   }
 
   static String _short(String s) =>
@@ -271,9 +493,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   ),
                 ),
               )
-            else
+            else ...[
+              _noteToolbar(ac),
+              const SizedBox(height: NatsumeSpace.xxs),
               TextField(
                 controller: _bodyCtrl,
+                focusNode: _bodyFocus,
                 maxLines: null,
                 minLines: 12,
                 keyboardType: TextInputType.multiline,
@@ -286,6 +511,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                   alignLabelWithHint: true,
                 ),
               ),
+            ],
             const SizedBox(height: NatsumeSpace.xs),
             Row(
               children: [

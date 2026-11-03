@@ -14,6 +14,7 @@ import '../../services/app_state.dart';
 import '../../services/companion/companion_service.dart';
 import '../../services/theme_service.dart';
 import '../../utils/design_tokens.dart';
+import '../../utils/typewriter.dart';
 import 'companion_avatar.dart';
 
 /// 应用内悬浮「小鲸助教」（v1.33）。
@@ -23,8 +24,8 @@ import 'companion_avatar.dart';
 /// `MaterialApp.builder` 里画一层可拖动的头像 + 气泡，随 App 一起走。
 ///
 /// 三条自我约束与 v1.32 一脉相承：
-/// 1. **不打断输入**：浮层只在 `Stack` 上层放一个小头像，气泡 9 秒自动收，
-///    做题（`currentSession != null`）时整体隐藏；
+/// 1. **不打断输入**：浮层只在 `Stack` 上层放一个小头像，气泡 4 秒自动收
+///    （v1.40，右上角另有小 X 可立刻关），做题（`currentSession != null`）时整体隐藏；
 /// 2. **能关、能挪、能请走**：设置里可关、长按可「今天先别出现」，位置落
 ///    设置（归一化坐标），换分辨率不会跑出屏幕；
 /// 3. **数字仍是真的**：气泡台词来自 `CompanionService.greet`，输入是
@@ -70,8 +71,11 @@ class _CompanionHostState extends State<CompanionHost> {
   static const double _panelWidth = 288;
   static const double _panelMaxHeight = 300;
 
-  /// 气泡停留时长：够看完一句话，又不至于压在内容上不走
-  static const Duration _bubbleHold = Duration(seconds: 9);
+  /// 气泡停留时长：够看完一句话，又不至于压在内容上不走。
+  ///
+  /// v1.40：10s → 9s → **4s**。悬浮气泡是「顺口一句」，停留太久会挡住
+  /// 正在看的题干；配合右上角的关闭按钮，读慢了可以手动留住/随时关掉。
+  static const Duration _bubbleHold = Duration(seconds: 4);
 
   final CompanionService _service = CompanionService.instance;
 
@@ -150,7 +154,7 @@ class _CompanionHostState extends State<CompanionHost> {
   /// **点一下 = 戳一下**：AI 在当前窗口回一句，**不进二级页面**。
   ///
   /// 聊天面板开着时这句直接落进面板（保证「回话在同一个窗口里」）；
-  /// 面板没开就冒一个 9 秒自动收的气泡。
+  /// 面板没开就冒一个 4 秒自动收（可点 X 提前收）的气泡。
   Future<void> _poke() async {
     if (!mounted) return;
     final line = await _nextLine(context.read<AppState>());
@@ -212,6 +216,16 @@ class _CompanionHostState extends State<CompanionHost> {
       if (_chatOpen) _bubble = null;
     });
     _hideTimer?.cancel();
+  }
+
+  /// 关掉当前气泡（v1.40：气泡右上角的小 X）。
+  ///
+  /// 自动收起只有 4 秒，长句可能还没读完；用户想「现在就走」或「先留住」
+  /// 都靠这个按钮——点 X 立刻消失，同时取消自动收起的定时器。
+  void _dismissBubble() {
+    _hideTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _bubble = null);
   }
 
   /// 「今天先别出现」：只记日期，不改用户的悬浮开关
@@ -325,6 +339,7 @@ class _CompanionHostState extends State<CompanionHost> {
               botName: settings.displayName,
               // 气泡也不跳页：点它就开聊天面板（v1.34）
               onTap: _toggleChat,
+              onClose: _dismissBubble,
             ),
           ),
         if (_menuOpen)
@@ -469,18 +484,25 @@ class _CompanionHostState extends State<CompanionHost> {
 }
 
 /// 气泡卡片：白底 + 一行角色名 + 正文；点一下开聊天面板（不跳页，v1.34）
+///
+/// v1.40：右上角加「小 X」，正文限高并可滚动——长台词不会再顶满屏幕，
+/// 读不完也能手动关掉（自动收起只有 4 秒）。
 class _BubbleCard extends StatelessWidget {
   const _BubbleCard({
     required this.text,
     required this.mood,
     required this.botName,
     required this.onTap,
+    required this.onClose,
   });
 
   final String text;
   final CompanionMood mood;
   final String botName;
   final VoidCallback onTap;
+
+  /// 右上角关闭（点 X 立刻收起气泡）
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -518,21 +540,44 @@ class _BubbleCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: NatsumeSpace.xxs),
-                  Text(
-                    mood.label,
-                    style:
-                        NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                  Flexible(
+                    child: Text(
+                      mood.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: NatsumeType.microStyle
+                          .copyWith(color: ac.textTertiary),
+                    ),
+                  ),
+                  const Spacer(),
+                  // v1.40：右上角小 X —— 自动收起只有 4 秒，读不完就自己关。
+                  // 这里刻意**不用 Tooltip**：CompanionHost 挂在 MaterialApp.builder
+                  // 上（Navigator 之上），Tooltip 找不到 Overlay 会直接抛断言。
+                  _PanelIconButton(
+                    key: const ValueKey('companionBubbleClose'),
+                    icon: Icons.close_rounded,
+                    label: '关闭气泡',
+                    onTap: onClose,
+                    size: 14,
                   ),
                 ],
               ),
               const SizedBox(height: 2),
-              Text(
-                text,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-                style: NatsumeType.captionStyle.copyWith(
-                  color: ac.textPrimary,
-                  height: 1.55,
+              // v1.40：正文限高（屏幕 40%）+ 内部滚动。
+              // 以前 maxLines: 4 直接把长句截断成省略号，用户既看不全也没法翻；
+              // 现在「一句就是一句」，超长回复在气泡里自己滚。
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * 0.4,
+                ),
+                child: SingleChildScrollView(
+                  child: Text(
+                    text,
+                    style: NatsumeType.captionStyle.copyWith(
+                      color: ac.textPrimary,
+                      height: 1.55,
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -582,8 +627,22 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
   static const int _maxMessages = 8;
 
   final TextEditingController _input = TextEditingController();
+
+  /// 正文输入焦点（v1.40）：发送后立刻 clear + 重新聚焦，
+  /// 避免「清空导致键盘收起 / 文字残留」两种连带问题。
+  final FocusNode _inputFocus = FocusNode();
+
   final ScrollController _scroll = ScrollController();
   final List<_MiniMessage> _messages = [];
+
+  /// 正在打字机渲染的那条回复（v1.40）
+  TypewriterBuffer? _typewriter;
+
+  /// 该条回复的最终全文（新消息 / 关闭面板时用来「立刻补全」）
+  String? _typingReply;
+
+  /// 该条回复对应的气泡（补全时直接写进它）
+  _MiniMessage? _typingMessage;
 
   CompanionMemory _memory = CompanionMemory();
   late CompanionSnapshot _snapshot = widget.snapshot;
@@ -606,6 +665,10 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
 
   @override
   void dispose() {
+    // 面板收起（用户点 X / 切页）时立刻停表，避免定时器在已卸载的 State 上跑
+    _typewriter?.cancel();
+    _typewriter = null;
+    _inputFocus.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -648,10 +711,33 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     _scrollToEnd();
   }
 
+  /// 打字机还在跑时立刻补全全文并停表（新消息 / 关闭面板前调用）。
+  void _flushTypewriter() {
+    final typer = _typewriter;
+    if (typer == null) return;
+    typer.cancel();
+    final message = _typingMessage;
+    final reply = _typingReply;
+    if (message != null && reply != null) message.text = reply;
+    _typewriter = null;
+    _typingMessage = null;
+    _typingReply = null;
+    if (mounted) setState(() {});
+  }
+
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _replying) return;
-    _input.clear();
+
+    // v1.40：**发送即清空，且同步完成**。
+    // 只调 `clear()` 在部分安卓输入法上仍会保留 composing region，旧文字被
+    // 回填进输入框（用户看到的就是「发了还在」）；这里直接换成一个空的
+    // TextEditingValue，把 text / selection / composing 一起复位。
+    _input.value = TextEditingValue.empty;
+    // 清空可能让输入框失焦（回车提交），立刻把焦点还回去，方便连续追问
+    _inputFocus.requestFocus();
+    // 上一条回复可能还在打字机里：先补全并停表，避免两条回复的文字混在一起
+    _flushTypewriter();
 
     final app = widget.appState;
     final service = CompanionService.instance;
@@ -664,6 +750,23 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     });
     _trim();
     _scrollToEnd();
+
+    // 流式数据到达 → 打字机逐字显示：数据到达速度与显示速度解耦
+    final typer = TypewriterBuffer(
+      onUpdate: (visible) {
+        if (!mounted) return;
+        setState(() => botMessage.text = visible);
+        _scrollToEnd();
+      },
+      onDrained: () {
+        // 这条已经全放完：交还所有权，避免下次发送时再「补全」一次
+        _typewriter = null;
+        _typingMessage = null;
+        _typingReply = null;
+      },
+    );
+    _typewriter = typer;
+    _typingMessage = botMessage;
 
     // 好感度与完整页同口径：当天首次 +3，其后 +1
     try {
@@ -706,7 +809,8 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
         )) {
           acc = chunk;
           if (!mounted) return;
-          setState(() => botMessage.text = acc);
+          // 逐字显示：chunk 是累计全文，TypewriterBuffer 只取新增部分
+          typer.feedCumulative(acc);
         }
         if (acc.trim().isEmpty || AIService.isAiError(acc)) {
           _toast('AI 这次没有给出内容，先用固定文案陪你');
@@ -724,12 +828,23 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     }
     if (!mounted) return;
     setState(() {
-      botMessage.text = reply;
       botMessage.fromKb = kbUsed;
       _mood = _moodFor(text);
       _replying = false;
     });
+    _typingReply = reply;
+    if (reply.startsWith(typer.visible)) {
+      // 正常流式：把最终全文补进缓冲，等它放完再收起「正在输入」
+      typer.feedCumulative(reply);
+      typer.finish();
+    } else {
+      // AI 中途失败、该用固定文案：直接替换，别把两段文字拼成怪句子
+      typer.cancel();
+      setState(() => botMessage.text = reply);
+    }
     _scrollToEnd();
+    // 发送结束后仍把焦点留在输入框：用户可以立刻接着问下一句
+    _inputFocus.requestFocus();
 
     // 记忆只记「用户这句 + 最终回复」，流式残片不落库
     if (settings.memoryEnabled) {
@@ -778,7 +893,9 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
   }
 
   void _toast(String text) {
-    if (!mounted) return;
+    // 异步回来的提示可能落在「面板已经卸载」之后：此时查祖先（ScaffoldMessenger）
+    // 会触发 “Looking up a deactivated widget's ancestor is unsafe”，直接放弃。
+    if (!mounted || !context.mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(SnackBar(
       content: Text(text),
       duration: const Duration(seconds: 2),
@@ -869,10 +986,19 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
                 Expanded(
                   child: TextField(
                     controller: _input,
+                    focusNode: _inputFocus,
                     minLines: 1,
                     maxLines: 3,
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _send(),
+                    // v1.40：悬浮面板挂在 Navigator **之上**（MaterialApp.builder），
+                    // 头上没有 Overlay。EditableText 只要还支持「选择文本」就会在
+                    // 聚焦时创建 TextSelectionOverlay → debug 下抛
+                    // “No Overlay widget found”。小面板不需要选中/长按菜单
+                    // （要复制请用右上角 ⤢ 进完整页），因此关掉交互式选择、
+                    // 并显式传 null 的 contextMenuBuilder，输入本身不受影响。
+                    enableInteractiveSelection: false,
+                    contextMenuBuilder: null,
                     style: NatsumeType.captionStyle
                         .copyWith(color: ac.textPrimary),
                     decoration: InputDecoration(
@@ -946,6 +1072,7 @@ class _MenuItem extends StatelessWidget {
 /// 所以这里只用 Semantics 提供无障碍标签。
 class _PanelIconButton extends StatelessWidget {
   const _PanelIconButton({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,
@@ -1011,28 +1138,36 @@ class _MiniBubble extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 3),
         padding: const EdgeInsets.symmetric(
             horizontal: NatsumeSpace.xs, vertical: 4),
-        constraints: const BoxConstraints(maxWidth: 216),
+        // v1.40：单条气泡也限高（屏幕 40%），超长回复在气泡内滚动，
+        // 不会一条消息把整个面板顶满
+        constraints: BoxConstraints(
+          maxWidth: 216,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.4,
+        ),
         decoration: BoxDecoration(
           color:
               isUser ? Color.lerp(ac.surface, ac.accent, 0.16) : ac.surfaceAlt,
           borderRadius: BorderRadius.circular(NatsumeRadius.chip),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              text.isEmpty ? '…' : text,
-              style: NatsumeType.captionStyle.copyWith(
-                color: isUser ? ac.textPrimary : ac.textSecondary,
-                height: 1.5,
-              ),
-            ),
-            if (!isUser && message.fromKb)
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
               Text(
-                '依据知识库',
-                style: NatsumeType.microStyle.copyWith(color: ac.success),
+                text.isEmpty ? '…' : text,
+                style: NatsumeType.captionStyle.copyWith(
+                  color: isUser ? ac.textPrimary : ac.textSecondary,
+                  height: 1.5,
+                ),
               ),
-          ],
+              if (!isUser && message.fromKb)
+                Text(
+                  '依据知识库',
+                  style: NatsumeType.microStyle.copyWith(color: ac.success),
+                ),
+            ],
+          ),
         ),
       ),
     );

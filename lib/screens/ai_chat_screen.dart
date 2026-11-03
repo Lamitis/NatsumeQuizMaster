@@ -84,10 +84,14 @@ class _AiChatScreenState extends State<AiChatScreen> {
     }
     final text = _input.text.trim();
     if (text.isEmpty || app.followUpLoading) return;
-    _input.clear();
+    // v1.40：发送即同步清空（连 composing 一起复位），并把焦点留在输入框，
+    // 清空不会收起键盘，用户可以立刻接着追问。
+    _input.value = TextEditingValue.empty;
+    _focus.requestFocus();
     _scrollToBottom();
     await app.sendFollowUp(text);
     if (!mounted) return;
+    _focus.requestFocus();
     _scrollToBottom();
   }
 

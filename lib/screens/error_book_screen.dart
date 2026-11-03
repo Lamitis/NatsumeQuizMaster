@@ -57,20 +57,13 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   List<Map<String, dynamic>> _kpStats = [];
   bool _adviceLoading = false;
 
-  /// v1.37 P1：小抄生成中（读取错题 + 装配模板这段是同步可控的，AI 请求本身
-  /// 在弹窗里流式显示，所以这里只挡住按钮被连点）
-  bool _cheatSheetLoading = false;
-
   /// 动态插件动作的防重键（同一时间只跑一条，避免连点重复查库与请求）
   String? _runningPluginActionKey;
 
-  /// 插件功能模板名。宿主只认这个名字，具体内容由插件 `prompts/cheat_sheet.md` 提供
-  static const String _cheatSheetTemplate = 'cheat_sheet';
-
-  /// 塞进模板的错题上限。小抄是「考前翻一眼」的东西，题越多越不像小抄，
-  /// 而且题干一起塞进上下文会把 token 顶上去（一份 10 题的小抄足够覆盖
-  /// 当前范围最扎手的那几道）。
-  static const int _cheatSheetMaxQuestions = 10;
+  /// 塞进插件动作模板的错题上限。小抄类动作是「考前翻一眼」的东西，
+  /// 题越多越不像小抄，而且题干一起塞进上下文会把 token 顶上去
+  /// （一份 10 题的小抄足够覆盖当前范围最扎手的那几道）。
+  static const int _actionMaxQuestions = 10;
 
   static const _filters = [
     ('all', '全部'),
@@ -424,63 +417,6 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     }
   }
 
-  /// v1.37 P1：考前小抄（宿主代劳 · 插件提供模板）
-  ///
-  /// 流程：宿主查库（当前筛选 + 已选题库）→ 挑错得最多的 N 道 → 拼成纯文本
-  /// → 填进**已启用插件**的 `prompts/cheat_sheet.md` 模板占位符 → 交给 AI。
-  ///
-  /// 三处刻意的取舍：
-  /// · **模板缺失就明说**：没有插件提供小抄模板时不偷偷用宿主提示词顶替，
-  ///   否则用户以为「插件生效了」，实际生成的是宿主的通用总结；
-  /// · **题量封顶**：只带最扎手的 10 道，小抄才有「抄」的密度；
-  /// · **图片占位符去掉**：AI 看不到图，留着 `⟦img:1⟧` 只会被抄进正文。
-  Future<void> _generateCheatSheet() async {
-    final appState = context.read<AppState>();
-    final messenger = ScaffoldMessenger.of(context);
-    if (_guard(appState)) return;
-    final ai = appState.aiService;
-    if (ai == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('请先在「设置」里配置 AI 的 API Key')),
-      );
-      return;
-    }
-    if (PluginPromptService.instance.template(_cheatSheetTemplate) == null) {
-      messenger.showSnackBar(const SnackBar(
-        duration: Duration(seconds: 6),
-        content: Text('没有已启用的插件提供考前小抄模板（prompts/cheat_sheet.md）。'
-            '请到「世界总览 → 插件市场」安装并启用对应插件后重试。'),
-      ));
-      return;
-    }
-
-    setState(() => _cheatSheetLoading = true);
-    final cards = await _loadErrorCards(appState);
-    if (!mounted) return;
-    setState(() => _cheatSheetLoading = false);
-    if (cards == null) return;
-
-    final scopeLabel = _scopeLabel;
-    final actionContext = _buildActionContext(cards, scopeLabel);
-    if (actionContext == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('当前范围下没有错题，先做几道再来生成小抄。')),
-      );
-      return;
-    }
-
-    await showPluginActionResultSheet(
-      context,
-      title: '考前小抄',
-      subtitle: '$scopeLabel · ${actionContext.errorCount} 道错题',
-      stream: PluginActionEngine.streamTemplate(
-        template: _cheatSheetTemplate,
-        vars: actionContext.select(PluginContextKeys.cheatSheet),
-        ai: ai,
-      ),
-    );
-  }
-
   /// 读取当前筛选 / 已选题库下的错题卡；失败提示并返回 null（调用方不再往下走）。
   Future<List<_ErrorCard>?> _loadErrorCards(AppState appState) async {
     final messenger = ScaffoldMessenger.of(context);
@@ -550,7 +486,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     final picked = cards.where((c) => c.question.id != null).toList()
       ..sort((a, b) => _wrongCountOf(b).compareTo(_wrongCountOf(a)));
     if (picked.isEmpty) return null;
-    final limited = picked.take(_cheatSheetMaxQuestions).toList();
+    final limited = picked.take(_actionMaxQuestions).toList();
     return PluginActionContext(
       errorQuestions: _formatCheatSheetQuestionBlocks(limited),
       errorCount: limited.length,
@@ -1154,8 +1090,10 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         title: const Text('错题本'),
         actions: [
           // 声明式 UI 插槽（v1.38）：已启用插件声明了 error_book_actions 就渲染图标按钮。
-          // AppBar 还有小抄 / 管理 / 导出三个固定动作，动态按钮最多 2 个，避免窄屏挤爆；
-          // 插件清单 platforms 不含当前平台的按钮静默跳过。
+          // AppBar 还有管理 / 导出两个固定动作；插件清单 platforms 不含当前平台的按钮静默跳过。
+          //
+          // v1.40：宿主硬编码的「考前小抄」入口已彻底移除——小抄功能全量由
+          // 插件 `ui_extensions` 接管，未装插件时不该出现第二个小抄按钮。
           for (final extension in PluginPromptService.instance.extensionsFor(
               PluginSlots.errorBookActions,
               limit: 2,
@@ -1166,18 +1104,6 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                   ? () => _runPluginAction(extension)
                   : null,
             ),
-          // v1.37 P1：考前小抄（模板来自已启用插件，数据由宿主查库填槽）
-          IconButton(
-            tooltip: '生成考前小抄',
-            icon: _cheatSheetLoading
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.auto_awesome_outlined),
-            onPressed: _cheatSheetLoading ? null : _generateCheatSheet,
-          ),
           // v1.34.1 错题删减：把不想再练 / 不需要练的错题移出错题本
           IconButton(
             tooltip: '管理错题',

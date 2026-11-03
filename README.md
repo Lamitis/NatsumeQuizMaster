@@ -513,13 +513,13 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -IsccPath 
 也可以手动分三步来做：
 
 ```powershell
-flutter build windows --release --dart-define=APP_VERSION=v1.39.4 --dart-define=APP_BUILD=44
+flutter build windows --release --dart-define=APP_VERSION=v1.40.0 --dart-define=APP_BUILD=45
 powershell -ExecutionPolicy Bypass -File tools\package_windows.ps1
 # 产物：dist\NatsumeQuizMaster-Windows-<yyyyMMdd>\（绿色版目录）+ 同名 .zip
 
 # 可选：生成安装包（需 Inno Setup 6；与 CI 用法一致）
 # ISCC.exe 常见位置有两个：全局安装（Program Files (x86)）或仅当前用户安装
-$V = '1.39.4'
+$V = '1.40.0'
 $pkg = "$PWD\dist\NatsumeQuizMaster-Windows-$(Get-Date -Format yyyyMMdd)"
 $iscc = @(
   'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
@@ -539,7 +539,7 @@ $iscc = @(
 > 的测试库，可能因 `onCreate` 不再触发而出现 `no such table: main.question_images`
 > 等大量误报（清掉该目录即可恢复）。
 
-> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.39.4+44`）。
+> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.40.0+45`）。
 > 发布构建把它拆成两半注入：`--dart-define=APP_VERSION=v<版本名>`（界面只展示这一段）、
 > `--dart-define=APP_BUILD=<构建号>`（只在「关于」里以小字补 `Build 43`），
 > 无需在任何 Dart 文件中手工修改版本号。

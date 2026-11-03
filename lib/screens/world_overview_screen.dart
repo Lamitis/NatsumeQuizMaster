@@ -112,7 +112,9 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
               const NatsumeEmptyState(
                 icon: Icons.public_outlined,
                 title: '还没有世界',
-                description: '点「导入世界」安装一个 .natsume-world 文件',
+                // v1.40：入口文案统一为「导入世界和分类」——世界包与分类包
+                // 走同一个导入动作，只写「世界」会让拿分类包的同学以为不支持
+                description: '点「导入世界和分类」安装 .natsume-world 世界包或 .zip 分类包',
               )
             else
               for (final w in _worlds) ...[
@@ -149,7 +151,7 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
               children: [
                 Expanded(
                   child: NatsumeButton(
-                    label: _importing ? '导入中…' : '导入世界',
+                    label: _importing ? '导入中…' : '导入世界和分类',
                     kind: NatsumeButtonKind.secondary,
                     icon: Icons.download_outlined,
                     onPressed: _importing ? null : _importWorld,
@@ -165,6 +167,16 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
                   ),
                 ),
               ],
+            ),
+            const SizedBox(height: NatsumeSpace.xs),
+            // 导入说明：世界包与分类包不是两种入口，而是同一个文件的两个来源，
+            // 这里把「能导入什么、导进来长什么样」一次讲清，省得用户反复试。
+            Text(
+              '支持两类文件：\n'
+              '· 世界包（.natsume-world / .zip）：知识库 + 题库 + 插件，整包安装；\n'
+              '· 分类包（.zip）：按分类打包的题库与知识库，导入后自动挂回同名分类。',
+              style: NatsumeType.microStyle
+                  .copyWith(color: ac.textTertiary, height: 1.6),
             ),
             const SizedBox(height: NatsumeSpace.lg),
             NatsumeSectionHeader(
@@ -369,6 +381,7 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
   Future<void> _importWorld() async {
     final appState = context.read<AppState>();
     final picked = await FilePicker.pickFile(
+      dialogTitle: '选择世界包或分类包',
       type: FileType.custom,
       allowedExtensions: ['zip', 'natsume-world'],
     );

@@ -385,6 +385,19 @@ class AIService {
         (s.contains('exceed') && s.contains('token'));
   }
 
+  /// v1.40：导入链路（文本切题 / 视觉切题 / MinerU 转出的 Markdown）共用的
+  /// **LaTeX 强制约束**。
+  ///
+  /// 工科题里 `F=ma`、`H₂SO₄ ⇌ 2H⁺ + SO₄²⁻`、积分号/根号这类符号，如果模型
+  /// 直接吐 Unicode 纯文本，渲染端只能原样显示——上下标、分式、根号全糊成一团。
+  /// 所以在提示词层就把出口钉死成标准 LaTeX（行内 `$...$`、块级 `$$...$$`），
+  /// 再由 `NatsumeMarkdown` 交给 `flutter_math_fork` 排版。
+  static const String latexImportRule =
+      '数学公式、物理符号、化学方程式**必须**转换为标准 LaTeX 输出：'
+      '行内公式用 \$...\$，块级公式用 \$\$...\$\$'
+      '（例：\$F=ma\$、\$\\ce{H2SO4}\$、\$\\frac{a}{b}\$、\$\\int_0^1 x^2\\,dx\$）；'
+      '绝对不要输出纯文本的奇怪符号（例如用 x^2 / √ / ⇌ 拼出来的伪公式）。';
+
   /// 单次解析一个文本块。失败返回带原因的错误串，不再静默吞掉。
   /// [maxTokens]：本次请求的输出上限（超模型上限会被接口拒绝，
   /// 由调用方按降级序列重试）。
@@ -432,6 +445,7 @@ $kpRule
 10. 只返回 JSON，不要任何其他文字。
 11. 控制输出长度：题干/选项/答案如实提取即可，不要添加原文没有的冗余描述
 12. 文中形如 {{img:N}} 的图片占位符必须原样保留在对应题目的对应字段（题干/选项/解析）的对应位置，不得删改、翻译、重排或补全
+13. $latexImportRule
 
 请直接返回 JSON：''';
     try {
@@ -576,6 +590,7 @@ $kpRule
 4. 页面边缘若有答案速查表（如 "00001 B"、"1. C"），按题号对应回填到 correct_answer
 5. 文中形如 {{img:N}} 的占位符原样保留（若有）
 6. 页面上没有题目时返回 {"questions": []}
+7. $latexImportRule
 ''';
 
   /// v1.35：用户定义了知识点体系时，把清单追加到视觉切题提示词后面。
@@ -585,7 +600,7 @@ $kpRule
     final types = _settings.knowledgePointTypes;
     if (types.isEmpty) return _visionPromptBase;
     return '$_visionPromptBase\n'
-        '7. knowledge_point 只能从下列用户知识点体系中选一个，逐字照抄，不得自创新名：'
+        '8. knowledge_point 只能从下列用户知识点体系中选一个，逐字照抄，不得自创新名：'
         '${types.join('、')}；确实无法归类时留空字符串\n';
   }
 

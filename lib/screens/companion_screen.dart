@@ -13,6 +13,7 @@ import '../services/companion/companion_service.dart';
 import '../services/theme_service.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
+import '../utils/typewriter.dart';
 import '../widgets/companion/companion_avatar_view.dart';
 import '../widgets/kit/natsume_kit.dart';
 import 'companion_settings_screen.dart';
@@ -37,7 +38,16 @@ class CompanionScreen extends StatefulWidget {
 
 class _CompanionScreenState extends State<CompanionScreen> {
   final TextEditingController _input = TextEditingController();
+
+  /// 输入焦点（v1.40）：发送后立刻清空并保持焦点，方便连续发消息
+  final FocusNode _inputFocus = FocusNode();
+
   final ScrollController _scroll = ScrollController();
+
+  /// 正在打字机渲染的回复 + 其最终全文（v1.40）
+  TypewriterBuffer? _typewriter;
+  String? _typingReply;
+  _ChatMessage? _typingMessage;
 
   CompanionSnapshot _snapshot = CompanionSnapshot.empty;
   CompanionState _state = CompanionState.empty;
@@ -65,12 +75,20 @@ class _CompanionScreenState extends State<CompanionScreen> {
 
   @override
   void dispose() {
+    _typewriter?.cancel();
+    _typewriter = null;
+    _inputFocus.dispose();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
+    // 重载会把消息列表清空重建：先停掉打字机，别往已经不在列表里的消息写字
+    _typewriter?.cancel();
+    _typewriter = null;
+    _typingMessage = null;
+    _typingReply = null;
     final app = context.read<AppState>();
     final service = CompanionService.instance;
     final settings = app.companionSettings;
@@ -109,10 +127,30 @@ class _CompanionScreenState extends State<CompanionScreen> {
     });
   }
 
+  /// 打字机还在跑时补全全文并停表（发送新消息 / 重载前调用）。
+  void _flushTypewriter() {
+    final typer = _typewriter;
+    if (typer == null) return;
+    typer.cancel();
+    final message = _typingMessage;
+    final reply = _typingReply;
+    if (message != null && reply != null) message.text = reply;
+    _typewriter = null;
+    _typingMessage = null;
+    _typingReply = null;
+    if (mounted) setState(() {});
+  }
+
   Future<void> _send([String? preset]) async {
     final text = (preset ?? _input.text).trim();
     if (text.isEmpty || _replying) return;
-    _input.clear();
+    // v1.40「文字残留」修复：发送即同步清空——把 text / selection / composing
+    // 一起复位（只调 clear() 时部分安卓输入法仍会保留 composing）；
+    // 同时把焦点还给输入框，清空不会把键盘带走，用户可以立刻接着打。
+    _input.value = TextEditingValue.empty;
+    _inputFocus.requestFocus();
+    // 上一条回复若还在打字：立刻补全并停表，避免两条回复文字交织
+    _flushTypewriter();
 
     final app = context.read<AppState>();
     final service = CompanionService.instance;
@@ -124,6 +162,22 @@ class _CompanionScreenState extends State<CompanionScreen> {
       _replying = true;
     });
     _scrollToEnd();
+
+    // 流式 chunk 到达后由打字机逐字放出（数据到达 ≠ 立刻整段上屏）
+    final typer = TypewriterBuffer(
+      onUpdate: (visible) {
+        if (!mounted) return;
+        setState(() => botMessage.text = visible);
+        _scrollToEnd();
+      },
+      onDrained: () {
+        _typewriter = null;
+        _typingMessage = null;
+        _typingReply = null;
+      },
+    );
+    _typewriter = typer;
+    _typingMessage = botMessage;
 
     // 好感度：每天第一次见面 +3，其后每次 +1（只影响头像旁的数值）
     final state = await service.recordTalk();
@@ -164,7 +218,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
         )) {
           acc = chunk;
           if (!mounted) return;
-          setState(() => botMessage.text = acc);
+          typer.feedCumulative(acc);
         }
         if (acc.trim().isEmpty || AIService.isAiError(acc)) {
           if (mounted) {
@@ -185,12 +239,22 @@ class _CompanionScreenState extends State<CompanionScreen> {
     }
     if (!mounted) return;
     setState(() {
-      botMessage.text = reply;
       botMessage.fromKb = kbUsed;
       _replying = false;
       _mood = _moodFor(text);
     });
+    _typingReply = reply;
+    if (reply.startsWith(typer.visible)) {
+      typer.feedCumulative(reply);
+      typer.finish();
+    } else {
+      // 中途失败改用固定文案：直接替换，避免两段文字拼接
+      typer.cancel();
+      setState(() => botMessage.text = reply);
+    }
     _scrollToEnd();
+    // 焦点留在输入框：连续追问不用再点一下
+    _inputFocus.requestFocus();
 
     // v1.33 记忆：只记「用户这句话 + 最终回复」，流式残片不落库
     if (settings.memoryEnabled) {
@@ -414,6 +478,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
                       Expanded(
                         child: TextField(
                           controller: _input,
+                          focusNode: _inputFocus,
                           minLines: 1,
                           maxLines: 4,
                           textInputAction: TextInputAction.send,
@@ -472,7 +537,13 @@ class _Bubble extends StatelessWidget {
     final ac = AppThemeColors.of(context);
     final isUser = message.fromUser;
     final bubble = Container(
-      constraints: const BoxConstraints(maxWidth: 320),
+      // v1.40：单条消息限高（屏幕 40%）+ 内部滚动。
+      // 以前长回复会把整屏顶满、把输入栏挤到看不见；现在气泡自己滚，
+      // 「一句就是一句」，输入框永远在原来的位置。
+      constraints: BoxConstraints(
+        maxWidth: 320,
+        maxHeight: MediaQuery.sizeOf(context).height * 0.4,
+      ),
       padding: const EdgeInsets.symmetric(
           horizontal: NatsumeSpace.sm, vertical: NatsumeSpace.xs),
       decoration: BoxDecoration(
@@ -481,11 +552,13 @@ class _Bubble extends StatelessWidget {
         borderRadius: NatsumeRadius.cardBorder,
         border: Border.all(color: ac.border, width: NatsumeLine.width),
       ),
-      child: Text(
-        message.text,
-        style: NatsumeType.bodyStyle.copyWith(
-          color: isUser ? ac.textPrimary : ac.textSecondary,
-          height: 1.6,
+      child: SingleChildScrollView(
+        child: Text(
+          message.text,
+          style: NatsumeType.bodyStyle.copyWith(
+            color: isUser ? ac.textPrimary : ac.textSecondary,
+            height: 1.6,
+          ),
         ),
       ),
     );
