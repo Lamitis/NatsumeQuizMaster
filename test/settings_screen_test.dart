@@ -178,20 +178,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  // ── 分组索引表回归 ──────────────────────────────────────────
-  // SettingsGroup.indices 是「按 sections 下标取块」的脆弱写法：改 sections
-  // 顺序就必须同步改表。2026-10-29 吃过一次亏——在 AI 组插入 MinerU 卡片后
-  // 没同步索引，「同步与提醒」组里的每日提醒整块消失（渲染成 0 个 widget），
-  // 而页面本身不报错、只是少一块，很难发现。这里给每组钉标志性标题。
+  // ── 分组内容回归 ──────────────────────────────────────────
+  // v1.41.1：分组不再用「sections 下标表」，而是每个区块自带 group/order。
+  // 这里给每组钉标志性标题，防止再次出现「调试日志跑到外观 / 网络加速跑到同步
+  // / 音效消失」这类串位；下面的移动端用例再验证隐藏 MinerU 后不会错位。
   const groupMarkers = <SettingsGroup, List<String>>{
-    SettingsGroup.ai: ['AI 接口配置', '扫描件识别增强（MinerU）', 'AI 提供方'],
-    SettingsGroup.appearance: ['主题外观', '深色模式'],
-    SettingsGroup.sync: ['局域网同步', '提醒与复习'],
-    SettingsGroup.advanced: ['调试日志', '使用说明', '网络加速'],
+    SettingsGroup.appearance: ['主题外观', '深色模式', '音效'],
+    SettingsGroup.ai: ['AI 接口配置', 'AI 回答风格', 'AI 提供方'],
+    SettingsGroup.knowledge: ['为剩余题目打标签'],
+    SettingsGroup.sync: ['局域网同步', '寒暑假模式', '提醒与复习', '插件内容同步'],
+    SettingsGroup.advanced: [
+      '扫描件识别增强（MinerU）',
+      '电池优化',
+      '调试日志',
+      '使用说明',
+      '数据库备份',
+      '网络加速',
+    ],
   };
 
   for (final entry in groupMarkers.entries) {
-    testWidgets('${entry.key.label}组只显示自己的区块（索引表未错位）',
+    testWidgets('${entry.key.label}组只显示自己的区块（分组未串位）',
         (tester) async {
       await showSettings(tester, FakeSettingsState(), FailingSync(),
           FakeReminderActions(),
@@ -199,7 +206,7 @@ void main() {
       for (final text in entry.value) {
         expect(find.text(text), findsOneWidget, reason: '缺少「$text」区块');
       }
-      // 别的组独有标题不该串进来（索引整体偏移时会串组）
+      // 别的组独有标题不该串进来（组标签/顺序错乱时会串组）
       for (final other in groupMarkers.entries) {
         if (other.key == entry.key) continue;
         final marker = other.value.first;
@@ -308,26 +315,70 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('移动端：设置页隐藏 MinerU 开关与 Token；桌面端照常显示',
+  testWidgets('移动端：高级组隐藏 MinerU；桌面端在高级组显示（不串位）',
       (tester) async {
     debugMobileOverride = true;
     addTearDown(() => debugMobileOverride = null);
     final app = FakeSettingsState();
 
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
-        group: SettingsGroup.ai);
+        group: SettingsGroup.advanced);
     expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
         reason: '移动端必须完全隐藏 MinerU 卡片');
     expect(find.text('允许扫描件使用 MinerU（桌面端自动判断）'), findsNothing);
     expect(find.textContaining('MinerU Token'), findsNothing);
-    // 其余 AI 设置照常（别把整组藏没了）
-    expect(find.text('AI 接口配置'), findsOneWidget);
+    // 高级组本身仍要正常：隐藏一张卡不能把整组带崩
+    expect(find.text('电池优化'), findsOneWidget);
+    expect(find.text('网络加速'), findsOneWidget);
 
     // 桌面端：同一套 UI，只是平台判定不同 → 卡片出现
     debugMobileOverride = false;
     await tester.pumpWidget(const SizedBox.shrink());
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
-        group: SettingsGroup.ai);
+        group: SettingsGroup.advanced);
     expect(find.text('扫描件识别增强（MinerU）'), findsOneWidget);
+  });
+
+  testWidgets('移动端隐藏 MinerU 后分组不串位（v1.41.1 回归）', (tester) async {
+    debugMobileOverride = true;
+    addTearDown(() => debugMobileOverride = null);
+    final app = FakeSettingsState();
+
+    Future<void> show(SettingsGroup group) async {
+      await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+          group: group);
+      expect(tester.takeException(), isNull,
+          reason: '${group.label} 组不应因下标错位抛异常');
+    }
+
+    // 高级：能打开，网络加速/调试日志/电池优化都在
+    await show(SettingsGroup.advanced);
+    for (final text in ['电池优化', '调试日志', '网络加速']) {
+      expect(find.text(text), findsOneWidget, reason: '高级组缺少「$text」');
+    }
+    expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
+        reason: '移动端隐藏 MinerU 后，后面区块不能整体前移');
+
+    // 外观：音效回来了，调试日志不在这里
+    await show(SettingsGroup.appearance);
+    expect(find.text('音效'), findsOneWidget);
+    expect(find.text('调试日志'), findsNothing,
+        reason: '调试日志属于高级组，不能被挤到外观');
+
+    // AI：只剩接口 / 风格 / 提供方，标签体系移出去
+    await show(SettingsGroup.ai);
+    expect(find.text('AI 接口配置'), findsOneWidget);
+    expect(find.text('为剩余题目打标签'), findsNothing,
+        reason: '标签体系属于「题库与标签」，不能塞进 AI 组');
+
+    // 同步：网络加速不在这里
+    await show(SettingsGroup.sync);
+    expect(find.text('局域网同步'), findsOneWidget);
+    expect(find.text('网络加速'), findsNothing,
+        reason: '网络加速属于高级组，不能被挤到同步组');
+
+    // 题库与标签：标签卡片在这里
+    await show(SettingsGroup.knowledge);
+    expect(find.text('为剩余题目打标签'), findsOneWidget);
   });
 }

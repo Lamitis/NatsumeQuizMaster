@@ -18,8 +18,9 @@ class SettingsHubScreen extends StatelessWidget {
   const SettingsHubScreen({super.key});
 
   static const _groups = <(SettingsGroup, IconData)>[
-    (SettingsGroup.ai, Icons.auto_awesome_outlined),
     (SettingsGroup.appearance, Icons.palette_outlined),
+    (SettingsGroup.ai, Icons.auto_awesome_outlined),
+    (SettingsGroup.knowledge, Icons.sell_outlined),
     (SettingsGroup.sync, Icons.sync_outlined),
     (SettingsGroup.advanced, Icons.tune_outlined),
   ];

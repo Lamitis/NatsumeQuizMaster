@@ -39,22 +39,26 @@ enum SettingsGroup {
   /// 全部（保留给直接进入的旧路径）
   all,
 
-  /// AI 接口配置、回答风格、保存
+  /// AI 接口配置、回答风格
   ai,
 
-  /// 主题外观、深色模式
+  /// 主题外观、深色模式、音效
   appearance,
+
+  /// 知识点体系、打标签、一键重导
+  knowledge,
 
   /// 局域网同步、寒暑假模式、提醒与复习
   sync,
 
-  /// 打标签、音效、电池优化、调试日志、使用说明
+  /// MinerU、网络加速、调试日志、使用说明
   advanced;
 
   String get label => switch (this) {
         SettingsGroup.all => '设置',
         SettingsGroup.ai => 'AI 接口',
         SettingsGroup.appearance => '外观',
+        SettingsGroup.knowledge => '题库与标签',
         SettingsGroup.sync => '同步与提醒',
         SettingsGroup.advanced => '高级',
       };
@@ -62,27 +66,39 @@ enum SettingsGroup {
   String get subtitle => switch (this) {
         SettingsGroup.all => '全部设置',
         SettingsGroup.ai => 'API Key、模型、回答风格',
-        SettingsGroup.appearance => '三套主题、深色模式',
+        SettingsGroup.appearance => '主题、深色模式、音效',
+        SettingsGroup.knowledge => '知识点体系、打标签、重导',
         SettingsGroup.sync => '局域网、假期、每日提醒',
-        SettingsGroup.advanced => '标签、音效、日志、说明',
+        SettingsGroup.advanced => 'MinerU、网络加速、日志、说明',
       };
 
-  /// 该组包含的 sections 顶层索引（与 build 中 sections 字面量顺序一致）
+  /// 组在「全部设置」里的先后（越小越靠前）。
   ///
-  /// 注意：索引按「列表元素」计，含 `SizedBox` 间隔项。v1.30.2 在 AI 组末尾
-  /// 插入「扫描件识别增强（MinerU）」卡片 + 间隔后，索引 4 之后整体 +2，
-  /// 下面这张表已按新顺序校正（改 sections 顺序时务必同步本表）。
-  List<int> get indices => switch (this) {
-        SettingsGroup.all => const [],
-        SettingsGroup.ai => const [0, 1, 2, 3, 4, 5, 6, 7, 32],
-        SettingsGroup.appearance => const [20, 21, 22, 23, 24, 25, 26, 27],
-        // 33 = v1.35 新增的「插件内容同步」卡片（追加在 sections 末尾，
-        // 这样不会打乱已有索引——加卡片时改这张表的老坑别再踩一遍）
-        SettingsGroup.sync => const [12, 13, 14, 15, 16, 17, 31, 33],
-        // 34 = v1.36「网络加速」；同样追加在末尾
-        SettingsGroup.advanced => const [8, 9, 10, 11, 18, 19, 28, 29, 30, 34],
+  /// v1.41.1：分组不再用「sections 下标表」——那张表只要列表里多一个
+  /// collection-if（例如移动端隐藏 MinerU 卡片）就会整体错位，把调试日志
+  /// 塞进外观、把网络加速塞进同步。现在每个区块自带 group/order（见
+  /// `_SettingsSpec`），这里只决定组与组之间的顺序。
+  int get rank => switch (this) {
+        SettingsGroup.all => -1,
+        SettingsGroup.appearance => 0,
+        SettingsGroup.ai => 1,
+        SettingsGroup.knowledge => 2,
+        SettingsGroup.sync => 3,
+        SettingsGroup.advanced => 4,
       };
 }
+
+/// 一个设置区块的「身份」：属于哪个分组、在组内排第几。
+///
+/// 历史教训（v1.41.1 修复）：旧实现用 `SettingsGroup.indices` 按数组下标
+/// 取块，列表里一旦出现 `if (isDesktopPlatform) ...` 这种 collection-if，
+/// 元素个数就会随平台变化，下标整体错位——移动端上「高级」直接越界崩掉，
+/// 「调试日志」跑到外观、「网络加速」跑到同步、音效消失。
+/// 现在分组跟着区块本身走，增删区块不再需要维护任何下标表。
+typedef _SettingsSpec = ({SettingsGroup group, int order, Widget child});
+
+_SettingsSpec _spec(SettingsGroup group, int order, Widget child) =>
+    (group: group, order: order, child: child);
 
 /// 设置页的「带底色卡片」。
 ///
@@ -541,8 +557,9 @@ class _SettingsScreenState extends State<SettingsScreen>
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Builder(builder: (context) {
-              final allSections = <Widget>[
-                // API 配置卡片
+              final specs = <_SettingsSpec>[
+                _spec(SettingsGroup.ai, 10,
+                    // API 配置卡片
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,11 +967,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // v1.28 AI 回答风格：篇幅档位 + 关键词高亮开关
+                )),
+                _spec(SettingsGroup.ai, 10,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.ai, 20,
+                    // v1.28 AI 回答风格：篇幅档位 + 关键词高亮开关
                 // 「先试一下吧，或者在设置里面加一个切换的开关」
                 _SettingsCard(
                   child: Column(
@@ -1057,13 +1074,13 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
+                )),
+                _spec(SettingsGroup.ai, 20,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 10,
+                    // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
                 // 连开关、Token 与署名提示一起隐藏（导入侧还有运行时门禁兜底）。
-                if (isDesktopPlatform)
+                isDesktopPlatform ?
                   _SettingsCard(
                   bordered: true,
                   child: Column(
@@ -1134,11 +1151,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                SizedBox(
+                ) : const SizedBox.shrink()),
+                _spec(SettingsGroup.advanced, 10,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.ai, 90,
+                    SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () async {
@@ -1180,11 +1197,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                     child: const Text('保存设置',
                         style: TextStyle(fontSize: NatsumeType.h3)),
                   ),
-                ),
-
-                const SizedBox(height: 24),
-
-                // v1.0.2 对齐里程碑：为剩余题目打标签
+                )),
+                _spec(SettingsGroup.ai, 90,
+                    const SizedBox(height: 24)),
+                _spec(SettingsGroup.knowledge, 10,
+                    // v1.0.2 对齐里程碑：为剩余题目打标签
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1301,11 +1318,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 音效开关
+                )),
+                _spec(SettingsGroup.knowledge, 10,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.appearance, 30,
+                    // 音效开关
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -1349,11 +1366,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 局域网同步（v11：纯本地、无云端，同一局域网设备间同步）
+                )),
+                _spec(SettingsGroup.appearance, 30,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.sync, 10,
+                    // 局域网同步（v11：纯本地、无云端，同一局域网设备间同步）
                 Consumer2<AppState, SyncEngine>(
                   builder: (context, appState, sync, _) {
                     final syncSettings = appState.settings;
@@ -1827,11 +1844,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     );
                   },
-                ),
-
-                const SizedBox(height: 16),
-
-                // 假期模式（v1.0.2）
+                )),
+                _spec(SettingsGroup.sync, 10,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.sync, 20,
+                    // 假期模式（v1.0.2）
                 Consumer<AppState>(
                   builder: (context, appState, _) {
                     final now = DateTime.now();
@@ -1934,11 +1951,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     );
                   },
-                ),
-
-                const SizedBox(height: 16),
-
-                // 每日提醒（v1.0.2）
+                )),
+                _spec(SettingsGroup.sync, 20,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.sync, 30,
+                    // 每日提醒（v1.0.2）
                 Consumer<AppState>(
                   builder: (context, appState, _) => _SettingsCard(
                     child: Column(
@@ -2056,11 +2073,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ],
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // v1.0.2 设计审查修复（简化保活）：移除无障碍保活
+                )),
+                _spec(SettingsGroup.sync, 30,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 20,
+                    // v1.0.2 设计审查修复（简化保活）：移除无障碍保活
                 // （过度保活 + 商店合规风险），保留电池优化豁免
                 // （前台提醒服务不被系统激进清理）
                 _SettingsCard(
@@ -2133,18 +2150,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 主题切换
+                )),
+                _spec(SettingsGroup.advanced, 20,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.appearance, 10,
+                    // 主题切换
                 Text('主题外观',
                     style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: NatsumeType.h3,
-                        color: ac.textPrimary)),
-                const SizedBox(height: 8),
-                Consumer<ThemeService>(
+                        color: ac.textPrimary))),
+                _spec(SettingsGroup.appearance, 10,
+                    const SizedBox(height: 8)),
+                _spec(SettingsGroup.appearance, 11,
+                    Consumer<ThemeService>(
                   builder: (context, themeService, _) => Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -2188,18 +2207,20 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ]),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // v1.0.2 七项改进：深色模式（跟随系统/浅色/深色）
+                )),
+                _spec(SettingsGroup.appearance, 11,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.appearance, 20,
+                    // v1.0.2 七项改进：深色模式（跟随系统/浅色/深色）
                 Text('深色模式',
                     style: TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: NatsumeType.h3,
-                        color: ac.textPrimary)),
-                const SizedBox(height: 8),
-                Consumer<ThemeService>(
+                        color: ac.textPrimary))),
+                _spec(SettingsGroup.appearance, 20,
+                    const SizedBox(height: 8)),
+                _spec(SettingsGroup.appearance, 21,
+                    Consumer<ThemeService>(
                   builder: (context, themeService, _) => Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
@@ -2221,11 +2242,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ]),
                     ),
                   ),
-                ),
-
-                const SizedBox(height: 16),
-
-                // 调试日志
+                )),
+                _spec(SettingsGroup.appearance, 21,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 30,
+                    // 调试日志
                 // （v1.0.2 UI 审查：星际穿越等主题下卡片与页面背景对比微弱，
                 //   bordered 加一圈细边框分隔；底色走 _SettingsCard 的 Material，
                 //   避免内部 SwitchListTile 的水波纹被底色盖住）
@@ -2391,11 +2412,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                const SizedBox(height: 24),
-
-                // 使用说明
+                )),
+                _spec(SettingsGroup.advanced, 30,
+                    const SizedBox(height: 24)),
+                _spec(SettingsGroup.advanced, 40,
+                    // 使用说明
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2435,9 +2456,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                // 数据库备份（不放开发者选项——整库备份/恢复是常规数据管理能力）
+                )),
+                _spec(SettingsGroup.advanced, 50,
+                    // 数据库备份（不放开发者选项——整库备份/恢复是常规数据管理能力）
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2475,9 +2496,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                // v13 多接口：AI 提供方（即时生效，不走保存按钮）
+                )),
+                _spec(SettingsGroup.ai, 30,
+                    // v13 多接口：AI 提供方（即时生效，不走保存按钮）
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2510,9 +2531,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                // v1.35 插件内容同步：每台设备各自决定带不带插件数据
+                )),
+                _spec(SettingsGroup.sync, 40,
+                    // v1.35 插件内容同步：每台设备各自决定带不带插件数据
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2568,16 +2589,32 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                ),
-
-                // v1.36 网络加速：插件表 / 插件包的多源回退（追加在末尾，索引 34）
-                _networkAccelCard(ac),
-
+                )),
+                _spec(SettingsGroup.advanced, 60,
+                    // v1.36 网络加速：插件表 / 插件包的多源回退
+                _networkAccelCard(ac))
               ];
-              // 按分组过滤：非 all 时只保留该组的 sections（索引表见 SettingsGroup.indices）
-              final sections = widget.group == SettingsGroup.all
-                  ? allSections
-                  : [for (final i in widget.group.indices) allSections[i]];
+
+              // 分组过滤（v1.41.1）：每个区块自带 group/order，不再维护「sections
+              // 下标表」。`all` 视图按 外观 → AI → 题库与标签 → 同步 → 高级 归并；
+              // 组内按 order 排，同 order 保持字面量顺序（间隔项紧跟所属区块）。
+              final indexedSpecs = specs.asMap().entries.toList();
+              final picked = indexedSpecs
+                  .where((e) =>
+                      widget.group == SettingsGroup.all ||
+                      e.value.group == widget.group)
+                  .toList()
+                ..sort((a, b) {
+                  if (widget.group == SettingsGroup.all) {
+                    final byGroup =
+                        a.value.group.rank.compareTo(b.value.group.rank);
+                    if (byGroup != 0) return byGroup;
+                  }
+                  final byOrder = a.value.order.compareTo(b.value.order);
+                  if (byOrder != 0) return byOrder;
+                  return a.key.compareTo(b.key);
+                });
+              final sections = <Widget>[for (final e in picked) e.value.child];
               // 窄屏：单列（原设计）；宽屏：分组交错分左右两列并排（近似平衡）
               if (!isWideLayout(context)) {
                 return Column(

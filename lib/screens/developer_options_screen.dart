@@ -12,7 +12,7 @@ import '../utils/responsive.dart';
 
 /// 开发者选项（v1.0.2）：密码进入，调试专用
 /// 日志 / 模拟长期使用 / 保活状态
-/// （数据库备份导入导出已迁至 设置 → 同步与提醒 → 数据库备份）
+/// （数据库备份导入导出已迁至 设置 → 高级 → 数据库备份）
 class DeveloperOptionsScreen extends StatefulWidget {
   const DeveloperOptionsScreen({super.key});
 

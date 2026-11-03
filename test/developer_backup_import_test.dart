@@ -82,7 +82,7 @@ void main() {
           ChangeNotifierProvider(create: (_) => ThemeService()),
         ],
         // 2026-10-08：数据库导入/导出已从开发者选项移入普通设置，
-        // 现在是独立页面 BackupScreen（设置 → 同步与提醒 → 数据库备份），
+        // 现在是独立页面 BackupScreen（设置 → 高级 → 数据库备份），
         // 因此这里不再需要开发者密码解锁。
         child: const MaterialApp(home: BackupScreen()),
       ),

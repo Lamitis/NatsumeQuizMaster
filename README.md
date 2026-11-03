@@ -513,13 +513,13 @@ powershell -ExecutionPolicy Bypass -File tools\make_windows_setup.ps1 -IsccPath 
 也可以手动分三步来做：
 
 ```powershell
-flutter build windows --release --dart-define=APP_VERSION=v1.41.0 --dart-define=APP_BUILD=46
+flutter build windows --release --dart-define=APP_VERSION=v1.41.1 --dart-define=APP_BUILD=47
 powershell -ExecutionPolicy Bypass -File tools\package_windows.ps1
 # 产物：dist\NatsumeQuizMaster-Windows-<yyyyMMdd>\（绿色版目录）+ 同名 .zip
 
 # 可选：生成安装包（需 Inno Setup 6；与 CI 用法一致）
 # ISCC.exe 常见位置有两个：全局安装（Program Files (x86)）或仅当前用户安装
-$V = '1.41.0'
+$V = '1.41.1'
 $pkg = "$PWD\dist\NatsumeQuizMaster-Windows-$(Get-Date -Format yyyyMMdd)"
 $iscc = @(
   'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
@@ -539,7 +539,7 @@ $iscc = @(
 > 的测试库，可能因 `onCreate` 不再触发而出现 `no such table: main.question_images`
 > 等大量误报（清掉该目录即可恢复）。
 
-> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.41.0+46`）。
+> 版本号的唯一来源是 `pubspec.yaml` 的 `version:` 字段（形如 `1.41.1+47`）。
 > 发布构建把它拆成两半注入：`--dart-define=APP_VERSION=v<版本名>`（界面只展示这一段）、
 > `--dart-define=APP_BUILD=<构建号>`（只在「关于」里以小字补 `Build 43`），
 > 无需在任何 Dart 文件中手工修改版本号。
@@ -574,7 +574,7 @@ $iscc = @(
 设置 →「AI 回答风格」→ 回答详细程度可选简洁 / 标准 / 详细，并可开关关键词高亮。
 
 **Q：如何备份到新手机？**
-设置 → 导出数据库备份 → 在新机导入即可恢复题库、记录与批注。
+设置 → 高级 → 数据库备份 → 导出 → 在新机导入即可恢复题库、记录与批注。
 
 默认导出的备份**不含 API Key**（避免把备份发给他人时一并泄露 Key），
 换机后重新填写一次即可。如需连同 Key 迁移，导出时选择「含 API Key」并设置备份口令，
