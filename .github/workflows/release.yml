@@ -100,16 +100,72 @@ jobs:
           grep distributionUrl android/gradle/wrapper/gradle-wrapper.properties
 
       # pdfrx 的 Android 侧要跑一遍 CMake（下拉 Android 版 PDFium + 编一层 FFI 胶水），
-      # 缺 NDK 或 CMake 会让 Gradle 在配置/编译阶段直接失败，所以这里预先装齐。
-      - name: 安装 NDK 与 CMake（原生代码编译需要）
+      # 缺 NDK 或 CMake 会让 Gradle 在配置/编译阶段直接失败。
+      #
+      # v1.41.1：改成「先查本地、只装缺的、最多重试 3 次」：
+      #   - GitHub Actions 的 ubuntu 镜像通常已自带 CMake 与部分 NDK，无脑重装
+      #     既慢又容易卡在坏包下载上（旧实现重试 5 次，CI 经常因此超时）；
+      #   - 每次重试前清 $ANDROID_HOME/.temp，丢掉上一轮的半截包；
+      #   - 重试 3 次仍失败就显式报错，不把超时留给整条流水线。
+      - name: 安装 NDK 与 CMake（按需 · 有限重试）
         run: |
-          # android/app/build.gradle 现在显式声明 ndkVersion = 28.2.13676358
-          # （v1.35.2 起与 Flutter 日志给出的建议值对齐，消掉 NDK 版本告警），
-          # 必须预装；26.1.10909125 是 pdfrx 等按旧工具链发布的插件用的版本，
-          # 一并保留，免得构建中期 gradle 才去 auto-download（那一步极易超时）。
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
-            "platforms;android-36" \
-            "ndk;28.2.13676358" "ndk;26.1.10909125" "cmake;3.22.1"
+          set -uo pipefail
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          # 1. 自动同意协议（失败不致命，包已在本地时本来也不需要）
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+
+          # 2. 只把「本机没有的」加进安装清单：
+          #    - android/app/build.gradle 显式声明 ndkVersion = 28.2.13676358；
+          #    - 26.1.10909125 是 pdfrx 等按旧工具链发布的插件用的版本，一并保留，
+          #      免得构建中期 gradle 才去 auto-download（那一步极易超时）；
+          #    - CMake 3.22.1 是 pdfrx 原生构建要求的版本。
+          INSTALL_LIST=""
+          for spec in \
+            "platforms;android-36:$ANDROID_HOME/platforms/android-36" \
+            "ndk;28.2.13676358:$ANDROID_HOME/ndk/28.2.13676358" \
+            "ndk;26.1.10909125:$ANDROID_HOME/ndk/26.1.10909125" \
+            "cmake;3.22.1:$ANDROID_HOME/cmake/3.22.1"
+          do
+            pkg="${spec%%:*}"
+            dir="${spec#*:}"
+            if [ -d "$dir" ]; then
+              echo "✅ 已存在，跳过：$pkg"
+            else
+              echo "⬇️  需要安装：$pkg"
+              INSTALL_LIST="$INSTALL_LIST $pkg"
+            fi
+          done
+          INSTALL_LIST="$(echo "$INSTALL_LIST" | xargs)"
+
+          if [ -z "$INSTALL_LIST" ]; then
+            echo "✅ NDK / CMake / platform 均已就绪，无需下载。"
+            exit 0
+          fi
+
+          echo "准备安装：$INSTALL_LIST"
+
+          # 3. 有限重试：最多 3 次；每次先清临时目录，避免复用坏包
+          for i in 1 2 3; do
+            echo "--- 第 $i/3 次尝试 ---"
+            rm -rf "$ANDROID_HOME/.temp"
+
+            # 故意不加引号：sdkmanager 需要把多个包名当成多个参数
+            if "$SDKMANAGER" --install $INSTALL_LIST; then
+              echo "✅ 安装成功"
+              break
+            fi
+
+            if [ "$i" -eq 3 ]; then
+              echo "::error::NDK/CMake 连续 3 次安装失败，请稍后重跑流水线。"
+              exit 1
+            fi
+
+            echo "⚠️ 第 $i 次失败，清理临时文件后 10 秒重试…"
+            sleep 10
+          done
+
           ls "$ANDROID_HOME/ndk" || true
 
       - name: 注入签名配置（从 Secrets 还原 keystore）
