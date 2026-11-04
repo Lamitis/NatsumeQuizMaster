@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import '../../models/kb_chunk.dart';
 import '../../models/kb_document.dart';
 import '../../models/knowledge_base.dart';
@@ -70,10 +72,12 @@ class KbFileService {
       ));
     }
     if (docs.isEmpty) return (null, const <KbDocument>[], '知识库文件中没有有效文档');
+    final uidRaw = data['uid']?.toString().trim();
     return (
       KnowledgeBase(
         name: (data['name'] ?? '导入知识库').toString(),
         description: data['description']?.toString(),
+        uid: (uidRaw == null || uidRaw.isEmpty) ? null : uidRaw,
         createdAt: now,
       ),
       docs,
@@ -81,12 +85,54 @@ class KbFileService {
     );
   }
 
+  /// 知识库内容签名：同名 + 文档集合完全一致 → 视为同一份知识库。
+  ///
+  /// 旧版导出文件没有 uid，用内容签名兜底去重（v1.41.2）。
+  static String contentSignature(String name, List<KbDocument> docs) {
+    final parts = docs
+        .map((d) => '${d.name.trim()}\u0001${d.content.trim()}')
+        .toList()
+      ..sort();
+    return sha1
+        .convert(utf8.encode('$name\u0000${parts.join('\u0003')}'))
+        .toString();
+  }
+
   /// 导入知识库 JSON 文件：建库 → 逐文档切块落库。返回 (知识库 id, 错误)。
   /// [categoryId] 非空时直接把新库挂到该分类（分类导出包导入用）。
+  ///
+  /// v1.41.2 去重：
+  /// 1. 文件带 `uid` 且本机已有同 uid 的知识库 → 跳过（返回 id=0 + 可读提示）；
+  /// 2. 老文件没有 uid → 同名且文档内容完全一致 → 跳过；
+  /// 3. 同名但内容不同 → 仍按原逻辑新建（这是两份不同资料）。
   static Future<(int, String?)> importKbFile(String filePath,
       {int? categoryId}) async {
     final (kb, docs, err) = await parseKbFile(filePath);
     if (kb == null) return (0, err);
+
+    final uid = kb.uid?.trim();
+    if (uid != null && uid.isNotEmpty) {
+      final rows = await (await _db.database).query(
+        'knowledge_bases',
+        columns: ['id'],
+        where: 'uid = ?',
+        whereArgs: [uid],
+        limit: 1,
+      );
+      if (rows.isNotEmpty) {
+        return (0, '知识库「${kb.name}」已存在（uid 相同），已跳过');
+      }
+    } else {
+      final sig = contentSignature(kb.name, docs);
+      for (final existing in await _db.getAllKnowledgeBases()) {
+        if (existing.id == null || existing.name != kb.name) continue;
+        final existingDocs = await _db.getKbDocuments(existing.id!);
+        if (contentSignature(existing.name, existingDocs) == sig) {
+          return (0, '知识库「${kb.name}」已存在（内容相同），已跳过');
+        }
+      }
+    }
+
     final target = categoryId == null ? kb : kb.copyWith(categoryId: categoryId);
     final kbId = await _db.insertKnowledgeBase(target);
     final now = DateTime.now().toIso8601String();
@@ -118,6 +164,8 @@ class KbFileService {
       'format': formatMarker,
       'name': kb.name,
       'description': kb.description,
+      // v1.41.2：导出 uid —— 同一份知识库再次导入时按 uid 跳过
+      if (kb.uid != null && kb.uid!.isNotEmpty) 'uid': kb.uid,
       // 静默写入专属 creator 标识（数据格式的专属烙印）
       'creator': NatsumePersonality.creatorMark,
       'documents': [

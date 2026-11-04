@@ -451,9 +451,9 @@ class AppState extends ChangeNotifier {
         return null;
       }
 
-      // ② 扫描件（且桌面端 + 用户已开启）才自动触发 MinerU
+      // ② 扫描件（且 Windows 桌面端 + 用户已开启）才自动触发 MinerU
       final useMineru = ImportOcrPolicy.shouldUseMineru(
-        isMobile: isMobilePlatform,
+        isWindows: isWindowsPlatform,
         enabled: _settings.mineruEnabled,
         needsOcr: probe.needsOcr,
       );
@@ -483,7 +483,9 @@ class AppState extends ChangeNotifier {
       } else if (probe.needsOcr) {
         report(isMobilePlatform
             ? ImportOcrPolicy.mobileFallback
-            : ImportOcrPolicy.mineruDisabled);
+            : isWindowsPlatform
+                ? ImportOcrPolicy.mineruDisabled
+                : ImportOcrPolicy.platformUnsupported);
       }
 
       // ③ 没拿到 MinerU 文本时才本地抽图文
@@ -606,7 +608,7 @@ class AppState extends ChangeNotifier {
     String? mineruText;
     final canUseMineru = allowMineru &&
         ImportOcrPolicy.shouldUseMineru(
-          isMobile: isMobilePlatform,
+          isWindows: isWindowsPlatform,
           enabled: _settings.mineruEnabled,
           needsOcr: true,
         );

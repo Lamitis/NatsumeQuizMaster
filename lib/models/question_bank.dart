@@ -5,6 +5,10 @@ class QuestionBank {
   final int questionCount;
   final String createdAt;
 
+  /// 跨设备/跨版本唯一标识（schema v11）。导入导出时随文件走，
+  /// 用于「同一份题库再次导入」的去重（v1.41.2）。
+  final String? uid;
+
   /// 所属分类（schema v15 分类树）；`null` = 未分类
   final int? categoryId;
 
@@ -14,6 +18,7 @@ class QuestionBank {
     this.fileSource,
     this.questionCount = 0,
     required this.createdAt,
+    this.uid,
     this.categoryId,
   });
 
@@ -24,6 +29,7 @@ class QuestionBank {
       'file_source': fileSource,
       'question_count': questionCount,
       'created_at': createdAt,
+      'uid': uid,
       'category_id': categoryId,
     };
   }
@@ -35,6 +41,7 @@ class QuestionBank {
       fileSource: map['file_source'] as String?,
       questionCount: map['question_count'] as int? ?? 0,
       createdAt: map['created_at'] as String,
+      uid: map['uid'] as String?,
       categoryId: map['category_id'] as int?,
     );
   }
@@ -45,6 +52,7 @@ class QuestionBank {
     String? fileSource,
     int? questionCount,
     String? createdAt,
+    String? uid,
     int? categoryId,
     /// 显式把分类清空（回到「未分类」）——`categoryId: null` 在 copyWith 里
     /// 代表「不改」，所以要清空必须走这个开关
@@ -56,6 +64,7 @@ class QuestionBank {
       fileSource: fileSource ?? this.fileSource,
       questionCount: questionCount ?? this.questionCount,
       createdAt: createdAt ?? this.createdAt,
+      uid: uid ?? this.uid,
       categoryId: clearCategory ? null : (categoryId ?? this.categoryId),
     );
   }

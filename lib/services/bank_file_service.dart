@@ -1,10 +1,44 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import '../models/question.dart';
 import '../models/question_bank.dart';
 import '../models/question_image.dart';
 import 'database_service.dart';
+
+/// 一个待导入的题库组（v1.41.2 去重链路用）。
+class BankImportGroup {
+  const BankImportGroup({
+    required this.name,
+    this.uid,
+    required this.questions,
+  });
+
+  final String name;
+  final String? uid;
+  final List<Question> questions;
+}
+
+/// 题库文件导入结果。
+///
+/// [skippedCount] 是「uid 命中 / 同名且内容完全一致」而跳过的组数——
+/// 世界包重复导入、更新后再次导入同一份题库都靠它把重复挡在门外。
+class BankImportOutcome {
+  const BankImportOutcome({
+    this.bankCount = 0,
+    this.questionCount = 0,
+    this.renamedCount = 0,
+    this.skippedCount = 0,
+    this.error,
+  });
+
+  final int bankCount;
+  final int questionCount;
+  final int renamedCount;
+  final int skippedCount;
+  final String? error;
+}
 
 /// JSON 题库文件导入导出（v1.0.2）
 ///
@@ -20,6 +54,55 @@ class BankFileService {
 
   /// NatsumeQuizMaster 导出文件格式标记。
   static const String formatMarker = 'natsume-quiz-questions';
+
+  /// 一个待导入的题库组：名字 +（可选的）题库 uid + 题目。
+  ///
+  /// [uid] 来自新版导出文件；再次导入同一份文件时按它直接跳过，
+  /// 避免「更新/重复导入 → 题库变成 X(2)」的老问题（v1.41.2）。
+  static Future<(List<BankImportGroup>, String?)> parseJsonGroups(
+      String filePath) async {
+    final (map, err) = await parseJsonFile(filePath);
+    if (map.isEmpty) return (const <BankImportGroup>[], err);
+    String? uid;
+    try {
+      final data = jsonDecode(await File(filePath).readAsString());
+      if (data is Map && data['format'] == formatMarker) {
+        final raw = data['uid']?.toString().trim();
+        if (raw != null && raw.isNotEmpty) uid = raw;
+      }
+    } catch (_) {
+      // 读不出 uid 就当旧格式：走内容签名兜底
+    }
+    final entries = map.entries.toList();
+    return ([
+      for (var i = 0; i < entries.length; i++)
+        BankImportGroup(
+          name: entries[i].key,
+          uid: i == 0 ? uid : null,
+          questions: entries[i].value,
+        ),
+    ], err);
+  }
+
+  /// 题库内容签名：同名 + 题目集合完全一致 → 视为同一份题库。
+  ///
+  /// 旧版导出文件没有 uid，只能靠内容判断重复；题目顺序、选项/答案/解析
+  /// 任何一处不同都会得到不同签名（同名不同内容仍按老逻辑改名导入）。
+  static String contentSignature(String bankName, List<Question> questions) {
+    final parts = questions
+        .map((q) => [
+              q.title.trim(),
+              q.options.map((o) => o.trim()).join('\u0001'),
+              q.correctAnswer.trim().toUpperCase(),
+              (q.analysis ?? '').trim(),
+              q.questionType,
+            ].join('\u0002'))
+        .toList()
+      ..sort();
+    return sha1
+        .convert(utf8.encode('$bankName\u0000${parts.join('\u0003')}'))
+        .toString();
+  }
 
   /// 解析 JSON 文件 → 返回 (组名 → 题目列表, 错误信息)。
   /// v1.0.2 设计审查修复：错误信息随返回值传递
@@ -212,16 +295,76 @@ class BankFileService {
   /// [existingNames] 非空时同名组自动加后缀（防重复导入建重复题库）
   static Future<(int, int, String?, int)> importJsonFile(String filePath,
       {Set<String>? existingNames, int? categoryId}) async {
-    final (groups, err) = await parseJsonFile(filePath);
-    if (groups.isEmpty) return (0, 0, err, 0);
+    final o = await importBankFile(filePath,
+        existingNames: existingNames, categoryId: categoryId);
+    return (o.bankCount, o.questionCount, o.error, o.renamedCount);
+  }
+
+  /// 导入题库 JSON（v1.41.2：uid / 内容签名去重）。
+  ///
+  /// 规则：
+  /// 1. 文件带题库 `uid` 且本机已有同 uid 的题库 → **跳过**（不追加、不改名）；
+  /// 2. 老文件没有 uid → 同名且题目集合完全一致（[contentSignature]）→ 跳过；
+  /// 3. 同名但内容不同 → 仍按老逻辑改成 `X(2)` 导入（这是两份不同题库）。
+  static Future<BankImportOutcome> importBankFile(String filePath,
+      {Set<String>? existingNames, int? categoryId}) async {
+    final (groups, err) = await parseJsonGroups(filePath);
+    if (groups.isEmpty) return BankImportOutcome(error: err);
     final now = DateTime.now().toIso8601String();
     final taken = existingNames ?? <String>{};
+
+    // 本机已有题库：按名字索引，供「无 uid」的内容签名兜底
+    final byName = <String, List<QuestionBank>>{};
+    for (final b in await _db.getAllBanks()) {
+      byName.putIfAbsent(b.name, () => []).add(b);
+      taken.add(b.name);
+    }
+    final sigCache = <int, String>{};
+    Future<String> signatureOf(QuestionBank bank) async {
+      final id = bank.id;
+      if (id == null) return '';
+      final cached = sigCache[id];
+      if (cached != null) return cached;
+      final qs = await _db.getQuestionsByBank(id);
+      final sig = contentSignature(bank.name, qs);
+      sigCache[id] = sig;
+      return sig;
+    }
+
     var bankCount = 0;
     var questionCount = 0;
     var renamedCount = 0;
-    for (final entry in groups.entries) {
-      var name = entry.key;
-      // v1.0.2 七项改进：同名自动改名（X(2)/X(3)...）
+    var skippedCount = 0;
+
+    for (final group in groups) {
+      final uid = group.uid?.trim();
+      final hasUid = uid != null && uid.isNotEmpty;
+
+      // 1) uid 命中：同一份题库再次导入 → 跳过
+      if (hasUid) {
+        final row = await _db.bankRowByUid(await _db.database, uid);
+        if (row != null) {
+          skippedCount++;
+          continue;
+        }
+      } else {
+        // 2) 旧文件无 uid：同名 + 内容签名一致 → 跳过
+        final sig = contentSignature(group.name, group.questions);
+        var duplicated = false;
+        for (final bank in byName[group.name] ?? const <QuestionBank>[]) {
+          if (await signatureOf(bank) == sig) {
+            duplicated = true;
+            break;
+          }
+        }
+        if (duplicated) {
+          skippedCount++;
+          continue;
+        }
+      }
+
+      var name = group.name;
+      // 同名但内容不同：保留旧的「自动改名」语义（两份不同题库）
       if (taken.contains(name)) {
         var i = 2;
         while (taken.contains('$name($i)')) {
@@ -231,21 +374,40 @@ class BankFileService {
         renamedCount++;
       }
       taken.add(name);
+
       final bankId = await _db.insertBank(QuestionBank(
         name: name,
         fileSource: 'json',
         createdAt: now,
+        uid: hasUid ? uid : null,
         categoryId: categoryId,
       ));
-      final questions = entry.value
-          .map((q) => q.copyWith(bankId: bankId))
-          .toList();
+      final questions =
+          group.questions.map((q) => q.copyWith(bankId: bankId)).toList();
       await _db.insertQuestions(questions);
       await _db.updateBankQuestionCount(bankId, questions.length);
       bankCount++;
       questionCount += questions.length;
+
+      // 同一文件里重复出现的同 uid / 同内容组也要跳过
+      final inserted = QuestionBank(
+        id: bankId,
+        name: name,
+        fileSource: 'json',
+        createdAt: now,
+        uid: hasUid ? uid : null,
+        categoryId: categoryId,
+      );
+      byName.putIfAbsent(name, () => []).add(inserted);
+      sigCache[bankId] = contentSignature(group.name, group.questions);
     }
-    return (bankCount, questionCount, null, renamedCount);
+
+    return BankImportOutcome(
+      bankCount: bankCount,
+      questionCount: questionCount,
+      renamedCount: renamedCount,
+      skippedCount: skippedCount,
+    );
   }
 
   /// 导出题库为 JSON 文件（v1.0.2 扩展：带 format 标记 + 题库名，
@@ -254,6 +416,10 @@ class BankFileService {
   static Future<String?> exportBank(int bankId, String bankName, String destPath) async {
     final questions = await _db.getQuestionsByBank(bankId);
     if (questions.isEmpty) return null;
+    // v1.41.2：导出题库 uid —— 再导入同一份文件时按 uid 跳过，避免库重复
+    final bank =
+        (await _db.getAllBanks()).where((b) => b.id == bankId).firstOrNull;
+    final bankUid = bank?.uid;
     // v12：配图随题导出（图片是题目的一部分，分享/再导入都不丢图）
     final imageMap = await _db
         .getImagesForQuestions(questions.map((q) => q.id ?? -1).toList());
@@ -282,6 +448,7 @@ class BankFileService {
     final json = const JsonEncoder.withIndent('  ').convert({
       'format': formatMarker,
       'name': bankName,
+      if (bankUid != null && bankUid.isNotEmpty) 'uid': bankUid,
       'count': list.length,
       'questions': list,
     });

@@ -27,6 +27,9 @@ class WorldImportResult {
   final String? categoryName;
   final int? categoryId;
 
+  /// 因 uid / 内容签名命中而被跳过的重复成员数（v1.41.2）
+  final int skippedCount;
+
   const WorldImportResult(
     this.world,
     this.kbCount,
@@ -35,6 +38,7 @@ class WorldImportResult {
     this.isCategoryExport = false,
     this.categoryName,
     this.categoryId,
+    this.skippedCount = 0,
   });
 }
 
@@ -294,6 +298,7 @@ class WorldService {
       var kbCount = 0;
       var bankCount = 0;
       var pluginCount = 0;
+      var skippedCount = 0;
       String? categoryName;
       int? categoryId;
 
@@ -325,11 +330,13 @@ class WorldService {
           );
           bankCount += counts.$1;
           kbCount += counts.$2;
+          skippedCount += counts.$3;
         } else {
           final counts = await _importFlatIntoCategory(
               rootId, tmp, existingNames);
           bankCount += counts.$1;
           kbCount += counts.$2;
+          skippedCount += counts.$3;
         }
       } else {
         final kbDir = Directory('${tmp.path}/kb');
@@ -337,7 +344,11 @@ class WorldService {
           await for (final e in kbDir.list()) {
             if (e is File && e.path.endsWith('.json')) {
               final r = await KbFileService.importKbFile(e.path);
-              if (r.$1 > 0) kbCount++;
+              if (r.$1 > 0) {
+                kbCount++;
+              } else if (r.$2?.contains('已跳过') == true) {
+                skippedCount++;
+              }
             }
           }
         }
@@ -346,8 +357,9 @@ class WorldService {
         if (bankDir.existsSync()) {
           await for (final e in bankDir.list()) {
             if (e is File && e.path.endsWith('.json')) {
-              final r = await BankFileService.importJsonFile(e.path);
-              if (r.$1 > 0) bankCount++;
+              final r = await BankFileService.importBankFile(e.path);
+              bankCount += r.bankCount;
+              skippedCount += r.skippedCount;
             }
           }
         }
@@ -389,6 +401,7 @@ class WorldService {
         isCategoryExport: isCategory,
         categoryName: categoryName,
         categoryId: categoryId,
+        skippedCount: skippedCount,
       );
     } finally {
       try {
@@ -408,7 +421,7 @@ class WorldService {
   }
 
   /// 递归导入分类树节点：每个节点的题库/知识库都挂到该节点分类下。
-  static Future<(int, int)> _importCategoryNode(
+  static Future<(int, int, int)> _importCategoryNode(
     Map<String, dynamic> node,
     int categoryId,
     Directory tmp,
@@ -416,6 +429,7 @@ class WorldService {
   ) async {
     var bankCount = 0;
     var kbCount = 0;
+    var skippedCount = 0;
     final bankFiles = node['banks'];
     if (bankFiles is List) {
       for (final raw in bankFiles) {
@@ -423,12 +437,13 @@ class WorldService {
         if (name.contains('..') || name.startsWith('/')) continue;
         final file = File('${tmp.path}/banks/$name');
         if (!await file.exists()) continue;
-        final r = await BankFileService.importJsonFile(
+        final r = await BankFileService.importBankFile(
           file.path,
           existingNames: existingNames,
           categoryId: categoryId,
         );
-        bankCount += r.$1;
+        bankCount += r.bankCount;
+        skippedCount += r.skippedCount;
       }
     }
     final kbFiles = node['kbs'];
@@ -442,7 +457,11 @@ class WorldService {
           file.path,
           categoryId: categoryId,
         );
-        if (r.$1 > 0) kbCount++;
+        if (r.$1 > 0) {
+          kbCount++;
+        } else if (r.$2?.contains('已跳过') == true) {
+          skippedCount++;
+        }
       }
     }
     final children = node['children'];
@@ -460,29 +479,32 @@ class WorldService {
         );
         bankCount += counts.$1;
         kbCount += counts.$2;
+        skippedCount += counts.$3;
       }
     }
-    return (bankCount, kbCount);
+    return (bankCount, kbCount, skippedCount);
   }
 
   /// 分类树缺失时的兼容路径：把包里的成员全部塞进根分类。
-  static Future<(int, int)> _importFlatIntoCategory(
+  static Future<(int, int, int)> _importFlatIntoCategory(
     int categoryId,
     Directory tmp,
     Set<String> existingNames,
   ) async {
     var bankCount = 0;
     var kbCount = 0;
+    var skippedCount = 0;
     final bankDir = Directory('${tmp.path}/banks');
     if (bankDir.existsSync()) {
       await for (final e in bankDir.list()) {
         if (e is! File || !e.path.endsWith('.json')) continue;
-        final r = await BankFileService.importJsonFile(
+        final r = await BankFileService.importBankFile(
           e.path,
           existingNames: existingNames,
           categoryId: categoryId,
         );
-        bankCount += r.$1;
+        bankCount += r.bankCount;
+        skippedCount += r.skippedCount;
       }
     }
     final kbDir = Directory('${tmp.path}/kb');
@@ -490,10 +512,14 @@ class WorldService {
       await for (final e in kbDir.list()) {
         if (e is! File || !e.path.endsWith('.json')) continue;
         final r = await KbFileService.importKbFile(e.path, categoryId: categoryId);
-        if (r.$1 > 0) kbCount++;
+        if (r.$1 > 0) {
+          kbCount++;
+        } else if (r.$2?.contains('已跳过') == true) {
+          skippedCount++;
+        }
       }
     }
-    return (bankCount, kbCount);
+    return (bankCount, kbCount, skippedCount);
   }
 
   static Map<String, dynamic> _safeJson(String raw) {

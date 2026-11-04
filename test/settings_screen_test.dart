@@ -158,8 +158,9 @@ class FakeReminderActions extends SettingsReminderActions {
 void main() {
   Future<void> showSettings(WidgetTester tester, FakeSettingsState app,
       FailingSync sync, FakeReminderActions reminder,
-      {SettingsGroup group = SettingsGroup.sync}) async {
-    tester.view.physicalSize = const Size(1000, 2200);
+      {SettingsGroup group = SettingsGroup.sync,
+      Size surface = const Size(1000, 2200)}) async {
+    tester.view.physicalSize = surface;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
@@ -184,16 +185,14 @@ void main() {
   // / 音效消失」这类串位；下面的移动端用例再验证隐藏 MinerU 后不会错位。
   const groupMarkers = <SettingsGroup, List<String>>{
     SettingsGroup.appearance: ['主题外观', '深色模式', '音效'],
-    SettingsGroup.ai: ['AI 接口配置', 'AI 回答风格', 'AI 提供方'],
+    SettingsGroup.ai: ['AI 接口配置', 'AI 回答风格', 'AI 提供方', '使用说明'],
     SettingsGroup.knowledge: ['为剩余题目打标签'],
     SettingsGroup.sync: ['局域网同步', '寒暑假模式', '提醒与复习', '插件内容同步'],
     SettingsGroup.advanced: [
       '扫描件识别增强（MinerU）',
-      '电池优化',
-      '调试日志',
-      '使用说明',
       '数据库备份',
       '网络加速',
+      '调试日志',
     ],
   };
 
@@ -331,15 +330,17 @@ void main() {
     expect(find.text('电池优化'), findsOneWidget);
     expect(find.text('网络加速'), findsOneWidget);
 
-    // 桌面端：同一套 UI，只是平台判定不同 → 卡片出现
+    // 桌面端：同一套 UI，只是平台判定不同 → MinerU 出现、电池优化（仅移动端）隐藏
     debugMobileOverride = false;
     await tester.pumpWidget(const SizedBox.shrink());
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
         group: SettingsGroup.advanced);
     expect(find.text('扫描件识别增强（MinerU）'), findsOneWidget);
+    expect(find.text('电池优化'), findsNothing,
+        reason: '电池优化只在移动端显示');
   });
 
-  testWidgets('移动端隐藏 MinerU 后分组不串位（v1.41.1 回归）', (tester) async {
+  testWidgets('移动端隐藏 MinerU 后分组不串位（v1.41.2 回归）', (tester) async {
     debugMobileOverride = true;
     addTearDown(() => debugMobileOverride = null);
     final app = FakeSettingsState();
@@ -351,9 +352,9 @@ void main() {
           reason: '${group.label} 组不应因下标错位抛异常');
     }
 
-    // 高级：能打开，网络加速/调试日志/电池优化都在
+    // 高级：能打开，电池优化（移动端）/备份/网络加速/调试日志都在
     await show(SettingsGroup.advanced);
-    for (final text in ['电池优化', '调试日志', '网络加速']) {
+    for (final text in ['电池优化', '数据库备份', '网络加速', '调试日志']) {
       expect(find.text(text), findsOneWidget, reason: '高级组缺少「$text」');
     }
     expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
@@ -365,9 +366,11 @@ void main() {
     expect(find.text('调试日志'), findsNothing,
         reason: '调试日志属于高级组，不能被挤到外观');
 
-    // AI：只剩接口 / 风格 / 提供方，标签体系移出去
+    // AI：接口 / 风格 / 提供方 / 使用说明，标签体系移出去
     await show(SettingsGroup.ai);
-    expect(find.text('AI 接口配置'), findsOneWidget);
+    for (final text in ['AI 接口配置', 'AI 回答风格', 'AI 提供方', '使用说明']) {
+      expect(find.text(text), findsOneWidget, reason: 'AI 组缺少「$text」');
+    }
     expect(find.text('为剩余题目打标签'), findsNothing,
         reason: '标签体系属于「题库与标签」，不能塞进 AI 组');
 
@@ -380,5 +383,44 @@ void main() {
     // 题库与标签：标签卡片在这里
     await show(SettingsGroup.knowledge);
     expect(find.text('为剩余题目打标签'), findsOneWidget);
+  });
+
+  testWidgets('分组渲染顺序与最终结构完全一致（桌面 / 移动）', (tester) async {
+    void expectOrder(List<String> labels) {
+      var prev = double.negativeInfinity;
+      for (final label in labels) {
+        final finder = find.text(label);
+        expect(finder, findsOneWidget, reason: '缺少「$label」');
+        final y = tester.getTopLeft(finder).dy;
+        expect(y, greaterThan(prev), reason: '「$label」的渲染顺序不对');
+        prev = y;
+      }
+    }
+
+    final app = FakeSettingsState();
+    // 窄屏（<840）走单列，才能用 y 坐标验证顺序
+    const narrow = Size(520, 4200);
+
+    // 桌面端（Windows）：MinerU 在高级组首位；电池优化不显示
+    debugMobileOverride = false;
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced, surface: narrow);
+    expectOrder(
+        ['扫描件识别增强（MinerU）', '数据库备份', '网络加速', '调试日志']);
+
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.ai, surface: narrow);
+    expectOrder(['AI 接口配置', 'AI 回答风格', 'AI 提供方', '使用说明']);
+
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.appearance, surface: narrow);
+    expectOrder(['主题外观', '深色模式', '音效']);
+
+    // 移动端：MinerU 消失，电池优化补位到高级组首位
+    debugMobileOverride = true;
+    addTearDown(() => debugMobileOverride = null);
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced, surface: narrow);
+    expectOrder(['电池优化', '数据库备份', '网络加速', '调试日志']);
   });
 }

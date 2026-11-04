@@ -54,6 +54,9 @@ void main() {
     final dest = '${tmp.path}/kb.json';
     final path = await KbFileService.exportKnowledgeBase(kbId, dest);
     expect(path, isNotNull);
+    // v1.41.2：同一份知识库再次导入会按 uid/内容签名跳过；
+    // 这里先删原库，验证的仍是「导出 → 导入」的往返完整性。
+    await db.deleteKnowledgeBase(kbId);
 
     // 导入到同一库（知识库 id 会新分配）
     final (importedId, err) = await KbFileService.importKbFile(dest);

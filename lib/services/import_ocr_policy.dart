@@ -58,6 +58,9 @@ class ImportOcrPolicy {
   /// 移动端：MinerU 不适用，走端上 OCR / 视觉切题
   static const String mobileFallback = '移动端不支持 MinerU，已改走端上 OCR / 视觉切题';
 
+  /// 非 Windows 桌面端（Mac/Linux）：MinerU 不作为支持平台
+  static const String platformUnsupported = '当前平台不支持 MinerU，已改走本地 OCR / 视觉切题';
+
   // ======================== 判定 ========================
 
   /// 抽样结果是否说明「这是扫描件/图片字 PDF」。
@@ -77,15 +80,15 @@ class ImportOcrPolicy {
 
   /// 是否该调用 MinerU。
   ///
-  /// 三个条件缺一不可：**桌面端**（移动端强制走离线 OCR/视觉）、
-  /// **用户已开启**（上传第三方服务需要明确同意）、**判定为扫描件**
-  /// （电子版绝不白跑一趟 OCR）。
+  /// 三个条件缺一不可：**Windows 桌面端**（`Platform.isWindows`；移动端/
+  /// 其他桌面端强制走离线 OCR/视觉）、**用户已开启**（上传第三方服务需要
+  /// 明确同意）、**判定为扫描件**（电子版绝不白跑一趟 OCR）。
   static bool shouldUseMineru({
-    required bool isMobile,
+    required bool isWindows,
     required bool enabled,
     required bool needsOcr,
   }) =>
-      !isMobile && enabled && needsOcr;
+      isWindows && enabled && needsOcr;
 
   /// 文本是否达到「可切题」的字数
   static bool isUsableText(String text) =>

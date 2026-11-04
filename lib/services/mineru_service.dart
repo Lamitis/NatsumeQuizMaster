@@ -80,14 +80,17 @@ class MineruService {
   /// [onPageProgress] 在服务端返回 `extract_progress` 时给出页码（用于
   /// 「正在使用 MinerU 识别第 X/Y 页版面…」）。
   ///
-  /// **移动端硬门禁**：MinerU 的版面模型在手机上不可用/极慢，这里在任何
-  /// 网络与数据库访问之前直接返回 null（设置页已隐藏，这里是第二道保险）。
+  /// **平台硬门禁**：MinerU 只支持 Windows 桌面端（`Platform.isWindows`）。
+  /// 移动端与其他桌面端在这里、在任何网络与数据库访问之前直接返回 null
+  /// （设置页已隐藏，这里是第二道保险）。
   Future<MineruResult?> parseFile(String path,
       {void Function(String status)? onStatus,
       void Function(int done, int total)? onPageProgress}) async {
-    if (isMobilePlatform) {
-      onStatus?.call(ImportOcrPolicy.mobileFallback);
-      DebugLogService.instance.log('MINERU', '移动端跳过 MinerU（不适用）');
+    if (!isWindowsPlatform) {
+      onStatus?.call(isMobilePlatform
+          ? ImportOcrPolicy.mobileFallback
+          : ImportOcrPolicy.platformUnsupported);
+      DebugLogService.instance.log('MINERU', '非 Windows 平台跳过 MinerU（不适用）');
       return null;
     }
     if (!await isEnabled()) return null;

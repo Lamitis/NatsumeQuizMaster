@@ -47,32 +47,32 @@ void main() {
     });
   });
 
-  group('MinerU 触发条件', () {
-    test('桌面端 + 已开启 + 扫描件 → 触发', () {
+  group('MinerU 触发条件（仅 Windows 桌面端）', () {
+    test('Windows + 已开启 + 扫描件 → 触发', () {
       expect(
           ImportOcrPolicy.shouldUseMineru(
-              isMobile: false, enabled: true, needsOcr: true),
+              isWindows: true, enabled: true, needsOcr: true),
           isTrue);
     });
 
     test('移动端 → 永不触发（即使开启且是扫描件）', () {
       expect(
           ImportOcrPolicy.shouldUseMineru(
-              isMobile: true, enabled: true, needsOcr: true),
+              isWindows: false, enabled: true, needsOcr: true),
           isFalse);
     });
 
-    test('桌面端但用户未开启 → 不触发（上传第三方需明确同意）', () {
+    test('Windows 但用户未开启 → 不触发（上传第三方需明确同意）', () {
       expect(
           ImportOcrPolicy.shouldUseMineru(
-              isMobile: false, enabled: false, needsOcr: true),
+              isWindows: true, enabled: false, needsOcr: true),
           isFalse);
     });
 
     test('电子版文字层正常 → 不触发（不再傻跑一遍 OCR）', () {
       expect(
           ImportOcrPolicy.shouldUseMineru(
-              isMobile: false, enabled: true, needsOcr: false),
+              isWindows: true, enabled: true, needsOcr: false),
           isFalse);
     });
   });

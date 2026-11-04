@@ -394,11 +394,19 @@ class WorldOverviewScreenState extends State<WorldOverviewScreen> {
       // 否则首页、开始页、题库管理仍显示导入前的数据，只能重启才能看到。
       await appState.refreshAllDataAfterImport();
       if (!mounted) return;
-      final message = r.isCategoryExport
-          ? '已成功导入分类【${r.categoryName ?? r.world.name}】，'
-              '包含 ${r.bankCount} 个题库'
-              '${r.kbCount > 0 ? '、${r.kbCount} 个知识库' : ''}'
-          : '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}';
+      // v1.41.2：重复成员（uid/内容命中）不会再次入库，提示里明说跳过数量，
+      // 避免「更新后再导入 → 题库翻倍」的误解。
+      final skippedNote =
+          r.skippedCount > 0 ? '（已跳过 ${r.skippedCount} 项重复内容）' : '';
+      final nothingNew =
+          r.bankCount == 0 && r.kbCount == 0 && r.pluginCount == 0;
+      final message = nothingNew
+          ? '「${r.world.name}」已存在，未重复导入$skippedNote'
+          : r.isCategoryExport
+              ? '已成功导入分类【${r.categoryName ?? r.world.name}】，'
+                  '包含 ${r.bankCount} 个题库'
+                  '${r.kbCount > 0 ? '、${r.kbCount} 个知识库' : ''}$skippedNote'
+              : '已导入世界「${r.world.name}」：知识库 ${r.kbCount}、题库 ${r.bankCount}、插件 ${r.pluginCount}$skippedNote';
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(message)));
       await _reload();

@@ -287,7 +287,7 @@ class _ImportScreenState extends State<ImportScreen> {
                       Expanded(
                         child: Text(
                           '支持 DOCX / PDF / JSON。DOCX/PDF 解析后先预览题目，可编辑、删除后再确认入库；PDF 自动抽图，插图随题保留。\n旧版 .doc 文件请先用 Word 另存为 .docx。'
-                          '${isDesktopPlatform ? "\n扫描版 PDF 也能导入：桌面端会先检测文字层，扫描件自动用 MinerU 版面识别（可在设置里允许/关闭）。" : "\n扫描版 PDF 也能导入：移动端使用端上 OCR / 视觉切题，无需额外设置。"}',
+                          '${isWindowsPlatform ? "\n扫描版 PDF 也能导入：Windows 桌面端会先检测文字层，扫描件自动用 MinerU 版面识别（可在设置里允许/关闭）。" : "\n扫描版 PDF 也能导入：手机端使用端上 OCR / 视觉切题，无需额外设置。"}',
                           style: NatsumeType.captionStyle
                               .copyWith(color: ac.textSecondary, height: 1.6),
                         ),
@@ -399,8 +399,8 @@ class _ImportScreenState extends State<ImportScreen> {
 
                 // 已选文件（v1.27：随整页滚动，不再被压在 Expanded 小区域）
                 if (_selectedFiles.isNotEmpty) ...[
-                  // v1.41：MinerU 仅在桌面端存在；移动端完全隐藏相关提示
-                  if (isDesktopPlatform && _selectedFiles.any(_isAiDoc)) ...[
+                  // v1.41.2：MinerU 仅在 Windows 桌面端存在；手机端完全隐藏相关提示
+                  if (isWindowsPlatform && _selectedFiles.any(_isAiDoc)) ...[
                     NatsumeSurface(
                       tone: NatsumeTone.alt,
                       padding: const EdgeInsets.all(NatsumeSpace.sm),

@@ -69,7 +69,9 @@ enum SettingsGroup {
         SettingsGroup.appearance => '主题、深色模式、音效',
         SettingsGroup.knowledge => '知识点体系、打标签、重导',
         SettingsGroup.sync => '局域网、假期、每日提醒',
-        SettingsGroup.advanced => 'MinerU、网络加速、日志、说明',
+        SettingsGroup.advanced => isWindowsPlatform
+            ? 'MinerU、电池优化、备份、网络加速、日志'
+            : '电池优化、备份、网络加速、日志',
       };
 
   /// 组在「全部设置」里的先后（越小越靠前）。
@@ -1080,7 +1082,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                 _spec(SettingsGroup.advanced, 10,
                     // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
                 // 连开关、Token 与署名提示一起隐藏（导入侧还有运行时门禁兜底）。
-                isDesktopPlatform ?
+                isWindowsPlatform ?
                   _SettingsCard(
                   bordered: true,
                   child: Column(
@@ -1174,7 +1176,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 keywordHighlight: _keywordHighlight,
                                 // 移动端隐藏了开关：绝不把 MinerU 写回开启态
                                 mineruEnabled:
-                                    isDesktopPlatform && _mineruEnabled,
+                                    isWindowsPlatform && _mineruEnabled,
                                 mineruToken:
                                     _mineruTokenController.text.trim(),
                               );
@@ -2080,6 +2082,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                     // v1.0.2 设计审查修复（简化保活）：移除无障碍保活
                 // （过度保活 + 商店合规风险），保留电池优化豁免
                 // （前台提醒服务不被系统激进清理）
+                // v1.41.2：仅移动端显示（桌面端没有电池优化豁免概念）
+                isMobilePlatform ?
                 _SettingsCard(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2150,7 +2154,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                       ),
                     ],
                   ),
-                )),
+                ) : const SizedBox.shrink()),
                 _spec(SettingsGroup.advanced, 20,
                     const SizedBox(height: 16)),
                 _spec(SettingsGroup.appearance, 10,
@@ -2245,7 +2249,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                 )),
                 _spec(SettingsGroup.appearance, 21,
                     const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 30,
+                _spec(SettingsGroup.advanced, 45,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 50,
                     // 调试日志
                 // （v1.0.2 UI 审查：星际穿越等主题下卡片与页面背景对比微弱，
                 //   bordered 加一圈细边框分隔；底色走 _SettingsCard 的 Material，
@@ -2413,9 +2419,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ],
                   ),
                 )),
-                _spec(SettingsGroup.advanced, 30,
+                _spec(SettingsGroup.advanced, 50,
                     const SizedBox(height: 24)),
-                _spec(SettingsGroup.advanced, 40,
+                _spec(SettingsGroup.ai, 35,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.ai, 40,
                     // 使用说明
                 _SettingsCard(
                   child: Column(
@@ -2457,7 +2465,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ],
                   ),
                 )),
-                _spec(SettingsGroup.advanced, 50,
+                _spec(SettingsGroup.ai, 45,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 30,
                     // 数据库备份（不放开发者选项——整库备份/恢复是常规数据管理能力）
                 _SettingsCard(
                   child: Column(
@@ -2590,7 +2600,9 @@ class _SettingsScreenState extends State<SettingsScreen>
                     ],
                   ),
                 )),
-                _spec(SettingsGroup.advanced, 60,
+                _spec(SettingsGroup.advanced, 35,
+                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 40,
                     // v1.36 网络加速：插件表 / 插件包的多源回退
                 _networkAccelCard(ac))
               ];

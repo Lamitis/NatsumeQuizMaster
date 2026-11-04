@@ -326,6 +326,10 @@ void main() {
     expect(byTitle['填空题B']!.questionType, 'fill_blank');
     expect(byTitle['填空题B']!.knowledgePoint, '血液学检验');
 
+    // v1.41.2：同一份题库再次导入会按 uid/内容签名跳过；
+    // 先删原库，验证的仍是「导出 → 导入」的往返完整性。
+    await db.deleteBank(bankId);
+
     // 导入入库闭环：导出文件直接导入为可用题库
     final (bankCount, questionCount, importErr, renamed) =
         await BankFileService.importJsonFile(exported);

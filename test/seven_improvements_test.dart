@@ -116,10 +116,11 @@ void main() {
     expect(await db.getSessionById(sessionWithId.id!), isNull);
   });
 
-  test('同名题库自动改名：existingNames 冲突加后缀 + ensureUniqueBankName', () async {
+  test('重复导入去重：同一题库跳过；同名不同内容才改名', () async {
     final db = DatabaseService.instance;
     final dir = Directory.systemTemp.createTempSync('seven_dup');
-    final path = '${dir.path}/dup_${DateTime.now().millisecondsSinceEpoch}.json';
+    final stamp = DateTime.now().millisecondsSinceEpoch;
+    final path = '${dir.path}/dup_$stamp.json';
     await File(path).writeAsString(
         '{"format":"natsume-quiz-questions","name":"临床检验","count":1,'
         '"questions":[{"title":"q1","correct_answer":"A"}]}');
@@ -128,12 +129,28 @@ void main() {
     expect(err1, isNull);
     expect(renamed1, 0);
     expect(banks1, 1);
-    // 再次导入同名：传入已存在集合 → 自动改名
-    final (banks2, _, err2, renamed2) =
-        await BankFileService.importJsonFile(path, existingNames: {'临床检验'});
+
+    // v1.41.2：同一份文件再次导入 → 同名 + 内容签名一致，直接跳过
+    final (banks2, questions2, err2, renamed2) = await BankFileService
+        .importJsonFile(path, existingNames: {'临床检验'});
     expect(err2, isNull);
-    expect(renamed2, 1);
-    final names = (await db.getAllBanks()).map((b) => b.name).toSet();
+    expect(banks2, 0, reason: '重复导入不应再建题库');
+    expect(questions2, 0);
+    expect(renamed2, 0);
+    var names = (await db.getAllBanks()).map((b) => b.name).toSet();
+    expect(names, {'临床检验'});
+
+    // 同名但题目不同 → 是另一份题库，保留改名语义
+    final path2 = '${dir.path}/dup2_$stamp.json';
+    await File(path2).writeAsString(
+        '{"format":"natsume-quiz-questions","name":"临床检验","count":1,'
+        '"questions":[{"title":"q2-不同题","correct_answer":"B"}]}');
+    final (banks3, _, err3, renamed3) =
+        await BankFileService.importJsonFile(path2);
+    expect(err3, isNull);
+    expect(banks3, 1);
+    expect(renamed3, 1);
+    names = (await db.getAllBanks()).map((b) => b.name).toSet();
     expect(names, containsAll({'临床检验', '临床检验(2)'}));
 
     // ensureUniqueBankName 连续冲突加后缀
