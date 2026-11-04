@@ -26,14 +26,21 @@ bool get isDesktopPlatform => !kIsWeb && !isMobilePlatform;
 /// 当前是否 Windows（MinerU 版面识别唯一支持的平台）。
 ///
 /// 需求指定用 `Platform.isWindows` 判定：Android/iOS 必须隐藏 MinerU；
-/// 测试里 [debugMobileOverride] 为 true 时统一按「非 Windows」处理。
+/// 测试可用 [debugWindowsOverride] 模拟 Windows / 非 Windows 宿主，
+/// [debugMobileOverride] 为 true 时也按非 Windows 处理（移动端看不到 MinerU）。
 bool get isWindowsPlatform {
+  final override = debugWindowsOverride;
+  if (override != null) return override;
   if (kIsWeb) return false;
-  final override = debugMobileOverride;
-  if (override != null) return !override;
+  if (debugMobileOverride == true) return false;
   return Platform.isWindows;
 }
 
 /// 测试注入点：null = 按真实平台判断。
 @visibleForTesting
 bool? debugMobileOverride;
+
+/// 测试注入点：模拟 Windows / 非 Windows 宿主（CI 在 Ubuntu 上跑，
+/// 专门用来验证「非 Windows 不显示 MinerU」这条契约）。
+@visibleForTesting
+bool? debugWindowsOverride;

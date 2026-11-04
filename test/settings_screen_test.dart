@@ -183,13 +183,16 @@ void main() {
   // v1.41.1：分组不再用「sections 下标表」，而是每个区块自带 group/order。
   // 这里给每组钉标志性标题，防止再次出现「调试日志跑到外观 / 网络加速跑到同步
   // / 音效消失」这类串位；下面的移动端用例再验证隐藏 MinerU 后不会错位。
-  const groupMarkers = <SettingsGroup, List<String>>{
+  // CI 在 Ubuntu 上跑：高级组是否包含 MinerU 取决于宿主是否 Windows。
+  // 不写死「有 MinerU」，否则 Linux CI 必然红（这正是上一次 CI 失败的原因）。
+  final hostIsWindows = isWindowsPlatform;
+  final groupMarkers = <SettingsGroup, List<String>>{
     SettingsGroup.appearance: ['主题外观', '深色模式', '音效'],
     SettingsGroup.ai: ['AI 接口配置', 'AI 回答风格', 'AI 提供方', '使用说明'],
     SettingsGroup.knowledge: ['为剩余题目打标签'],
     SettingsGroup.sync: ['局域网同步', '寒暑假模式', '提醒与复习', '插件内容同步'],
     SettingsGroup.advanced: [
-      '扫描件识别增强（MinerU）',
+      if (hostIsWindows) '扫描件识别增强（MinerU）',
       '数据库备份',
       '网络加速',
       '调试日志',
@@ -314,12 +317,17 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('移动端：高级组隐藏 MinerU；桌面端在高级组显示（不串位）',
+  testWidgets('MinerU 显隐：移动端隐藏 / Windows 显示 / 非 Windows 隐藏',
       (tester) async {
-    debugMobileOverride = true;
-    addTearDown(() => debugMobileOverride = null);
+    addTearDown(() {
+      debugMobileOverride = null;
+      debugWindowsOverride = null;
+    });
     final app = FakeSettingsState();
 
+    // ① 移动端：必须完全隐藏
+    debugMobileOverride = true;
+    debugWindowsOverride = null;
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
         group: SettingsGroup.advanced);
     expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
@@ -330,14 +338,36 @@ void main() {
     expect(find.text('电池优化'), findsOneWidget);
     expect(find.text('网络加速'), findsOneWidget);
 
-    // 桌面端：同一套 UI，只是平台判定不同 → MinerU 出现、电池优化（仅移动端）隐藏
-    debugMobileOverride = false;
+    // ② Windows 桌面端：显式模拟，保证在 Ubuntu CI 上也能断言
+    debugMobileOverride = null;
+    debugWindowsOverride = true;
     await tester.pumpWidget(const SizedBox.shrink());
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
         group: SettingsGroup.advanced);
     expect(find.text('扫描件识别增强（MinerU）'), findsOneWidget);
     expect(find.text('电池优化'), findsNothing,
         reason: '电池优化只在移动端显示');
+
+    // ③ 非 Windows 桌面端（Ubuntu CI 的真实宿主）：MinerU 也必须隐藏
+    debugWindowsOverride = false;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced);
+    expect(find.text('扫描件识别增强（MinerU）'), findsNothing,
+        reason: '非 Windows 平台不提供 MinerU');
+    expect(find.text('数据库备份'), findsOneWidget);
+    expect(find.text('电池优化'), findsNothing,
+        reason: '电池优化只在移动端显示');
+
+    // ④ 真实宿主分支（不加 override）：按宿主平台断言，Windows/Ubuntu 都过
+    debugWindowsOverride = null;
+    debugMobileOverride = null;
+    final hostWindows = isWindowsPlatform;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced);
+    expect(find.text('扫描件识别增强（MinerU）'),
+        hostWindows ? findsOneWidget : findsNothing);
   });
 
   testWidgets('移动端隐藏 MinerU 后分组不串位（v1.41.2 回归）', (tester) async {
@@ -400,9 +430,14 @@ void main() {
     final app = FakeSettingsState();
     // 窄屏（<840）走单列，才能用 y 坐标验证顺序
     const narrow = Size(520, 4200);
+    addTearDown(() {
+      debugMobileOverride = null;
+      debugWindowsOverride = null;
+    });
 
-    // 桌面端（Windows）：MinerU 在高级组首位；电池优化不显示
-    debugMobileOverride = false;
+    // ① Windows 桌面端：MinerU 首位；电池优化不显示
+    debugWindowsOverride = true;
+    debugMobileOverride = null;
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
         group: SettingsGroup.advanced, surface: narrow);
     expectOrder(
@@ -416,9 +451,18 @@ void main() {
         group: SettingsGroup.appearance, surface: narrow);
     expectOrder(['主题外观', '深色模式', '音效']);
 
-    // 移动端：MinerU 消失，电池优化补位到高级组首位
+    // ② 非 Windows 桌面端（Ubuntu CI 的真实宿主）：MinerU 不出现，其余顺序不变
+    debugWindowsOverride = false;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await showSettings(tester, app, FailingSync(), FakeReminderActions(),
+        group: SettingsGroup.advanced, surface: narrow);
+    expect(find.text('扫描件识别增强（MinerU）'), findsNothing);
+    expectOrder(['数据库备份', '网络加速', '调试日志']);
+
+    // ③ 移动端：MinerU 消失，电池优化补位到高级组首位
+    debugWindowsOverride = null;
     debugMobileOverride = true;
-    addTearDown(() => debugMobileOverride = null);
+    await tester.pumpWidget(const SizedBox.shrink());
     await showSettings(tester, app, FailingSync(), FakeReminderActions(),
         group: SettingsGroup.advanced, surface: narrow);
     expectOrder(['电池优化', '数据库备份', '网络加速', '调试日志']);
