@@ -14,6 +14,18 @@
 
 ---
 
+## [1.41.3] - 2026-11-03
+
+修复 Ubuntu CI / Release 流水线里设置页测试的误报（业务代码无改动），并补一个测试专用的平台开关，保证 v1.41.2 的最终设置结构在任何宿主上都能被正确断言。
+
+### 修复
+- 设置页测试不再把「高级组含 MinerU」写死：按宿主 `isWindowsPlatform` 生成期望区块，Ubuntu 上只断言 `数据库备份 → 网络加速 → 调试日志`，Windows 上才追加 MinerU。
+- MinerU 显隐用例覆盖移动端隐藏 / Windows 显示 / 非 Windows 隐藏三条路径，真实宿主分支再按 `isWindowsPlatform` 断言。
+- 分组渲染顺序用例补非 Windows 桌面分支与移动端分支（`电池优化 → 数据库备份 → 网络加速 → 调试日志`），高级组仍不含使用说明、标签体系、API 配置。
+
+### 重构
+- 新增 `debugWindowsOverride`（`@visibleForTesting`），与 `debugMobileOverride` 解耦：测试可在任意宿主上显式模拟 Windows / 非 Windows，不再靠「移动端开关为 false」推断桌面端。
+
 ## [1.41.2] - 2026-11-03
 
 按最终结构重排设置页（外观 / AI 接口 / 题库与标签 / 同步与提醒 / 高级），并修复「更新后题库、知识库重复出现一份」：导入链路改为 uid / 内容签名去重。
