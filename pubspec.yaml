@@ -48,7 +48,7 @@ dependencies:
   # · flutter_highlight：基于 highlight.js 语法的代码着色，支持自动识别语言。
   flutter_math_fork: ^0.7.4
   flutter_highlight: ^0.7.0
-  audioplayers: ^6.1.0
+  audioplayers: ^6.8.1
   # 插件详情页的 Giscus 评论区（v1.36）。只有 Android / iOS 有官方实现，
   # 桌面端（Windows / Linux）拿不到 WebViewPlatform，详情页会退化成
   # 「前往 GitHub 讨论区」按钮（见 lib/widgets/plugin_discussion.dart）。
