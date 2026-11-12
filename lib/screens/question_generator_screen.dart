@@ -74,21 +74,39 @@ class _QuestionGeneratorScreenState extends State<QuestionGeneratorScreen> {
 
     final sandbox = await _sandboxDir();
     final agent = GeneratorAgent(aiService: ai, kbService: _kb);
-    final result = await agent.generate(
-      kbId: _kbId!,
-      targetCount: _targetCount,
-      bankName: _nameController.text.trim().isEmpty
-          ? 'AI 生成题库'
-          : _nameController.text.trim(),
-      sandboxDir: sandbox,
-      onLog: (m) {
-        if (mounted) setState(() => _log.add(m));
-      },
-    );
+    GeneratorResult result;
+    try {
+      result = await agent.generate(
+        kbId: _kbId!,
+        targetCount: _targetCount,
+        bankName: _nameController.text.trim().isEmpty
+            ? 'AI 生成题库'
+            : _nameController.text.trim(),
+        sandboxDir: sandbox,
+        onLog: (m) {
+          if (mounted) setState(() => _log.add(m));
+        },
+      );
+    } catch (e) {
+      // 兜底：工具执行/JSON 解析再出意外也不让整次生成炸掉，给可操作的提示
+      if (!mounted) return;
+      setState(() {
+        _running = false;
+        _log.add('生成失败：$e');
+      });
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('AI 出题遇到格式问题，请缩短知识库范围或减少题目数量后重试'),
+        duration: Duration(seconds: 5),
+      ));
+      return;
+    }
 
     var imported = 0;
+    var skipped = 0;
     if (result.bankFilePath != null && result.questionCount > 0) {
-      imported = await _importResult(result.bankFilePath!, appState);
+      final outcome = await _importResult(result.bankFilePath!, appState);
+      imported = outcome.imported;
+      skipped = outcome.skipped;
       if (mounted && imported > 0) {
         setState(() => _log
             .add('题库文件：${ExportStorage.folderOf(result.bankFilePath!)}'));
@@ -97,10 +115,20 @@ class _QuestionGeneratorScreenState extends State<QuestionGeneratorScreen> {
 
     if (!mounted) return;
     setState(() => _running = false);
-    final msg = imported > 0
-        ? '已生成并导入 $imported 道题'
-        : '未生成出有效题目（可查看过程日志）';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    final String msg;
+    if (imported > 0) {
+      msg = '已生成并导入 $imported 道题';
+    } else if (skipped > 0) {
+      // 内容与已有题库完全一致：这不是故障，别报「格式错误」吓用户
+      msg = '题库内容与已有题库重复，已跳过导入';
+    } else {
+      final reason = result.failureReason ?? '未生成出有效题目';
+      msg = '$reason\n请缩短知识库范围或减少题目数量后重试（过程日志里可看到每次工具调用）';
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      duration: const Duration(seconds: 6),
+    ));
   }
 
   /// 出题沙箱目录：落在用户可见的「导出目录/AI生成题库/<时间戳>」下。
@@ -126,7 +154,10 @@ class _QuestionGeneratorScreenState extends State<QuestionGeneratorScreen> {
   /// 落库后必须回调 [AppState.refreshBanks]：这条路径绕过 AppState 的导入
   /// 流程直接写库，不刷新的话题库管理页/开始页仍是旧列表——真机反馈的
   /// 「AI 生成完题库但列表里没有，要手动刷新」就是这个。
-  Future<int> _importResult(String path, AppState appState) async {
+  /// 返回 (导入题数, 因内容重复被跳过的题库数)（v1.41.4）：后者用于把
+  /// 「内容与已有题库一致」和「真的一道题都没生成」区分开。
+  Future<({int imported, int skipped})> _importResult(
+      String path, AppState appState) async {
     File? tmp;
     try {
       final raw = await File(path).readAsString();
@@ -134,7 +165,9 @@ class _QuestionGeneratorScreenState extends State<QuestionGeneratorScreen> {
       final questions = data is Map
           ? (data['questions'] ?? const [])
           : (data is List ? data : const []);
-      if (questions is! List || questions.isEmpty) return 0;
+      if (questions is! List || questions.isEmpty) {
+        return (imported: 0, skipped: 0);
+      }
       tmp = File('$path.import.json');
       await tmp.writeAsString(jsonEncode({
         'format': BankFileService.formatMarker,
@@ -143,13 +176,13 @@ class _QuestionGeneratorScreenState extends State<QuestionGeneratorScreen> {
             : _nameController.text.trim(),
         'questions': questions,
       }));
-      // 同名题库自动加后缀，避免反复生成堆出多个「AI 生成题库」
-      final result = await BankFileService.importJsonFile(tmp.path,
+      // 同名自动加后缀；内容完全一致的题库会被去重跳过（不再堆出重复题库）
+      final outcome = await BankFileService.importBankFile(tmp.path,
           existingNames: appState.banks.map((b) => b.name).toSet());
-      if (result.$2 > 0) await appState.refreshBanks();
-      return result.$2;
+      if (outcome.bankCount > 0) await appState.refreshBanks();
+      return (imported: outcome.questionCount, skipped: outcome.skippedCount);
     } catch (_) {
-      return 0;
+      return (imported: 0, skipped: 0);
     } finally {
       // 包装文件只是导入用的临时中转，导入即删；questions.json 本体保留
       try {

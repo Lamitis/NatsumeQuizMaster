@@ -1128,13 +1128,33 @@ class DatabaseService {
 
   // ======================== QuestionBank CRUD ========================
 
+  /// 新建题库。
+  ///
+  /// v1.41.4：**按 uid 幂等**。`question_banks.uid` 上有唯一索引
+  /// （见 `_createSyncIndexes`），以前这里直接 insert：同一 uid 再写一次会抛
+  /// `UNIQUE constraint failed`；而调用方「先查后插」在重试/并发下也会漏。
+  /// 现在改成「先查 → 回查 → INSERT OR IGNORE」三步：同一份题库重复写入只
+  /// 返回已有 id，库里不会多出一行（覆盖安装后题库凭空多一份就是这么来的）。
   Future<int> insertBank(QuestionBank bank) async {
     final db = await database;
     final map = bank.toMap();
     // v11 同步：新题库自动分配全局 uid（跨设备一致标识）
     map['uid'] ??= const Uuid().v4();
     map['updated_at'] ??= bank.createdAt;
-    return await db.insert('question_banks', map);
+    final uid = (map['uid'] as String?)?.trim();
+    if (uid == null || uid.isEmpty) {
+      return await db.insert('question_banks', map);
+    }
+    final existing = await bankRowByUid(db, uid);
+    if (existing != null) return existing['id'] as int;
+    final inserted = await db.insert(
+      'question_banks',
+      map,
+      // 唯一索引兜底：并发/重入时同一 uid 只会落一行
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    final row = await bankRowByUid(db, uid);
+    return row != null ? row['id'] as int : inserted;
   }
 
   Future<List<QuestionBank>> getAllBanks() async {
@@ -3497,12 +3517,30 @@ class DatabaseService {
 
   // ======================== 知识库 CRUD（v13） ========================
 
+  /// 新建知识库。
+  ///
+  /// 与 [insertBank] 同一套幂等语义（v1.41.4）：`knowledge_bases.uid` 上有
+  /// 唯一索引，同一份知识库重复写入只返回已有 id，不会多出一行。
   Future<int> insertKnowledgeBase(KnowledgeBase kb) async {
     final db = await database;
     final map = kb.toMap();
     map['uid'] ??= const Uuid().v4();
     map['updated_at'] ??= kb.createdAt;
-    return await db.insert('knowledge_bases', map);
+    final uid = (map['uid'] as String?)?.trim();
+    if (uid == null || uid.isEmpty) {
+      return await db.insert('knowledge_bases', map);
+    }
+    final rows = await db.query('knowledge_bases',
+        columns: ['id'], where: 'uid = ?', whereArgs: [uid], limit: 1);
+    if (rows.isNotEmpty) return rows.first['id'] as int;
+    final inserted = await db.insert(
+      'knowledge_bases',
+      map,
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+    final again = await db.query('knowledge_bases',
+        columns: ['id'], where: 'uid = ?', whereArgs: [uid], limit: 1);
+    return again.isNotEmpty ? again.first['id'] as int : inserted;
   }
 
   Future<List<KnowledgeBase>> getAllKnowledgeBases() async {

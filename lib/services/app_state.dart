@@ -731,6 +731,32 @@ class AppState extends ChangeNotifier {
     return ('$base($i)', true);
   }
 
+  /// 「内容完全相同」查重（v1.41.4）。
+  ///
+  /// 只看题目内容（题干/选项/答案/解析/题型），**不看题库名**：重复导入/重复
+  /// 确认的题库会被自动改名成 `X(2)`，带名字比对永远对不上，于是每来一次就
+  /// 多一份 `X(3)`、`X(4)`……这正是「更新或重启后题库又莫名其妙多一份」。
+  ///
+  /// 返回命中的已有题库（没有则 null）。
+  Future<QuestionBank?> findDuplicateBank(
+      String baseName, List<Question> questions) async {
+    if (questions.isEmpty) return null;
+    final sig = BankFileService.questionsSignature(questions);
+    for (final bank in await _db.getAllBanks()) {
+      final id = bank.id;
+      if (id == null) continue;
+      // 便宜的预筛：内容一致 ⇒ 题目数必然相同；同族的题库（`X` / `X(n)`）
+      // 则不靠题目数，交给内容签名判定
+      if (!BankFileService.isSameBankFamily(bank.name, baseName) &&
+          bank.questionCount != questions.length) {
+        continue;
+      }
+      final existing = await _db.getQuestionsByBank(id);
+      if (BankFileService.questionsSignature(existing) == sig) return bank;
+    }
+    return null;
+  }
+
   /// 确认导入：将预览题目保存到数据库
   Future<void> confirmImport({Set<int> excludedIndices = const {}}) async {
     // 只筛选本次写入的快照，不修改预览；失败时编辑和删除墓碑仍可重试。
@@ -739,6 +765,19 @@ class AppState extends ChangeNotifier {
         if (!excludedIndices.contains(i)) _previewQuestions[i],
     ];
     if (selected.isEmpty) throw StateError('请至少保留一道题目');
+
+    // v1.41.4：先按内容查重。同一份文档重复确认（连点「导入」、重试、覆盖
+    // 安装后又导入一遍）不再生成 `X(2)`。
+    final duplicate = await findDuplicateBank(_previewBankName, selected);
+    if (duplicate != null) {
+      final remaining = _previewQueue.length;
+      promoteNextPreview();
+      await _loadBanks();
+      _importStatus = '题库「${duplicate.name}」已有完全相同的内容，已跳过重复导入'
+          '${remaining > 0 ? '（还有 $remaining 份待预览）' : ''}';
+      notifyListeners();
+      return;
+    }
 
     final now = DateTime.now().toIso8601String();
     // v1.0.2 七项改进：重名自动加后缀，杜绝同一文档重复导入产生重复题库
@@ -787,6 +826,20 @@ class AppState extends ChangeNotifier {
   /// 新用户/演示场景快速体验刷题。重名自动加后缀，返回导入题数。
   Future<int> importSampleBank() async {
     final now = DateTime.now().toIso8601String();
+    // v1.41.4：示例题库只能有一份。以前每次点「导入示例题库」都会新建一份
+    // `示例题库·医学基础速练(2)/(3)`，重启后用户会以为题库凭空多了一份。
+    final sample = sampleQuestions(bankId: 0, createdAt: now);
+    final duplicate = await findDuplicateBank(sampleBankName, sample);
+    if (duplicate != null) {
+      if (_selectedBankIds.isEmpty && duplicate.id != null) {
+        _selectedBankIds.add(duplicate.id!);
+      }
+      _importStatus = '示例题库已存在，无需重复导入';
+      await _loadBanks();
+      notifyListeners();
+      await bumpStatsRevision();
+      return duplicate.questionCount;
+    }
     final (uniqueName, _) = await ensureUniqueBankName(sampleBankName);
     final bankId = await _db.insertBank(QuestionBank(
       name: uniqueName,

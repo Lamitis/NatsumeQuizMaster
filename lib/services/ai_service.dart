@@ -789,6 +789,13 @@ $kpRule
     return null;
   }
 
+  /// 供工具调用（出题 Agent）抢修被截断 JSON 的公开入口。
+  ///
+  /// [repairTruncatedJson] 只服务解析路径且标了 `visibleForTesting`，跨库引用
+  /// 会触发 lint；这里在同一个库里包一层，语义完全一致。
+  static Map<String, dynamic>? repairJsonPayload(String content) =>
+      repairTruncatedJson(content);
+
   String _detectType(Map q) {
     // 优先使用 AI 返回的 question_type
     final aiType = q['question_type']?.toString() ?? '';

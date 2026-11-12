@@ -14,6 +14,28 @@
 
 ---
 
+## [1.41.4] - 2026-11-04
+
+修三件事：题库「又重复了一份」的去重漏洞（内容签名不再看题库名 + 写入按 uid 幂等）、知识库自动出题时 AI 传空 JSON 直接失败、知识库只能整分类导出（新增自由勾选打一个 `.natsume-kb` 包）。
+
+### 修复
+- 重复导入根因：`contentSignature` 把题库名算进签名，而重复导入的题库会被自动改名成 `X(2)` 甚至被手动改名，于是每次再导都多一份 `X(3)`、`X(4)`。新增 `questionsSignature`（只看题干/选项/答案/解析/题型），去重按「题库族 `X` / `X(n)`」比对内容，改名过的旧副本也能认出来。
+- 内容查重不再只服务于「无 uid 的旧文件」：uid 没命中时同样走内容比对（先以老格式导入过、之后又拿到带 uid 的新文件，过去会再建一份）。
+- `DatabaseService.insertBank` / `insertKnowledgeBase` 改为按 uid 幂等（先查 → `INSERT OR IGNORE` → 回查），重复写入只返回已有 id，不再抛 `UNIQUE constraint failed` 也不会多出空行。
+- 预览确认入库（`AppState.confirmImport`）与「导入示例题库」补内容查重：同一份内容重复确认/重复点按钮只提示「已跳过重复导入」，不再生成 `X(2)`。
+- 知识库去重同样改为忽略库名的内容签名，并支持「被自动编号过」的同族库。
+- 自动出题：`write_question_bank` 传空 JSON / 参数被截断不再抛「json 为空，请提供题目 JSON」。工具参数逐级兜底解析（正常 JSON → 截断抢修 → 正则抠 `json` 字段），空/非法内容只回纠错提示；一整轮没写出题会带纠错提示重试一轮。
+- 自动出题 UI：失败时给出可操作提示（「缩短知识库范围或减少题目数量后重试」），内容与已有题库重复时提示「已跳过导入」而不是报格式错误。
+
+### 新增
+- 知识库批量导出：长按多选后「导出」会把勾选的知识库打成一个 `.natsume-kb` 包（zip：`kb.json` 清单 + 每个成员的标准知识库 JSON）。
+- 「导入知识库」支持直接选中该包（也接受 `.zip`），一次性还原多个知识库，且沿用 uid / 内容去重（重复导入不翻倍）。
+
+### 重构
+- `BankFileService` 新增 `questionsSignature` / `isSameBankFamily`；`KbFileService` 新增 `documentsSignature` / `isSameKbFamily` / `exportBundle` / `importBundle` / `isBundleFile`。
+- `GeneratorAgent`：分批写入改为按题干去重后**追加合并**（此前每次调用整文件覆盖，分批时前几批会被冲掉），并新增 `GeneratorResult.failureReason`、`decodeToolArguments` / `parsePayload` / `mergeIntoBankFile`（可测）。
+- `AIService.repairJsonPayload` 作为抢修截断 JSON 的公开入口（工具调用侧复用解析路径的同一套逻辑）。
+
 ## [1.41.3] - 2026-11-03
 
 修复 Ubuntu CI / Release 流水线里设置页测试的误报（业务代码无改动），并补一个测试专用的平台开关，保证 v1.41.2 的最终设置结构在任何宿主上都能被正确断言。

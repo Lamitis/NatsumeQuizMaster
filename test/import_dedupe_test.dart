@@ -7,6 +7,7 @@ import 'package:natsume_quiz_master/models/kb_document.dart';
 import 'package:natsume_quiz_master/models/knowledge_base.dart';
 import 'package:natsume_quiz_master/models/question.dart';
 import 'package:natsume_quiz_master/models/question_bank.dart';
+import 'package:natsume_quiz_master/services/app_state.dart';
 import 'package:natsume_quiz_master/services/bank_file_service.dart';
 import 'package:natsume_quiz_master/services/database_service.dart';
 import 'package:natsume_quiz_master/services/knowledge_base/kb_file_service.dart';
@@ -128,6 +129,58 @@ void main() {
       expect(r.skippedCount, 0);
       final names = (await db.getAllBanks()).map((b) => b.name).toSet();
       expect(names, containsAll({'同名题库', '同名题库(2)'}));
+    });
+
+    test('上一份被自动改名成 X(2) 后再导入同一文件：仍按内容跳过（v1.41.4）',
+        () async {
+      final db = DatabaseService.instance;
+      // 本机先有一份同名但内容不同的题库 → 下面这份会被改名成「同名题库(2)」
+      await seedBank(name: '同名题库');
+      final path = '${tmp.path}/renamed_copy.json';
+      await File(path).writeAsString(
+          '{"format":"natsume-quiz-questions","name":"同名题库","count":1,'
+          '"questions":[{"title":"另一份资料","correct_answer":"B"}]}');
+
+      final first = await BankFileService.importBankFile(path);
+      expect(first.bankCount, 1);
+      expect(first.renamedCount, 1);
+
+      // 再导一次：内容命中的是改名后的「同名题库(2)」。
+      // 以前只比「同名 + 带名字的签名」，于是会再建一份「同名题库(3)」。
+      final second = await BankFileService.importBankFile(path);
+      expect(second.bankCount, 0, reason: '改名过的旧副本也要按内容认出来');
+      expect(second.skippedCount, 1);
+
+      final names = (await db.getAllBanks()).map((b) => b.name).toList();
+      expect(names.where((n) => n.startsWith('同名题库')).length, 2,
+          reason: '同族题库只应有两份：原题库 + 内容不同的那一份');
+    });
+  });
+
+  group('预览确认入库', () {
+    test('同一份预览内容重复确认：第二次跳过，不生成 X(2)', () async {
+      final db = DatabaseService.instance;
+      final appState = AppState();
+      final question = Question(
+        bankId: 0,
+        title: '预览题：正常成人安静状态下的心率调节方式是？',
+        options: const ['体液调节', '神经调节'],
+        correctAnswer: 'B',
+        createdAt: DateTime.now().toIso8601String(),
+      );
+
+      appState.setPreviewQuestionsForTest([question], bankName: '预览题库');
+      await appState.confirmImport();
+      expect(await db.getAllBanks(), hasLength(1));
+
+      // 同一份内容再确认一次（连点/重试/覆盖安装后又导一遍）
+      appState.setPreviewQuestionsForTest([question], bankName: '预览题库');
+      await appState.confirmImport();
+
+      final banks = await db.getAllBanks();
+      expect(banks, hasLength(1), reason: '内容相同不应再建一份');
+      expect(banks.single.name, '预览题库');
+      expect(appState.importStatus, contains('跳过'));
     });
   });
 

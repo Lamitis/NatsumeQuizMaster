@@ -6,6 +6,7 @@ import '../models/question.dart';
 import '../models/question_bank.dart';
 import '../models/question_image.dart';
 import 'database_service.dart';
+import 'debug_log_service.dart';
 
 /// 一个待导入的题库组（v1.41.2 去重链路用）。
 class BankImportGroup {
@@ -84,11 +85,9 @@ class BankFileService {
     ], err);
   }
 
-  /// 题库内容签名：同名 + 题目集合完全一致 → 视为同一份题库。
-  ///
-  /// 旧版导出文件没有 uid，只能靠内容判断重复；题目顺序、选项/答案/解析
-  /// 任何一处不同都会得到不同签名（同名不同内容仍按老逻辑改名导入）。
-  static String contentSignature(String bankName, List<Question> questions) {
+  /// 题目内容指纹（**不含题库名**）：与题目顺序无关，但题干/选项/答案/
+  /// 解析/题型任何一处不同都会得到不同指纹。
+  static String _questionsFingerprint(List<Question> questions) {
     final parts = questions
         .map((q) => [
               q.title.trim(),
@@ -99,9 +98,35 @@ class BankFileService {
             ].join('\u0002'))
         .toList()
       ..sort();
-    return sha1
-        .convert(utf8.encode('$bankName\u0000${parts.join('\u0003')}'))
-        .toString();
+    return parts.join('\u0003');
+  }
+
+  /// 题库内容签名（题库名 + 题目集合）。
+  ///
+  /// 旧版导出文件没有 uid，只能靠内容判断重复；同名且内容完全一致才是同一
+  /// 份题库（同名不同内容仍按老逻辑改名导入）。
+  static String contentSignature(String bankName, List<Question> questions) =>
+      sha1
+          .convert(utf8.encode(
+              '$bankName\u0000${_questionsFingerprint(questions)}'))
+          .toString();
+
+  /// 只按题目内容取签名（忽略题库名，v1.41.4）。
+  ///
+  /// 为什么去重不能带题库名：重复导入的题库会被自动改名成 `X(2)`，用户还
+  /// 可能手动改名。带名字的签名永远对不上，于是每导一次就多一份 `X(3)`、
+  /// `X(4)`……「更新/重启后题库又出现一份重复的」根因就在这里。
+  static String questionsSignature(List<Question> questions) =>
+      sha1.convert(utf8.encode(_questionsFingerprint(questions))).toString();
+
+  /// `X` / `X(2)` / `X(3)`… 视为同一「题库族」：自动改名后的旧副本仍要能被
+  /// 内容签名认出来，但不必为此把全库所有题目都读一遍。
+  static bool isSameBankFamily(String existingName, String groupName) {
+    if (existingName == groupName) return true;
+    if (!existingName.startsWith(groupName)) return false;
+    // 只认「自动改名」产生的 `(数字)` 后缀，避免把 `X 提高篇` 也当成同一族
+    final suffix = existingName.substring(groupName.length).trim();
+    return RegExp(r'^\(\d+\)$').hasMatch(suffix);
   }
 
   /// 解析 JSON 文件 → 返回 (组名 → 题目列表, 错误信息)。
@@ -300,11 +325,13 @@ class BankFileService {
     return (o.bankCount, o.questionCount, o.error, o.renamedCount);
   }
 
-  /// 导入题库 JSON（v1.41.2：uid / 内容签名去重）。
+  /// 导入题库 JSON（v1.41.2：uid / 内容签名去重；v1.41.4 内容签名忽略题库名）。
   ///
   /// 规则：
   /// 1. 文件带题库 `uid` 且本机已有同 uid 的题库 → **跳过**（不追加、不改名）；
-  /// 2. 老文件没有 uid → 同名且题目集合完全一致（[contentSignature]）→ 跳过；
+  /// 2. 同一「题库族」（`X` / `X(2)` / `X(3)`…）里已有**题目内容完全一致**的
+  ///    题库 → 跳过（[questionsSignature]，与题库名无关，所以自动改名过的旧
+  ///    副本也不会被当成新题库）；
   /// 3. 同名但内容不同 → 仍按老逻辑改成 `X(2)` 导入（这是两份不同题库）。
   static Future<BankImportOutcome> importBankFile(String filePath,
       {Set<String>? existingNames, int? categoryId}) async {
@@ -313,12 +340,13 @@ class BankFileService {
     final now = DateTime.now().toIso8601String();
     final taken = existingNames ?? <String>{};
 
-    // 本机已有题库：按名字索引，供「无 uid」的内容签名兜底
+    // 本机已有题库：按名字索引（供「uid 未命中」时的内容签名兜底）
     final byName = <String, List<QuestionBank>>{};
     for (final b in await _db.getAllBanks()) {
       byName.putIfAbsent(b.name, () => []).add(b);
       taken.add(b.name);
     }
+    // 题库 id → 题目内容签名（懒算 + 缓存：一次导入里同一题库只读一次题）
     final sigCache = <int, String>{};
     Future<String> signatureOf(QuestionBank bank) async {
       final id = bank.id;
@@ -326,9 +354,26 @@ class BankFileService {
       final cached = sigCache[id];
       if (cached != null) return cached;
       final qs = await _db.getQuestionsByBank(id);
-      final sig = contentSignature(bank.name, qs);
+      final sig = questionsSignature(qs);
       sigCache[id] = sig;
       return sig;
+    }
+
+    /// 已有题库里与 [sig] 内容一致的（先按题目数收窄，避免全库读题）
+    ///
+    /// 题目数是一个便宜的预筛：内容一致 ⇒ 题目数必然相同；数目不同的题库
+    /// 连题都不用读。这样既能认出「被自动改名 / 手动改名」的旧副本，又不会
+    /// 因为全库扫描把导入拖慢。
+    Future<String?> duplicateOf(
+        String groupName, String sig, int questionCount) async {
+      for (final entry in byName.entries) {
+        final sameFamily = isSameBankFamily(entry.key, groupName);
+        for (final bank in entry.value) {
+          if (!sameFamily && bank.questionCount != questionCount) continue;
+          if (await signatureOf(bank) == sig) return bank.name;
+        }
+      }
+      return null;
     }
 
     var bankCount = 0;
@@ -347,20 +392,19 @@ class BankFileService {
           skippedCount++;
           continue;
         }
-      } else {
-        // 2) 旧文件无 uid：同名 + 内容签名一致 → 跳过
-        final sig = contentSignature(group.name, group.questions);
-        var duplicated = false;
-        for (final bank in byName[group.name] ?? const <QuestionBank>[]) {
-          if (await signatureOf(bank) == sig) {
-            duplicated = true;
-            break;
-          }
-        }
-        if (duplicated) {
-          skippedCount++;
-          continue;
-        }
+      }
+
+      // 2) 内容签名命中 → 跳过。**uid 命中与否都要走这一步**：
+      //    同一个题库可能先以老格式（无 uid）导入过，之后又拿到带 uid 的新
+      //    文件，只比 uid 就会再建一份。
+      final sig = questionsSignature(group.questions);
+      final dupName =
+          await duplicateOf(group.name, sig, group.questions.length);
+      if (dupName != null) {
+        skippedCount++;
+        DebugLogService.instance
+            .log('IMPORT', '题库「${group.name}」与已有「$dupName」内容一致，跳过导入');
+        continue;
       }
 
       var name = group.name;
@@ -389,17 +433,18 @@ class BankFileService {
       bankCount++;
       questionCount += questions.length;
 
-      // 同一文件里重复出现的同 uid / 同内容组也要跳过
+      // 同一文件里重复出现的同 uid / 同内容组也要跳过（刚入库的行登记进索引）
       final inserted = QuestionBank(
         id: bankId,
         name: name,
         fileSource: 'json',
+        questionCount: questions.length,
         createdAt: now,
         uid: hasUid ? uid : null,
         categoryId: categoryId,
       );
       byName.putIfAbsent(name, () => []).add(inserted);
-      sigCache[bankId] = contentSignature(group.name, group.questions);
+      sigCache[bankId] = sig;
     }
 
     return BankImportOutcome(

@@ -362,51 +362,42 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     _snack('已删除 ${bases.length} 个知识库');
   }
 
+  /// 批量导出：把勾选的知识库打成一个 `.natsume-kb` 分享包（v1.41.4）。
+  ///
+  /// 以前「批量导出」只能一条一条落 `.json`（或者按分类整包走世界包），用户
+  /// 没法像导出题库那样自由勾选。现在落成一个包：包内每个成员仍是标准知识库
+  /// JSON，「导入知识库」直接选中这个包就能一次性还原。
   Future<void> _batchExport() async {
     final bases = _selectedBases();
     if (bases.isEmpty) return;
-    String? pickedDir;
-    try {
-      pickedDir = await FilePicker.getDirectoryPath(
-        dialogTitle: '选择批量导出文件夹',
-      );
-      if (pickedDir == null) return; // 用户取消
-    } catch (_) {
-      // 平台没有目录选择器：落默认导出目录
-      pickedDir = null;
+    final dir = await ExportStorage.resolve();
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 19)
+        .replaceAll(RegExp(r'[:.]'), '-');
+    final dest = '${dir.path}${Platform.pathSeparator}'
+        '知识库合集_${bases.length}项_$stamp${KbFileService.bundleExtension}';
+    final result = await KbFileService.exportBundle(
+      kbIds: bases.map((b) => b.id!).toList(),
+      destPath: dest,
+    );
+    if (!mounted) return;
+    if (!result.saved) {
+      _exitBatch();
+      _snack('选中的知识库都没有可导出的文档');
+      return;
     }
-    final dir = pickedDir == null || pickedDir.isEmpty
-        ? await ExportStorage.resolve()
-        : Directory(pickedDir);
-    if (!await dir.exists()) await dir.create(recursive: true);
-
-    var exported = 0;
-    var skipped = 0;
-    var failed = 0;
-    for (final kb in bases) {
-      final safeName =
-          kb.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-      final base = safeName.isEmpty ? '知识库_${kb.id}' : safeName;
-      var path = '${dir.path}${Platform.pathSeparator}${base}_知识库.json';
-      if (await File(path).exists()) {
-        path = '${dir.path}${Platform.pathSeparator}$base-${kb.id}_知识库.json';
-      }
-      try {
-        final result = await KbFileService.exportKnowledgeBase(kb.id!, path);
-        if (result == null) {
-          skipped++;
-        } else {
-          exported++;
-        }
-      } catch (_) {
-        failed++;
-      }
-    }
+    final saved =
+        await ExportStorage.saveFileAs(dest, dialogTitle: '保存知识库包');
     if (!mounted) return;
     _exitBatch();
-    _snack('已导出 $exported 个知识库到 ${dir.path}'
-        '${skipped > 0 ? '；$skipped 个没有文档已跳过' : ''}'
-        '${failed > 0 ? '；$failed 个导出失败' : ''}');
+    final notes = [
+      if (result.skippedCount > 0) '${result.skippedCount} 个没有文档已跳过',
+      '可用「导入知识库」选中该包一次性还原',
+    ].join('；');
+    _snack(saved.saved
+        ? '已导出 ${result.kbCount} 个知识库到 ${saved.path}\n$notes'
+        : '已取消保存。文件仍可在此找到：${ExportStorage.folderOf(dest)}\n$notes');
   }
 
   Widget _kbCard(
@@ -826,16 +817,35 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   Future<void> _importKb() async {
     final picked = await FilePicker.pickFile(
       type: FileType.custom,
-      allowedExtensions: ['json'],
+      // 单文件 JSON 和「知识库包」（.natsume-kb / zip，可含多个知识库）都能导
+      allowedExtensions: ['json', 'zip', 'natsume-kb'],
     );
     final path = picked?.path;
     if (path == null) return;
+
+    // v1.41.4：批量导出的 `.natsume-kb` 包直接在这里还原，仍走同一套去重
+    if (await KbFileService.isBundleFile(path)) {
+      final r = await KbFileService.importBundle(path);
+      if (!mounted) return;
+      if (r.kbCount > 0) {
+        await _reload();
+        if (!mounted) return;
+        _snack('已从知识库包导入 ${r.kbCount} 个知识库'
+            '${r.skippedCount > 0 ? '；${r.skippedCount} 个已存在已跳过' : ''}');
+      } else if (r.skippedCount > 0) {
+        _snack('包里的 ${r.skippedCount} 个知识库本机都已存在，已跳过');
+      } else {
+        _snack(r.error ?? '导入失败');
+      }
+      return;
+    }
+
     final (id, err) = await KbFileService.importKbFile(path);
     if (id > 0) {
-      _reload();
+      await _reload();
+      if (mounted) _snack('已导入知识库');
     } else if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(err ?? '导入失败')));
+      _snack(err ?? '导入失败');
     }
   }
 
