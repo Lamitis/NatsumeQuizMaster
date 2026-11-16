@@ -35,7 +35,8 @@ class ExportStorage {
           ? await getExternalStorageDirectory()
           : await getApplicationDocumentsDirectory();
       if (base != null) {
-        return _ensure(Directory('${base.path}${Platform.pathSeparator}$folderName'));
+        return _ensure(
+            Directory('${base.path}${Platform.pathSeparator}$folderName'));
       }
     } catch (_) {
       // path_provider 在单元测试里没有平台实现；真实设备上也可能取不到
@@ -170,6 +171,9 @@ class ExportStorage {
       'xlsx' =>
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'zip' => 'application/zip',
+      // 知识库分享包 / 世界包本质都是 zip；给了正确 MIME，Android 保存后
+      // 才会显示成压缩包而不是「未知文件」
+      'natsume-kb' || 'natsume-world' => 'application/zip',
       _ => 'application/octet-stream',
     };
   }

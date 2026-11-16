@@ -56,6 +56,11 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
   /// 批量操作选中的题目 id（选中态只存 id：编辑/删除后要按 id 对齐）
   final Set<int> _selectedIds = {};
 
+  /// 每道题上一次作答结果（题号 → 对/错），题号格子的红绿标记用（v1.42）。
+  ///
+  /// 只在用户点「清空记录并重刷」时才会被清空；普通开始 / 继续刷题只更新它。
+  Map<int, bool> _answerStatus = const {};
+
   @override
   void initState() {
     super.initState();
@@ -73,9 +78,15 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
     final app = context.read<AppState>();
     setState(() => _loading = true);
     final list = await app.getBankQuestions(widget.bank.id!);
+    // v1.42：上次作答的红绿标记（记录由 DatabaseService 保留，不随重刷清空）
+    final ids = list.map((q) => q.id).whereType<int>().toList();
+    final status = ids.isEmpty
+        ? <int, bool>{}
+        : await app.getLastAnswerStatusByQuestionIds(ids);
     if (!mounted) return;
     setState(() {
       _questions = list;
+      _answerStatus = status;
       _loading = false;
       // 已删掉的题不能留在选中集合里，否则批量操作会对着空气发指令
       final ids = {for (final q in list) q.id ?? -1};
@@ -165,8 +176,7 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(ids.length == 1 ? '删除这道题？' : '删除 ${ids.length} 道题目？'),
-        content:
-            const Text('题目的作答记录、错题本条目与复习计划会一并删除，且无法恢复。'),
+        content: const Text('题目的作答记录、错题本条目与复习计划会一并删除，且无法恢复。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -217,13 +227,11 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: NatsumeSpace.md,
-                        vertical: NatsumeSpace.xs),
+                        horizontal: NatsumeSpace.md, vertical: NatsumeSpace.xs),
                     child: Text(
                       '移动 ${ids.length} 道题目到…',
                       style: NatsumeType.h3Style.copyWith(
-                          fontWeight: FontWeight.w600,
-                          color: ac.textPrimary),
+                          fontWeight: FontWeight.w600, color: ac.textPrimary),
                     ),
                   ),
                   for (final b in targets)
@@ -393,15 +401,34 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
               ),
               const SizedBox(height: NatsumeSpace.xxs),
               Text(_launchMode.description,
-                  style: NatsumeType.microStyle
-                      .copyWith(color: ac.textTertiary)),
+                  style:
+                      NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+              const SizedBox(height: NatsumeSpace.xs),
+              // v1.42：红绿标记说明 + 「清空记录并重刷」明确入口。
+              // 普通开始 / 继续刷题不会清记录，只有这个按钮会。
+              Row(
+                children: [
+                  if (_answerStatus.isNotEmpty) ...[
+                    _legendDot(ac, ac.success, '上次答对'),
+                    const SizedBox(width: 10),
+                    _legendDot(ac, ac.danger, '上次答错'),
+                  ],
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _clearRecords,
+                    icon: const Icon(Icons.restart_alt_rounded, size: 16),
+                    label: const Text('清空记录并重刷'),
+                    style: TextButton.styleFrom(foregroundColor: ac.danger),
+                  ),
+                ],
+              ),
             ],
           ),
         ),
         Expanded(
           child: GridView.builder(
-            padding: const EdgeInsets.fromLTRB(
-                NatsumeSpace.md, NatsumeSpace.sm, NatsumeSpace.md, NatsumeSpace.md),
+            padding: const EdgeInsets.fromLTRB(NatsumeSpace.md, NatsumeSpace.sm,
+                NatsumeSpace.md, NatsumeSpace.md),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: 54,
               mainAxisSpacing: 6,
@@ -417,29 +444,91 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
   }
 
   /// 单个题号方块（Material 承载底/水波，避免调试期的「水波不可见」断言）
+  ///
+  /// v1.42：方块底色按**上一次作答结果**着色（绿对 / 红错），没有记录时
+  /// 保持普通表面色。记录由数据库保留，重新进入本页仍能看到。
   Widget _buildNumberCell(AppThemeColors ac, int index) {
-    return Material(
-      color: ac.surface,
-      borderRadius: NatsumeRadius.smallBorder,
-      child: InkWell(
+    final question = _questions[index];
+    final id = question.id;
+    final last = id == null ? null : _answerStatus[id];
+    final fill =
+        last == null ? ac.surface : (last ? ac.successSoft : ac.dangerSoft);
+    final edge = last == null ? ac.border : (last ? ac.success : ac.danger);
+    final textColor =
+        last == null ? ac.textPrimary : (last ? ac.success : ac.danger);
+    return Tooltip(
+      message: last == null ? '还没做过' : (last ? '上次答对' : '上次答错'),
+      child: Material(
+        color: fill,
         borderRadius: NatsumeRadius.smallBorder,
-        onTap: () => _startAt(index),
-        child: Container(
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            borderRadius: NatsumeRadius.smallBorder,
-            border: Border.all(color: ac.border, width: NatsumeLine.width),
-          ),
-          child: Text(
-            '${index + 1}',
-            style: NatsumeType.bodyStyle.copyWith(
-              color: ac.textPrimary,
-              fontWeight: FontWeight.w600,
+        child: InkWell(
+          borderRadius: NatsumeRadius.smallBorder,
+          onTap: () => _startAt(index),
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              borderRadius: NatsumeRadius.smallBorder,
+              border: Border.all(color: edge, width: NatsumeLine.width),
+            ),
+            child: Text(
+              '${index + 1}',
+              style: NatsumeType.bodyStyle.copyWith(
+                color: textColor,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ),
       ),
     );
+  }
+
+  /// 红绿图例的小圆点
+  Widget _legendDot(AppThemeColors ac, Color color, String label) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 4),
+          Text(label,
+              style: NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+        ],
+      );
+
+  /// 「清空记录并重刷」：只有用户明确确认后才清该库的作答记录与复习卡。
+  ///
+  /// 「开始刷题 / 继续刷题」永远走叠加逻辑（[QuizService.startQuiz] 不删
+  /// `answer_records`），只有这里会真正清空，符合「保留红绿记录直到明确重刷」。
+  Future<void> _clearRecords() async {
+    final bankId = widget.bank.id;
+    if (bankId == null) return;
+    final app = context.read<AppState>();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('清空记录并重刷？'),
+        content: const Text('将删除这个题库的全部作答记录与复习计划，题号上的红绿标记也会清空；'
+            '题目本身与收藏会保留。此操作无法恢复。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(ctx).colorScheme.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('清空记录并重刷'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final result = await app.clearBankRecords(bankId);
+    await _load();
+    _toast('已清空 ${result.records} 条作答记录、${result.cards} 张复习卡');
   }
 
   /// 点题号开刷：题库范围固定为当前库，题量「全部」，从该题开始。
@@ -456,7 +545,12 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
       startIndex: index,
       noShuffle: true,
     );
-    if (error != null) _toast(error);
+    if (error != null) {
+      _toast(error);
+      return;
+    }
+    // v1.42：刷完回到题库页，重新拉红绿标记（历史记录保留，只更新展示）
+    if (mounted) await _load();
   }
 
   PreferredSizeWidget _buildAppBar(AppThemeColors ac, QuestionBank bank) {
@@ -476,12 +570,17 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
         ],
       ),
       actions: [
+        // v1.42：列表视图也要能「清空记录并重刷」（网格视图另有醒目按钮）
+        IconButton(
+          tooltip: '清空记录并重刷',
+          icon: const Icon(Icons.restart_alt_rounded),
+          onPressed: _questions.isEmpty ? null : _clearRecords,
+        ),
         IconButton(
           tooltip: grid ? '切换到列表（编辑题目）' : '切换到题号网格',
           icon: Icon(grid ? Icons.view_list_rounded : Icons.grid_view_rounded),
           onPressed: () => setState(() {
-            _viewMode =
-                grid ? BankQuestionView.list : BankQuestionView.grid;
+            _viewMode = grid ? BankQuestionView.list : BankQuestionView.grid;
           }),
         ),
         if (!grid)
@@ -549,8 +648,8 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
         label: Text(label),
         selected: selected,
         onSelected: (_) => setState(() => _typeFilter = value),
-        labelStyle: NatsumeType.captionStyle.copyWith(
-            color: selected ? ac.onAccent : ac.textSecondary),
+        labelStyle: NatsumeType.captionStyle
+            .copyWith(color: selected ? ac.onAccent : ac.textSecondary),
         selectedColor: ac.accent,
         backgroundColor: ac.surfaceAlt,
         side: BorderSide(color: selected ? ac.accent : ac.border),
@@ -558,6 +657,7 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
       ),
     );
   }
+
   Widget _buildBody(AppThemeColors ac, List<Question> filtered) {
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (_questions.isEmpty) {
@@ -615,7 +715,8 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
             children: [
               if (_selectMode)
                 Padding(
-                  padding: const EdgeInsets.only(right: NatsumeSpace.sm, top: 2),
+                  padding:
+                      const EdgeInsets.only(right: NatsumeSpace.sm, top: 2),
                   child: _selectBox(ac, selected),
                 ),
               Expanded(
@@ -631,6 +732,14 @@ class _BankQuestionsScreenState extends State<BankQuestionsScreen> {
                             style: NatsumeType.microStyle
                                 .copyWith(color: ac.textTertiary)),
                         NatsumeTag(q.typeLabel, tone: NatsumeTagTone.accent),
+                        // v1.42：上一次作答结果（红错 / 绿对），与题号网格同源
+                        if (_answerStatus[id] != null)
+                          NatsumeTag(
+                            _answerStatus[id]! ? '上次答对' : '上次答错',
+                            tone: _answerStatus[id]!
+                                ? NatsumeTagTone.success
+                                : NatsumeTagTone.danger,
+                          ),
                         if (knowledgePoint.isNotEmpty)
                           NatsumeTag(knowledgePoint),
                         if (q.images.isNotEmpty)

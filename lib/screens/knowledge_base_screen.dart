@@ -99,146 +99,144 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
-        automaticallyImplyLeading: !_batchMode,
-        leading: _batchMode
-            ? IconButton(
-                tooltip: '退出多选',
-                icon: const Icon(Icons.close),
-                onPressed: _exitBatch,
-              )
-            : null,
-        title: Text(_batchMode ? '已选 ${_batchSelected.length} 项' : '知识库'),
-        actions: _batchMode
-            ? [
-                TextButton(
-                  onPressed: () => setState(() {
-                    if (allSelected) {
-                      _batchSelected.clear();
-                    } else {
-                      _batchSelected
-                        ..clear()
-                        ..addAll(allIds);
-                    }
-                  }),
-                  child: Text(allSelected ? '取消全选' : '全选'),
-                ),
-                TextButton(
+          automaticallyImplyLeading: !_batchMode,
+          leading: _batchMode
+              ? IconButton(
+                  tooltip: '退出多选',
+                  icon: const Icon(Icons.close),
                   onPressed: _exitBatch,
-                  child: const Text('取消'),
-                ),
-              ]
-            : [
-                IconButton(
-                  tooltip: '导出分类',
-                  icon: const Icon(Icons.folder_zip_outlined),
-                  onPressed: _exportCategory,
-                ),
-                // 排序（v1.35.5）
-                PopupMenuButton<KbSortMode>(
-                  tooltip: '排序方式：${_sort.label}',
-                  icon: const Icon(Icons.sort),
-                  initialValue: _sort,
-                  onSelected: _changeSort,
-                  itemBuilder: (context) => [
-                    for (final mode in KbSortMode.values)
-                      CheckedPopupMenuItem<KbSortMode>(
-                        value: mode,
-                        checked: mode == _sort,
-                        child: Text(mode.label),
-                      ),
-                  ],
-                ),
-              ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : ResponsivePage(
-              child: ListView(
-                padding: const EdgeInsets.all(NatsumeSpace.md),
-                children: [
-                  NatsumeSectionHeader(
-                    title: '知识库',
-                    subtitle: '导入资料后，AI 出题只依据这些资料（防幻觉）',
-                    trailing: _batchMode
-                        ? null
-                        : NatsumeButton(
-                            label: '新建',
-                            dense: true,
-                            icon: Icons.add,
-                            onPressed: _create,
-                          ),
+                )
+              : null,
+          title: Text(_batchMode ? '已选 ${_batchSelected.length} 项' : '知识库'),
+          actions: _batchMode
+              ? [
+                  TextButton(
+                    onPressed: () => setState(() {
+                      if (allSelected) {
+                        _batchSelected.clear();
+                      } else {
+                        _batchSelected
+                          ..clear()
+                          ..addAll(allIds);
+                      }
+                    }),
+                    child: Text(allSelected ? '取消全选' : '全选'),
                   ),
-                  const SizedBox(height: NatsumeSpace.sm),
-                  if (bases.isEmpty)
-                    NatsumeEmptyState(
-                      icon: Icons.menu_book_outlined,
-                      title: '还没有知识库',
-                      description:
-                          '点「新建」创建，或「导入」一个知识库文件\n\n「$_motto」',
-                    )
-                  else
-                    for (final kb in bases) ...[
-                      _kbCard(
-                        kb,
-                        ac,
-                        batchMode: _batchMode,
-                        batchSelected: _batchSelected.contains(kb.id),
-                        onLongPress: _batchMode
-                            ? null
-                            : () => _enterBatch(kb.id!),
-                        onBatchToggle: () => _toggleBatch(kb.id!),
-                      ),
-                      const SizedBox(height: NatsumeSpace.xs),
+                  TextButton(
+                    onPressed: _exitBatch,
+                    child: const Text('取消'),
+                  ),
+                ]
+              : [
+                  IconButton(
+                    tooltip: '导出分类',
+                    icon: const Icon(Icons.folder_zip_outlined),
+                    onPressed: _exportCategory,
+                  ),
+                  // 排序（v1.35.5）
+                  PopupMenuButton<KbSortMode>(
+                    tooltip: '排序方式：${_sort.label}',
+                    icon: const Icon(Icons.sort),
+                    initialValue: _sort,
+                    onSelected: _changeSort,
+                    itemBuilder: (context) => [
+                      for (final mode in KbSortMode.values)
+                        CheckedPopupMenuItem<KbSortMode>(
+                          value: mode,
+                          checked: mode == _sort,
+                          child: Text(mode.label),
+                        ),
                     ],
-                  const SizedBox(height: NatsumeSpace.md),
-                  if (!_batchMode && _selectedKbId != null) ...[
+                  ),
+                ],
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : ResponsivePage(
+                child: ListView(
+                  padding: const EdgeInsets.all(NatsumeSpace.md),
+                  children: [
                     NatsumeSectionHeader(
-                      title: '文档',
-                      trailing: NatsumeButton(
-                        label: '导入文档',
-                        dense: true,
-                        icon: Icons.upload_file_outlined,
-                        onPressed: _importDocument,
-                      ),
+                      title: '知识库',
+                      subtitle: '导入资料后，AI 出题只依据这些资料（防幻觉）',
+                      trailing: _batchMode
+                          ? null
+                          : NatsumeButton(
+                              label: '新建',
+                              dense: true,
+                              icon: Icons.add,
+                              onPressed: _create,
+                            ),
                     ),
                     const SizedBox(height: NatsumeSpace.sm),
-                    if (_docs.isEmpty)
-                      NatsumeSurface(
-                        tone: NatsumeTone.alt,
-                        padding: const EdgeInsets.all(NatsumeSpace.md),
-                        child: Text('暂无文档，点「导入文档」添加 txt/md/docx/pdf',
-                            style: NatsumeType.captionStyle
-                                .copyWith(color: ac.textSecondary)),
+                    if (bases.isEmpty)
+                      NatsumeEmptyState(
+                        icon: Icons.menu_book_outlined,
+                        title: '还没有知识库',
+                        description: '点「新建」创建，或「导入」一个知识库文件\n\n「$_motto」',
                       )
                     else
-                      for (final d in _docs) ...[
-                        _docTile(d, ac),
+                      for (final kb in bases) ...[
+                        _kbCard(
+                          kb,
+                          ac,
+                          batchMode: _batchMode,
+                          batchSelected: _batchSelected.contains(kb.id),
+                          onLongPress:
+                              _batchMode ? null : () => _enterBatch(kb.id!),
+                          onBatchToggle: () => _toggleBatch(kb.id!),
+                        ),
                         const SizedBox(height: NatsumeSpace.xs),
                       ],
-                    const SizedBox(height: NatsumeSpace.sm),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: NatsumeButton(
-                            label: '导出知识库',
-                            kind: NatsumeButtonKind.secondary,
-                            icon: Icons.ios_share_outlined,
-                            onPressed: _exportSelected,
+                    const SizedBox(height: NatsumeSpace.md),
+                    if (!_batchMode && _selectedKbId != null) ...[
+                      NatsumeSectionHeader(
+                        title: '文档',
+                        trailing: NatsumeButton(
+                          label: '导入文档',
+                          dense: true,
+                          icon: Icons.upload_file_outlined,
+                          onPressed: _importDocument,
+                        ),
+                      ),
+                      const SizedBox(height: NatsumeSpace.sm),
+                      if (_docs.isEmpty)
+                        NatsumeSurface(
+                          tone: NatsumeTone.alt,
+                          padding: const EdgeInsets.all(NatsumeSpace.md),
+                          child: Text('暂无文档，点「导入文档」添加 txt/md/docx/pdf',
+                              style: NatsumeType.captionStyle
+                                  .copyWith(color: ac.textSecondary)),
+                        )
+                      else
+                        for (final d in _docs) ...[
+                          _docTile(d, ac),
+                          const SizedBox(height: NatsumeSpace.xs),
+                        ],
+                      const SizedBox(height: NatsumeSpace.sm),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: NatsumeButton(
+                              label: '导出知识库',
+                              kind: NatsumeButtonKind.secondary,
+                              icon: Icons.ios_share_outlined,
+                              onPressed: _exportSelected,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: NatsumeSpace.sm),
-                        NatsumeButton(
-                          label: '导入知识库',
-                          kind: NatsumeButtonKind.ghost,
-                          icon: Icons.download_outlined,
-                          onPressed: _importKb,
-                        ),
-                      ],
-                    ),
+                          const SizedBox(width: NatsumeSpace.sm),
+                          NatsumeButton(
+                            label: '导入知识库',
+                            kind: NatsumeButtonKind.ghost,
+                            icon: Icons.download_outlined,
+                            onPressed: _importKb,
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
         bottomNavigationBar: _batchMode ? _buildBatchBar(ac) : null,
       ),
     );
@@ -387,8 +385,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       _snack('选中的知识库都没有可导出的文档');
       return;
     }
-    final saved =
-        await ExportStorage.saveFileAs(dest, dialogTitle: '保存知识库包');
+    final saved = await ExportStorage.saveFileAs(dest, dialogTitle: '保存知识库包');
     if (!mounted) return;
     _exitBatch();
     final notes = [
@@ -484,8 +481,10 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
-                Text('${d.content.length} 字 · ${(d.fileExt ?? '').toUpperCase()}',
-                    style: NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+                Text(
+                    '${d.content.length} 字 · ${(d.fileExt ?? '').toUpperCase()}',
+                    style: NatsumeType.microStyle
+                        .copyWith(color: ac.textTertiary)),
               ],
             ),
           ),
@@ -513,8 +512,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: _DocAction.rename, child: Text('重命名')),
-              PopupMenuItem(
-                  value: _DocAction.move, child: Text('移动到其他知识库')),
+              PopupMenuItem(value: _DocAction.move, child: Text('移动到其他知识库')),
               PopupMenuItem(value: _DocAction.delete, child: Text('删除文档')),
             ],
           ),
@@ -536,8 +534,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   Future<void> _editMeta(KnowledgeBase kb) async {
     final nameCtrl = TextEditingController(text: kb.name);
     final descCtrl = TextEditingController(text: kb.description ?? '');
-    final categories =
-        await DatabaseService.instance.getAllBankCategories();
+    final categories = await DatabaseService.instance.getAllBankCategories();
     final options = _flattenCategories(categories);
     var chosenCategory = kb.categoryId;
     final saved = await showDialog<bool>(
@@ -655,8 +652,8 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
         await _kb.importDocument(_selectedKbId!, p);
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('导入失败：${e.toString()}')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('导入失败：${e.toString()}')));
         }
       }
     }
@@ -664,8 +661,8 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
   }
 
   Future<void> _editDoc(KbDocument d) async {
-    final content = await _promptText(
-        title: '编辑文档', initial: d.content, multiline: true);
+    final content =
+        await _promptText(title: '编辑文档', initial: d.content, multiline: true);
     if (content == null) return;
     // 用文档自己的 kbId，不依赖「当前选中的知识库」——移动过文档后两者可能不同
     await _kb.updateDocumentContent(d.kbId, d.id!, content);
@@ -674,8 +671,8 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
 
   /// 重命名文档（v1.30.2）：导入时名字取自文件名，扫描件常是一串无意义编号
   Future<void> _renameDoc(KbDocument d) async {
-    final name = await _promptText(
-        title: '重命名文档', initial: d.name, hint: '文档名称');
+    final name =
+        await _promptText(title: '重命名文档', initial: d.name, hint: '文档名称');
     if (name == null || name.trim().isEmpty) return;
     await _kb.renameDocument(d.id!, name.trim());
     _reload();
@@ -686,8 +683,8 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     final targets = _bases.where((b) => b.id != d.kbId).toList();
     if (targets.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('只有一个知识库，先新建一个再移动')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('只有一个知识库，先新建一个再移动')));
       }
       return;
     }
@@ -723,8 +720,10 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
     final kb = _bases.where((b) => b.id == _selectedKbId).firstOrNull;
     if (kb == null) return;
     final dir = await ExportStorage.resolve();
-    final dest =
-        '${dir.path}${Platform.pathSeparator}${kb.name}_知识库.json';
+    // v1.42：文件名清掉 `/ : * ? " < > |` 等非法字符并强制 `.json`，
+    // 否则 Windows 写入会失败（名字带斜杠时），生成的文件也认不出类型。
+    final dest = '${dir.path}${Platform.pathSeparator}'
+        '${KbFileService.singleExportFileName('${kb.name}_知识库')}';
     final path = await KbFileService.exportKnowledgeBase(kb.id!, dest);
     if (!mounted) return;
     final messenger = ScaffoldMessenger.of(context);
@@ -746,15 +745,15 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
 
   /// 导出某个分类下的知识库（含子分类）：分类树由 WorldService 序列化。
   Future<void> _exportCategory() async {
-    final categories =
-        await DatabaseService.instance.getAllBankCategories();
+    final categories = await DatabaseService.instance.getAllBankCategories();
     final counts = <int, int>{};
     for (final kb in _bases) {
       final id = kb.categoryId;
       if (id != null) counts[id] = (counts[id] ?? 0) + 1;
     }
-    final available =
-        categories.where((c) => c.id != null && (counts[c.id] ?? 0) > 0).toList();
+    final available = categories
+        .where((c) => c.id != null && (counts[c.id] ?? 0) > 0)
+        .toList();
     if (available.isEmpty) {
       _snack('还没有挂到分类下的知识库；可先在「编辑名称 / 描述」里选择分类。');
       return;
@@ -787,8 +786,8 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       ),
     );
     if (chosen == null || !mounted) return;
-    final category =
-        available.firstWhere((c) => c.id == chosen, orElse: () => available.first);
+    final category = available.firstWhere((c) => c.id == chosen,
+        orElse: () => available.first);
     final dir = await ExportStorage.resolve();
     final safe = category.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
     final dest =
@@ -804,8 +803,7 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
       _snack('分类不存在或导出失败');
       return;
     }
-    final saved =
-        await ExportStorage.saveFileAs(path, dialogTitle: '保存分类导出文件');
+    final saved = await ExportStorage.saveFileAs(path, dialogTitle: '保存分类导出文件');
     if (!mounted) return;
     if (saved.saved) {
       _snack('已导出分类「${category.name}」到 ${saved.path}');
@@ -825,6 +823,21 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
 
     // v1.41.4：批量导出的 `.natsume-kb` 包直接在这里还原，仍走同一套去重
     if (await KbFileService.isBundleFile(path)) {
+      // v1.42：「导出分类」产物是 world 包（.natsume-world.zip），这里也接住，
+      // 让「导出 → 导入」形成闭环，而不是报「缺少 kb.json 清单」。
+      if (await KbFileService.isWorldFile(path)) {
+        try {
+          final r = await WorldService.importWorld(path);
+          if (!mounted) return;
+          await _reload();
+          if (!mounted) return;
+          _snack('已从分类 / 世界包导入 ${r.kbCount} 个知识库'
+              '${r.skippedCount > 0 ? '；${r.skippedCount} 个已存在已跳过' : ''}');
+        } catch (e) {
+          if (mounted) _snack('导入失败：$e');
+        }
+        return;
+      }
       final r = await KbFileService.importBundle(path);
       if (!mounted) return;
       if (r.kbCount > 0) {

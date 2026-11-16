@@ -53,9 +53,27 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   List<Map<String, dynamic>>? _stats;
   bool _loading = true;
   final Set<int> _selectedBanks = {};
+
+  /// v1.42：题型筛选（空 = 不限）。复习 / 导出 / 统计全部跟它走。
+  final Set<String> _selectedTypes = {};
   late String _filter = widget.initialFilter;
   List<Map<String, dynamic>> _kpStats = [];
   bool _adviceLoading = false;
+
+  /// 可筛题型：code 与 `Question.questionType` 同值，顺序与自由选题面板一致。
+  static const List<(String, String)> _typeFilters = [
+    ('single_choice', '单选'),
+    ('multi_choice', '多选'),
+    ('true_false', '判断'),
+    ('fill_blank', '填空'),
+    ('ming_jie', '名解'),
+    ('jian_da', '简答'),
+    ('jie_da', '问答'),
+  ];
+
+  /// 传给数据库的题型条件：null = 不限（与老调用方行为一致）
+  Set<String>? get _typeFilter =>
+      _selectedTypes.isEmpty ? null : Set<String>.from(_selectedTypes);
 
   /// 动态插件动作的防重键（同一时间只跑一条，避免连点重复查库与请求）
   String? _runningPluginActionKey;
@@ -93,7 +111,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     // v1.0.2 修复：加载异常不卡在转圈态，提示错误并回到空态
     try {
       final appState = context.read<AppState>();
-      final stats = await appState.getErrorBookStats();
+      final stats =
+          await appState.getErrorBookStats(questionTypes: _typeFilter);
       if (!mounted) return;
       setState(() {
         _stats = stats;
@@ -120,14 +139,27 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
     try {
       final filter = _filter;
-      final kps =
-          await appState.getKnowledgePointStats(filter, bankIds: bankIds);
-      // 防竞态：筛选或题库选择已变，这轮结果作废
-      if (!mounted || _filter != filter || !_sameSelection(bankIds)) return;
+      final types = _typeFilter;
+      final kps = await appState.getKnowledgePointStats(filter,
+          bankIds: bankIds, questionTypes: types);
+      // 防竞态：筛选 / 题库 / 题型任一已变，这轮结果作废
+      if (!mounted ||
+          _filter != filter ||
+          !_sameSelection(bankIds) ||
+          !_sameTypes(types)) {
+        return;
+      }
       setState(() => _kpStats = kps);
     } catch (_) {
       // 知识点分组失败不影响主列表
     }
+  }
+
+  /// 与上一轮查询时的题型选择是否一致（用于丢弃过期结果）
+  bool _sameTypes(Set<String>? types) {
+    if (types == null) return _selectedTypes.isEmpty;
+    return types.length == _selectedTypes.length &&
+        types.every(_selectedTypes.contains);
   }
 
   /// 与上一轮查询时的题库选择是否一致（用于丢弃过期结果）
@@ -148,6 +180,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         builder: (_) => ErrorBookManageScreen(
           mode: _filter,
           bankIds: bankIds,
+          questionTypes: _typeFilter,
         ),
       ),
     );
@@ -169,6 +202,21 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
       _kpStats = [];
     });
     await _loadKpStats(context.read<AppState>());
+  }
+
+  /// v1.42：切换题型筛选（空 code = 清空 / 不限）。
+  ///
+  /// 题型与「全部/错题/收藏」、题库勾选是**叠加**关系：三者同时收窄。
+  /// 统计条、知识点面板、列表、复习与导出都读同一份 `_selectedTypes`。
+  Future<void> _toggleType(String code) async {
+    setState(() {
+      if (code.isEmpty) {
+        _selectedTypes.clear();
+      } else if (!_selectedTypes.remove(code)) {
+        _selectedTypes.add(code);
+      }
+    });
+    await _loadStats();
   }
 
   int get _totalCount {
@@ -219,8 +267,9 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     final ac = AppThemeColors.of(context);
     final appState = context.read<AppState>();
     final bankIds = _selectedBanks.isEmpty ? null : _selectedBanks;
-    final questions = await appState
-        .getFullQuestionsByKnowledgePoint(kp, _filter, bankIds: bankIds);
+    final questions = await appState.getFullQuestionsByKnowledgePoint(
+        kp, _filter,
+        bankIds: bankIds, questionTypes: _typeFilter);
     // v1.0.2 FSRS 可见化：逐题复习卡（下次复习时间）
     final ids = questions.map((q) => q.id).whereType<int>().toList();
     final cards = await appState.getFsrsCardsByIds(ids);
@@ -423,7 +472,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     final bankIds =
         _selectedBanks.isEmpty ? null : Set<int>.from(_selectedBanks);
     try {
-      return await appState.getErrorQuestionCards(_filter, bankIds: bankIds);
+      return await appState.getErrorQuestionCards(_filter,
+          bankIds: bankIds, questionTypes: _typeFilter);
     } catch (e) {
       messenger.showSnackBar(SnackBar(content: Text('读取错题失败：$e')));
       return null;
@@ -432,9 +482,20 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
 
   String get _scopeLabel {
     final label = _filters.firstWhere((f) => f.$1 == _filter).$2;
+    final typeLabel = _selectedTypes.isEmpty
+        ? ''
+        : ' · ${_selectedTypes.map(_typeLabelOf).join('/')}';
     return _selectedBanks.isEmpty
-        ? '$label（全部题库）'
-        : '$label · ${_selectedBanks.length} 个题库';
+        ? '$label（全部题库）$typeLabel'
+        : '$label · ${_selectedBanks.length} 个题库$typeLabel';
+  }
+
+  /// 题型 code → 中文（未知 code 原样返回，便于排查插件/旧数据）
+  static String _typeLabelOf(String code) {
+    for (final (value, label) in _typeFilters) {
+      if (value == code) return label;
+    }
+    return code;
   }
 
   /// 动态按钮的统一入口：查库 → 切片 → 引擎流式请求 → 通用弹层。
@@ -553,7 +614,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     // 不让一次统计失败把整个导出入口卡死。
     int? total;
     try {
-      total = await appState.getFullErrorCount(_filter, bankIds: bankIds);
+      total = await appState.getFullErrorCount(_filter,
+          bankIds: bankIds, questionTypes: _typeFilter);
     } catch (_) {
       total = null;
     }
@@ -638,15 +700,26 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     _ExportScope? scope;
     switch (action) {
       case 'current':
-        scope = _ExportScope(bankIds: bankIds, label: '当前筛选');
+        scope = _ExportScope(
+            bankIds: bankIds, questionTypes: _typeFilter, label: '当前筛选');
       case 'recent':
-        scope =
-            _ExportScope(bankIds: bankIds, recentFirst: true, label: '最近做过的');
+        scope = _ExportScope(
+            bankIds: bankIds,
+            questionTypes: _typeFilter,
+            recentFirst: true,
+            label: '最近做过的');
       case 'w7d':
-        scope = _ExportScope(bankIds: bankIds, window: '7d', label: '近 7 天做过的');
+        scope = _ExportScope(
+            bankIds: bankIds,
+            questionTypes: _typeFilter,
+            window: '7d',
+            label: '近 7 天做过的');
       case 'w30d':
-        scope =
-            _ExportScope(bankIds: bankIds, window: '30d', label: '近 30 天做过的');
+        scope = _ExportScope(
+            bankIds: bankIds,
+            questionTypes: _typeFilter,
+            window: '30d',
+            label: '近 30 天做过的');
       case 'pick':
         final ids = await _pickQuestions(bankIds: bankIds);
         if (ids == null || !mounted) return;
@@ -655,7 +728,10 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         if (action.startsWith('kp:')) {
           final kp = action.substring(3);
           scope = _ExportScope(
-              bankIds: bankIds, knowledgePoint: kp, label: '知识点：$kp');
+              bankIds: bankIds,
+              questionTypes: _typeFilter,
+              knowledgePoint: kp,
+              label: '知识点：$kp');
         }
     }
     if (scope == null || !mounted) return;
@@ -734,8 +810,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
   Future<Set<int>?> _pickQuestions({Set<int>? bankIds}) async {
     final appState = context.read<AppState>();
     final ac = AppThemeColors.of(context);
-    final cards =
-        await appState.getErrorQuestionCards(_filter, bankIds: bankIds);
+    final cards = await appState.getErrorQuestionCards(_filter,
+        bankIds: bankIds, questionTypes: _typeFilter);
     if (!mounted) return null;
     if (cards.isEmpty) {
       ScaffoldMessenger.of(context)
@@ -855,6 +931,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         bankIds: s.bankIds,
         questionIds: s.questionIds,
         knowledgePoint: s.knowledgePoint,
+        questionTypes: s.questionTypes,
         window: s.window,
         recentFirst: s.recentFirst,
         includeStats: true, // 带上「做过几次/正确率/FSRS」，便于外部查看
@@ -887,6 +964,7 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
         bankIds: s.bankIds,
         questionIds: s.questionIds,
         knowledgePoint: s.knowledgePoint,
+        questionTypes: s.questionTypes,
         window: s.window,
         recentFirst: s.recentFirst,
         placement: placement,
@@ -979,7 +1057,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
 
     final bankIds = _selectedBanks.isEmpty ? null : _selectedBanks;
     // v1.0.2 修复：复习前确认数量（对齐首页「自由选题」的选择行为）
-    final count = await appState.getFullErrorCount(_filter, bankIds: bankIds);
+    final count = await appState.getFullErrorCount(_filter,
+        bankIds: bankIds, questionTypes: _typeFilter);
     if (!mounted) return;
     if (count <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1006,7 +1085,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     );
     if (ok != true || !mounted) return;
 
-    await appState.startErrorReview(mode: _filter, bankIds: bankIds);
+    await appState.startErrorReview(
+        mode: _filter, bankIds: bankIds, questionTypes: _typeFilter);
     if (appState.quizQuestions.isEmpty) {
       // 无匹配时清空残留旧题（防泄漏）
       if (!mounted) return;
@@ -1027,7 +1107,8 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
     final appState = context.read<AppState>();
     if (_guard(appState)) return;
     final bankIds = _selectedBanks.isEmpty ? null : _selectedBanks;
-    await appState.startErrorReview(mode: _filter, bankIds: bankIds, kp: kp);
+    await appState.startErrorReview(
+        mode: _filter, bankIds: bankIds, kp: kp, questionTypes: _typeFilter);
     if (appState.quizQuestions.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1138,34 +1219,34 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                 ? GuideAnchor(
                     id: GuideAnchorIds.errorbookEmpty,
                     child: NatsumeEmptyState(
-                    icon: Icons.check_circle_outline,
-                    title: _emptyText,
-                    description: '继续练习即可积累错题记录。',
-                    action: FilledButton.icon(
-                      icon: const Icon(Icons.bolt),
-                      label: const Text('去刷题'),
-                      onPressed: () {
-                        // 没有错题时点「去刷题」会出现「快速开始页套娃」，原因：
-                        // 这里原本 pushReplacement 一份新的
-                        // QuickStartScreen，而它本身就是主壳的一级「开始」Tab
-                        // 页——主壳还留在栈底、显示的正是同一页，于是栈里出现
-                        // 两份快速开始页，返回时就成了「自己套自己」。
-                        //
-                        // 正确做法：回主壳（错题本是 push 上来的二级页），再把
-                        // Tab 切到「开始」。切 Tab 复用引导已有的那条通道
-                        // （GuideController.requestTab → 主壳注册的 _select），
-                        // 不再新增第二条跨页切 Tab 的通路。
-                        //
-                        // 前提（跨文件隐式契约）：**主壳就是首路由**——splash
-                        // 是用 pushReplacement 进 MainShell 的。若哪天改成往闪屏
-                        // 上 push，这里的 popUntil 会落回闪屏、Tab 也不会切，
-                        // 表现成「点了没反应」。改启动流程时记得一起看这里。
-                        final guide = GuideScope.maybeOf(context);
-                        Navigator.of(context).popUntil((r) => r.isFirst);
-                        guide?.requestTab(kQuickStartTabIndex);
-                      },
+                      icon: Icons.check_circle_outline,
+                      title: _emptyText,
+                      description: '继续练习即可积累错题记录。',
+                      action: FilledButton.icon(
+                        icon: const Icon(Icons.bolt),
+                        label: const Text('去刷题'),
+                        onPressed: () {
+                          // 没有错题时点「去刷题」会出现「快速开始页套娃」，原因：
+                          // 这里原本 pushReplacement 一份新的
+                          // QuickStartScreen，而它本身就是主壳的一级「开始」Tab
+                          // 页——主壳还留在栈底、显示的正是同一页，于是栈里出现
+                          // 两份快速开始页，返回时就成了「自己套自己」。
+                          //
+                          // 正确做法：回主壳（错题本是 push 上来的二级页），再把
+                          // Tab 切到「开始」。切 Tab 复用引导已有的那条通道
+                          // （GuideController.requestTab → 主壳注册的 _select），
+                          // 不再新增第二条跨页切 Tab 的通路。
+                          //
+                          // 前提（跨文件隐式契约）：**主壳就是首路由**——splash
+                          // 是用 pushReplacement 进 MainShell 的。若哪天改成往闪屏
+                          // 上 push，这里的 popUntil 会落回闪屏、Tab 也不会切，
+                          // 表现成「点了没反应」。改启动流程时记得一起看这里。
+                          final guide = GuideScope.maybeOf(context);
+                          Navigator.of(context).popUntil((r) => r.isFirst);
+                          guide?.requestTab(kQuickStartTabIndex);
+                        },
+                      ),
                     ),
-                  ),
                   )
                 : Column(
                     children: [
@@ -1211,6 +1292,68 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                       ],
                                     ),
                                   ),
+                                  // v1.42 题型筛选：单选 / 多选 / 判断 / 填空 / 名解 / 简答 / 问答
+                                  // 与上方「全部 / 错题 / 收藏」、题库勾选叠加生效
+                                  Padding(
+                                    padding:
+                                        const EdgeInsets.fromLTRB(14, 2, 14, 2),
+                                    child: Row(
+                                      children: [
+                                        Text('题型',
+                                            style: TextStyle(
+                                                fontSize: NatsumeType.caption,
+                                                color: ac.textSecondary)),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: SingleChildScrollView(
+                                            scrollDirection: Axis.horizontal,
+                                            child: Row(
+                                              children: [
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                          right: 6),
+                                                  child: ChoiceChip(
+                                                    label: const Text('全部',
+                                                        style: TextStyle(
+                                                            fontSize:
+                                                                NatsumeType
+                                                                    .micro)),
+                                                    selected:
+                                                        _selectedTypes.isEmpty,
+                                                    visualDensity:
+                                                        VisualDensity.compact,
+                                                    onSelected: (_) =>
+                                                        _toggleType(''),
+                                                  ),
+                                                ),
+                                                for (final (code, label)
+                                                    in _typeFilters)
+                                                  Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                            right: 6),
+                                                    child: ChoiceChip(
+                                                      label: Text(label,
+                                                          style: const TextStyle(
+                                                              fontSize:
+                                                                  NatsumeType
+                                                                      .micro)),
+                                                      selected: _selectedTypes
+                                                          .contains(code),
+                                                      visualDensity:
+                                                          VisualDensity.compact,
+                                                      onSelected: (_) =>
+                                                          _toggleType(code),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                   // 统计条
                                   Padding(
                                     padding: const EdgeInsets.symmetric(
@@ -1241,116 +1384,123 @@ class _ErrorBookScreenState extends State<ErrorBookScreen> {
                                       child: GuideAnchor(
                                         id: GuideAnchorIds.errorbookKnowledge,
                                         child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                            horizontal: 12, vertical: 10),
-                                        decoration: BoxDecoration(
-                                          color: ac.surfaceAlt.withOpacity(0.4),
-                                          borderRadius: BorderRadius.circular(
-                                              NatsumeRadius.small),
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Icon(Icons.insights,
-                                                    size: 15, color: ac.accent),
-                                                const SizedBox(width: 6),
-                                                Text('薄弱知识点',
-                                                    style: TextStyle(
-                                                        fontSize:
-                                                            NatsumeType.body,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        color: ac.textPrimary)),
-                                                const Spacer(),
-                                                // v1.0.2 对齐里程碑：按知识点分组
-                                                Text('按知识点分组',
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 12, vertical: 10),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                ac.surfaceAlt.withOpacity(0.4),
+                                            borderRadius: BorderRadius.circular(
+                                                NatsumeRadius.small),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Icon(Icons.insights,
+                                                      size: 15,
+                                                      color: ac.accent),
+                                                  const SizedBox(width: 6),
+                                                  Text('薄弱知识点',
+                                                      style: TextStyle(
+                                                          fontSize:
+                                                              NatsumeType.body,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          color:
+                                                              ac.textPrimary)),
+                                                  const Spacer(),
+                                                  // v1.0.2 对齐里程碑：按知识点分组
+                                                  Text('按知识点分组',
+                                                      style: TextStyle(
+                                                          fontSize: NatsumeType
+                                                              .caption,
+                                                          color: ac
+                                                              .textSecondary)),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 2),
+                                              // v1.0.2 对齐里程碑：优先复习知识点
+                                              Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text('优先复习知识点',
                                                     style: TextStyle(
                                                         fontSize:
                                                             NatsumeType.caption,
                                                         color:
                                                             ac.textSecondary)),
-                                              ],
-                                            ),
-                                            const SizedBox(height: 2),
-                                            // v1.0.2 对齐里程碑：优先复习知识点
-                                            Align(
-                                              alignment: Alignment.centerLeft,
-                                              child: Text('优先复习知识点',
-                                                  style: TextStyle(
-                                                      fontSize:
-                                                          NatsumeType.caption,
-                                                      color: ac.textSecondary)),
-                                            ),
-                                            const SizedBox(height: 10),
-                                            // 标签云（圆角 8px 卡片）
-                                            Wrap(
-                                              spacing: 8,
-                                              runSpacing: 8,
-                                              children: [
-                                                for (final kp
-                                                    in _kpStats.take(10))
-                                                  InkWell(
-                                                    borderRadius:
-                                                        BorderRadius.circular(
-                                                            NatsumeRadius
-                                                                .small),
-                                                    onTap: () =>
-                                                        _showKpQuestions(
-                                                            kp['kp'] as String),
-                                                    child: Container(
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 12,
-                                                          vertical: 7),
-                                                      decoration: BoxDecoration(
-                                                        color: ac.accent
-                                                            .withOpacity(0.12),
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(
-                                                                    NatsumeRadius
-                                                                        .small),
-                                                        border: Border.all(
-                                                            color: ac.accent
-                                                                .withOpacity(
-                                                                    0.25)),
-                                                      ),
-                                                      child: Row(
-                                                        mainAxisSize:
-                                                            MainAxisSize.min,
-                                                        children: [
-                                                          Text(
-                                                            '${kp['kp']}',
-                                                            style: TextStyle(
-                                                                fontSize:
-                                                                    NatsumeType
-                                                                        .body,
-                                                                color: ac
-                                                                    .textPrimary),
-                                                          ),
-                                                          const SizedBox(
-                                                              width: 6),
-                                                          Text(
-                                                            '${kp['cnt']} 题',
-                                                            style: TextStyle(
-                                                                fontSize:
-                                                                    NatsumeType
-                                                                        .micro,
-                                                                color:
-                                                                    ac.accent),
-                                                          ),
-                                                        ],
+                                              ),
+                                              const SizedBox(height: 10),
+                                              // 标签云（圆角 8px 卡片）
+                                              Wrap(
+                                                spacing: 8,
+                                                runSpacing: 8,
+                                                children: [
+                                                  for (final kp
+                                                      in _kpStats.take(10))
+                                                    InkWell(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                              NatsumeRadius
+                                                                  .small),
+                                                      onTap: () =>
+                                                          _showKpQuestions(
+                                                              kp['kp']
+                                                                  as String),
+                                                      child: Container(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .symmetric(
+                                                                horizontal: 12,
+                                                                vertical: 7),
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: ac.accent
+                                                              .withOpacity(
+                                                                  0.12),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                  NatsumeRadius
+                                                                      .small),
+                                                          border: Border.all(
+                                                              color: ac.accent
+                                                                  .withOpacity(
+                                                                      0.25)),
+                                                        ),
+                                                        child: Row(
+                                                          mainAxisSize:
+                                                              MainAxisSize.min,
+                                                          children: [
+                                                            Text(
+                                                              '${kp['kp']}',
+                                                              style: TextStyle(
+                                                                  fontSize:
+                                                                      NatsumeType
+                                                                          .body,
+                                                                  color: ac
+                                                                      .textPrimary),
+                                                            ),
+                                                            const SizedBox(
+                                                                width: 6),
+                                                            Text(
+                                                              '${kp['cnt']} 题',
+                                                              style: TextStyle(
+                                                                  fontSize:
+                                                                      NatsumeType
+                                                                          .micro,
+                                                                  color: ac
+                                                                      .accent),
+                                                            ),
+                                                          ],
+                                                        ),
                                                       ),
                                                     ),
-                                                  ),
-                                              ],
-                                            ),
-                                          ],
+                                                ],
+                                              ),
+                                            ],
+                                          ),
                                         ),
-                                      ),
                                       ),
                                     ),
                                   // 生成建议（v1.0.2 对齐里程碑）
@@ -1670,6 +1820,7 @@ class _ExportScope {
     this.bankIds,
     this.questionIds,
     this.knowledgePoint,
+    this.questionTypes,
     this.window,
     this.recentFirst = false,
     required this.label,
@@ -1678,6 +1829,9 @@ class _ExportScope {
   final Set<int>? bankIds;
   final Set<int>? questionIds;
   final String? knowledgePoint;
+
+  /// 题型范围（null / 空 = 不限）。导出必须遵循当前题型筛选（v1.42）。
+  final Set<String>? questionTypes;
   final String? window;
   final bool recentFirst;
 

@@ -126,6 +126,13 @@ class AppSettings {
   /// 不改任何 AI 接口地址。见 `lib/services/net/smart_http_client.dart`。
   String customMirror;
 
+  /// v1.42 做题节奏：答完一题后是否自动切到下一题。
+  ///
+  /// 默认开启，与旧版「答对自动进入下一题」的节奏一致；关闭后停留在当前题，
+  /// 完整展示判定与解析，由用户手动点「下一题」。写入 settings 表的
+  /// `auto_advance_after_answer`，随备份一起带走。
+  bool autoAdvanceAfterAnswer;
+
   AppSettings({
     this.apiKey = '',
     this.apiEndpoint = defaultApiEndpoint,
@@ -142,6 +149,7 @@ class AppSettings {
     this.analysisGrounding = true,
     this.knowledgePointTypes = const [],
     this.customMirror = '',
+    this.autoAdvanceAfterAnswer = true,
   });
 
   bool get isConfigured => apiKey.isNotEmpty;
@@ -166,6 +174,8 @@ class AppSettings {
       'knowledge_point_types': jsonEncode(knowledgePointTypes),
       // v1.36 网络加速：自定义镜像（不是凭据，随备份带走）
       'custom_mirror': customMirror,
+      // v1.42 做题节奏：答完自动切下一题
+      'auto_advance_after_answer': autoAdvanceAfterAnswer ? '1' : '0',
     };
   }
 
@@ -194,9 +204,12 @@ class AppSettings {
       // 老用户 / 老备份没有这个键：默认开启（软约束，命中不到就不注入）
       analysisGrounding: map['analysis_grounding'] != '0',
       // 老用户没有知识点体系：空列表 = 沿用 AI 自行判断
-      knowledgePointTypes: decodeKnowledgePointTypes(map['knowledge_point_types']),
+      knowledgePointTypes:
+          decodeKnowledgePointTypes(map['knowledge_point_types']),
       // v1.36：老备份没有这个键 → 空 = 只用内置加速池
       customMirror: map['custom_mirror'] ?? '',
+      // v1.42：老备份没有这个键 → 默认开启（保持旧版自动跳题节奏）
+      autoAdvanceAfterAnswer: map['auto_advance_after_answer'] != '0',
     );
   }
 
@@ -234,6 +247,7 @@ class AppSettings {
     bool? analysisGrounding,
     List<String>? knowledgePointTypes,
     String? customMirror,
+    bool? autoAdvanceAfterAnswer,
   }) {
     return AppSettings(
       apiKey: apiKey ?? this.apiKey,
@@ -251,6 +265,8 @@ class AppSettings {
       analysisGrounding: analysisGrounding ?? this.analysisGrounding,
       knowledgePointTypes: knowledgePointTypes ?? this.knowledgePointTypes,
       customMirror: customMirror ?? this.customMirror,
+      autoAdvanceAfterAnswer:
+          autoAdvanceAfterAnswer ?? this.autoAdvanceAfterAnswer,
     );
   }
 }

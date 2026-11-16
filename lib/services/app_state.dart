@@ -533,8 +533,8 @@ class AppState extends ChangeNotifier {
     if (scannedPdf) {
       // 扫描件切题：MinerU（若还没试过）→ 端上 OCR → 视觉切题
       stage(0.4, 1.0);
-      final scannedResult = await _parseScannedPdf(file, fileName,
-          allowMineru: !mineruTried);
+      final scannedResult =
+          await _parseScannedPdf(file, fileName, allowMineru: !mineruTried);
       if (scannedResult == null) return null; // 失败原因已写进 _importStatus
       result = scannedResult;
     } else {
@@ -986,8 +986,8 @@ class AppState extends ChangeNotifier {
 
     // v1.35：插件内容同步范围（本机选择，默认三项全开）
     try {
-      _pluginSyncScope =
-          PluginSyncScope.decode(await _db.getSetting(PluginSyncScope.settingsKey));
+      _pluginSyncScope = PluginSyncScope.decode(
+          await _db.getSetting(PluginSyncScope.settingsKey));
     } catch (e) {
       DebugLogService.instance.log('SYNC', '插件同步范围读取失败: $e');
       _pluginSyncScope = PluginSyncScope.all;
@@ -1200,11 +1200,14 @@ class AppState extends ChangeNotifier {
     await _db.setSetting(
         'analysis_grounding', newSettings.analysisGrounding ? '1' : '0');
     // v1.35 知识点体系：JSON 数组，空列表 = 交回 AI 自行判断
-    await _db.setSetting('knowledge_point_types',
-        jsonEncode(newSettings.knowledgePointTypes));
+    await _db.setSetting(
+        'knowledge_point_types', jsonEncode(newSettings.knowledgePointTypes));
     // v1.36 网络加速：自定义镜像（空 = 只用内置加速池）；立刻生效，无需重启
     await _db.setSetting('custom_mirror', newSettings.customMirror);
     SmartHttpClient.instance.customMirror = newSettings.customMirror;
+    // v1.42 做题节奏：答完自动切下一题（默认开，随备份携带）
+    await _db.setSetting('auto_advance_after_answer',
+        newSettings.autoAdvanceAfterAnswer ? '1' : '0');
     _initAIService();
     notifyListeners();
   }
@@ -2291,10 +2294,9 @@ class AppState extends ChangeNotifier {
     _streamingReply = '';
     final onCurrentQuestion = () => currentQuestion?.id == qId;
     try {
-      await for (final acc
-          in _aiService!.streamFollowUp(
-              q, _currentAnalysis!, question,
-              grounding: _analysisGroundingBlock)) {
+      await for (final acc in _aiService!.streamFollowUp(
+          q, _currentAnalysis!, question,
+          grounding: _analysisGroundingBlock)) {
         reply = acc;
         if (!onCurrentQuestion()) continue; // 已切题：不更新 UI，但继续收完
         _streamingReply = acc;
@@ -2662,31 +2664,39 @@ class AppState extends ChangeNotifier {
   }
 
   /// 获取错题本统计（按题库分组）：到期题数 + 收藏题数 + 全部去重
-  Future<List<Map<String, dynamic>>> getErrorBookStats() async {
-    return await _db.getErrorStatsByBank();
+  ///
+  /// [questionTypes] 非空时只统计这些题型（与列表 / 导出同口径）。
+  Future<List<Map<String, dynamic>>> getErrorBookStats(
+      {Set<String>? questionTypes}) async {
+    return await _db.getErrorStatsByBank(questionTypes: questionTypes);
   }
 
   // ======================== v1.0.2: 错题本筛选/知识点 ========================
 
   /// 按筛选模式取错题全量题列表（mode: all/wrong/bookmark）
   Future<List<Question>> getFullErrorQuestions(String mode,
-          {Set<int>? bankIds}) =>
-      _db.getFullErrorQuestions(mode, bankIds: bankIds);
+          {Set<int>? bankIds, Set<String>? questionTypes}) =>
+      _db.getFullErrorQuestions(mode,
+          bankIds: bankIds, questionTypes: questionTypes);
 
   /// 按筛选模式的错题总数
-  Future<int> getFullErrorCount(String mode, {Set<int>? bankIds}) =>
-      _db.getFullErrorCount(mode, bankIds: bankIds);
+  Future<int> getFullErrorCount(String mode,
+          {Set<int>? bankIds, Set<String>? questionTypes}) =>
+      _db.getFullErrorCount(mode,
+          bankIds: bankIds, questionTypes: questionTypes);
 
   /// 知识点分组统计（与主列表同口径）
   Future<List<Map<String, dynamic>>> getKnowledgePointStats(String mode,
-          {Set<int>? bankIds}) =>
-      _db.getKnowledgePointStats(mode, bankIds: bankIds);
+          {Set<int>? bankIds, Set<String>? questionTypes}) =>
+      _db.getKnowledgePointStats(mode,
+          bankIds: bankIds, questionTypes: questionTypes);
 
   /// 按知识点取题（复习范围与主列表同口径）
   Future<List<Question>> getFullQuestionsByKnowledgePoint(
           String kp, String mode,
-          {Set<int>? bankIds}) =>
-      _db.getFullQuestionsByKnowledgePoint(kp, mode, bankIds: bankIds);
+          {Set<int>? bankIds, Set<String>? questionTypes}) =>
+      _db.getFullQuestionsByKnowledgePoint(kp, mode,
+          bankIds: bankIds, questionTypes: questionTypes);
 
   /// 错题复习：按筛选模式取题（all/wrong/bookmark）+ 可选知识点
   /// [kp] 非空时复习指定知识点（会话 mode = kp_review）
@@ -2694,13 +2704,15 @@ class AppState extends ChangeNotifier {
     String mode = 'all',
     Set<int>? bankIds,
     String? kp,
+    Set<String>? questionTypes,
   }) async {
     final List<Question> questions;
     if (kp != null && kp.isNotEmpty) {
       questions = await _db.getFullQuestionsByKnowledgePoint(kp, mode,
-          bankIds: bankIds);
+          bankIds: bankIds, questionTypes: questionTypes);
     } else {
-      questions = await _db.getFullErrorQuestions(mode, bankIds: bankIds);
+      questions = await _db.getFullErrorQuestions(mode,
+          bankIds: bankIds, questionTypes: questionTypes);
     }
     if (questions.isEmpty) return;
 
@@ -2817,6 +2829,7 @@ class AppState extends ChangeNotifier {
     Set<int>? bankIds,
     Set<int>? questionIds,
     String? knowledgePoint,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
     bool includeStats = false,
@@ -2826,6 +2839,7 @@ class AppState extends ChangeNotifier {
       bankIds: bankIds,
       questionIds: questionIds,
       knowledgePoint: knowledgePoint,
+      questionTypes: questionTypes,
       window: window,
       recentFirst: recentFirst,
     );
@@ -2894,6 +2908,8 @@ class AppState extends ChangeNotifier {
         'mode': mode,
         if (window != null) 'window': window,
         if (knowledgePoint != null) 'knowledge_point': knowledgePoint,
+        if (questionTypes != null && questionTypes.isNotEmpty)
+          'question_types': questionTypes.toList()..sort(),
       },
       'questions': list,
     });
@@ -2931,6 +2947,7 @@ class AppState extends ChangeNotifier {
     Set<int>? bankIds,
     Set<int>? questionIds,
     String? knowledgePoint,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
     required DocxAnswerPlacement placement,
@@ -2941,6 +2958,7 @@ class AppState extends ChangeNotifier {
       bankIds: bankIds,
       questionIds: questionIds,
       knowledgePoint: knowledgePoint,
+      questionTypes: questionTypes,
       window: window,
       recentFirst: recentFirst,
     );
@@ -2969,6 +2987,18 @@ class AppState extends ChangeNotifier {
           List<int> questionIds) =>
       _db.getQuestionStatsByIds(questionIds);
 
+  /// 逐题「上一次答对 / 答错」（题库题号网格红绿标记，v1.42）。
+  Future<Map<int, bool>> getLastAnswerStatusByQuestionIds(
+          List<int> questionIds) =>
+      _db.getLastAnswerStatusByQuestionIds(questionIds);
+
+  /// 清空某个题库的作答记录与复习计划（「清空记录并重刷」，v1.42）。
+  ///
+  /// 普通开始 / 继续刷题不会调用它；只有用户明确确认「清空记录并重刷」时
+  /// 才清 `answer_records` + `fsrs_cards`，题目与收藏不动。
+  Future<({int records, int cards})> clearBankRecords(int bankId) =>
+      _db.clearBankRecords(bankId);
+
   /// 错题卡片数据：题目 + 作答次数/正确数 + FSRS 卡。
   ///
   /// 两条批量查询（题目+统计一条、FSRS 一条），**避免 N+1**；
@@ -2983,12 +3013,14 @@ class AppState extends ChangeNotifier {
           })>> getErrorQuestionCards(
     String mode, {
     Set<int>? bankIds,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
   }) async {
     final rows = await _db.getErrorQuestionsWithStats(
       mode,
       bankIds: bankIds,
+      questionTypes: questionTypes,
       window: window,
       recentFirst: recentFirst,
     );

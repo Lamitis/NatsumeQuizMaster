@@ -24,6 +24,7 @@ class ErrorBookManageScreen extends StatefulWidget {
     super.key,
     required this.mode,
     this.bankIds,
+    this.questionTypes,
   });
 
   /// 错题筛选口径：all / wrong / bookmark（与错题本筛选栏一致）
@@ -31,6 +32,9 @@ class ErrorBookManageScreen extends StatefulWidget {
 
   /// 已选题库（null / 空 = 全库）
   final Set<int>? bankIds;
+
+  /// 已选题型（null / 空 = 不限；v1.42 与主列表同口径）
+  final Set<String>? questionTypes;
 
   @override
   State<ErrorBookManageScreen> createState() => _ErrorBookManageScreenState();
@@ -65,7 +69,7 @@ class _ErrorBookManageScreenState extends State<ErrorBookManageScreen> {
     try {
       final appState = context.read<AppState>();
       final items = await appState.getErrorQuestionCards(widget.mode,
-          bankIds: widget.bankIds);
+          bankIds: widget.bankIds, questionTypes: widget.questionTypes);
       if (!mounted) return;
       setState(() {
         // 没有 id 的题无法精确定位，直接排除（正常不会出现）
@@ -267,8 +271,7 @@ class _ErrorBookManageScreenState extends State<ErrorBookManageScreen> {
   String _statLine(_ErrorItem it) {
     final parts = <String>['做过 ${it.answered} 次'];
     if (it.answered > 0) {
-      parts.add(
-          '正确率 ${(it.correct / it.answered * 100).toStringAsFixed(0)}%');
+      parts.add('正确率 ${(it.correct / it.answered * 100).toStringAsFixed(0)}%');
     }
     final card = it.card;
     if (card != null) {
@@ -277,4 +280,3 @@ class _ErrorBookManageScreenState extends State<ErrorBookManageScreen> {
     return parts.join(' · ');
   }
 }
-

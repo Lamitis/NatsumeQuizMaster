@@ -29,6 +29,7 @@ class _FakeAppState extends AppState {
   Future<List<_Item>> getErrorQuestionCards(
     String mode, {
     Set<int>? bankIds,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
   }) async =>

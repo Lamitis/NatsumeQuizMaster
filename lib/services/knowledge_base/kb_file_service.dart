@@ -72,6 +72,36 @@ class KbFileService {
   /// 包内清单文件名
   static const String bundleManifestName = 'kb.json';
 
+  /// 单文件导出的强制后缀（v1.42）。
+  ///
+  /// Windows / Android 都靠后缀决定「双击用什么打开」，文件选择器也靠它
+  /// 把导出文件列进「知识库 JSON」筛选项。
+  static const String singleFileExtension = '.json';
+
+  /// 单文件导出文件名：清掉路径分隔符等非法字符，并强制 `.json` 后缀。
+  ///
+  /// 以前调用方直接拿 `kb.name` 拼路径：名字里带 `/`、`:` 时写入会失败
+  /// （Windows 甚至把它当成子目录），生成的文件也可能没有后缀、认不出类型。
+  static String singleExportFileName(String name) {
+    final safe = name
+        .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final base = safe.isEmpty ? '知识库' : safe;
+    return base.toLowerCase().endsWith(singleFileExtension)
+        ? base
+        : '$base$singleFileExtension';
+  }
+
+  /// 确保导出路径带 `.json`。
+  ///
+  /// 批量包 / 世界包成员本来就传 `kb/<id>.json`，这里原样返回；
+  /// 单文件导出传什么都会补齐后缀，保证「导出 → 导入」闭环。
+  static String ensureSingleFileExtension(String destPath) =>
+      destPath.toLowerCase().endsWith(singleFileExtension)
+          ? destPath
+          : '$destPath$singleFileExtension';
+
   static Future<KnowledgeBase?> _getKb(int kbId) async {
     final all = await _db.getAllKnowledgeBases();
     for (final kb in all) {
@@ -99,10 +129,26 @@ class KbFileService {
     } catch (e) {
       return (null, const <KbDocument>[], '不是有效的 JSON 文件: $e');
     }
-    if (data is! Map || data['format'] != formatMarker) {
-      return (null, const <KbDocument>[], '不是NatsumeQuizMaster知识库文件（缺少 format 标记）');
+    if (data is! Map) {
+      return (null, const <KbDocument>[], '不是NatsumeQuizMaster知识库文件（根节点必须是对象）');
     }
-    final docsRaw = data['documents'];
+    // v1.42：兼容「外层包装」写法——有的导出流程会把标准知识库塞进
+    // `{"wrapper": ..., "knowledge_base": {...}}`；只要内层带 format 标记就能读。
+    var payload = data;
+    if (payload['format'] != formatMarker) {
+      final nested = payload['knowledge_base'];
+      if (nested is Map && nested['format'] == formatMarker) {
+        payload = Map<String, dynamic>.from(nested);
+      }
+    }
+    if (payload['format'] != formatMarker) {
+      return (
+        null,
+        const <KbDocument>[],
+        '不是NatsumeQuizMaster知识库文件（缺少 format 标记）'
+      );
+    }
+    final docsRaw = payload['documents'];
     if (docsRaw is! List || docsRaw.isEmpty) {
       return (null, const <KbDocument>[], '知识库文件中没有有效文档');
     }
@@ -122,11 +168,11 @@ class KbFileService {
       ));
     }
     if (docs.isEmpty) return (null, const <KbDocument>[], '知识库文件中没有有效文档');
-    final uidRaw = data['uid']?.toString().trim();
+    final uidRaw = payload['uid']?.toString().trim();
     return (
       KnowledgeBase(
-        name: (data['name'] ?? '导入知识库').toString(),
-        description: data['description']?.toString(),
+        name: (payload['name'] ?? '导入知识库').toString(),
+        description: payload['description']?.toString(),
         uid: (uidRaw == null || uidRaw.isEmpty) ? null : uidRaw,
         createdAt: now,
       ),
@@ -214,7 +260,8 @@ class KbFileService {
       }
     }
 
-    final target = categoryId == null ? kb : kb.copyWith(categoryId: categoryId);
+    final target =
+        categoryId == null ? kb : kb.copyWith(categoryId: categoryId);
     final kbId = await _db.insertKnowledgeBase(target);
     final now = DateTime.now().toIso8601String();
     for (final d in docs) {
@@ -236,19 +283,29 @@ class KbFileService {
   }
 
   /// 导出知识库为 JSON 文件。返回文件路径；失败返回 null。
+  ///
+  /// v1.42 修复：无论调用方给的目标路径带不带后缀，落盘文件一定是 `.json`；
+  /// 内容里补齐 `version` / `kind` / `document_count` / `exported_at` 等识别
+  /// 标记，和批量包同一口径——导入端只认 `format`，多出来的字段是给人看的。
   static Future<String?> exportKnowledgeBase(int kbId, String destPath) async {
     final kb = await _getKb(kbId);
     if (kb == null) return null;
     final docs = await _db.getKbDocuments(kbId);
     if (docs.isEmpty) return null;
+    final dest = ensureSingleFileExtension(destPath);
     final json = const JsonEncoder.withIndent('  ').convert({
       'format': formatMarker,
+      // v1.42：单文件也带版本 / 类型头，识别端不必靠文件名猜
+      'version': '1',
+      'kind': 'single',
       'name': kb.name,
       'description': kb.description,
       // v1.41.2：导出 uid —— 同一份知识库再次导入时按 uid 跳过
       if (kb.uid != null && kb.uid!.isNotEmpty) 'uid': kb.uid,
       // 静默写入专属 creator 标识（数据格式的专属烙印）
       'creator': NatsumePersonality.creatorMark,
+      'document_count': docs.length,
+      'exported_at': DateTime.now().toIso8601String(),
       'documents': [
         for (final d in docs)
           {
@@ -259,7 +316,8 @@ class KbFileService {
           },
       ],
     });
-    final file = File(destPath);
+    final file = File(dest);
+    await file.parent.create(recursive: true);
     await file.writeAsString(json);
     return file.path;
   }
@@ -292,6 +350,32 @@ class KbFileService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 这个 zip 是不是「世界 / 分类导出包」（`world.json` + format=natsume-world）。
+  ///
+  /// v1.42：知识库页的「导出分类」产物是 `.natsume-world.zip`，用户很自然
+  /// 会拿「导入知识库」去还原它。这里先认出来，交给 `WorldService.importWorld`
+  /// 处理，而不是报「缺少 kb.json 清单」。
+  static Future<bool> isWorldFile(String path) async {
+    final file = File(path);
+    if (!await file.exists()) return false;
+    final Archive archive;
+    try {
+      archive = ZipDecoder().decodeBytes(await file.readAsBytes());
+    } catch (_) {
+      return false;
+    }
+    for (final f in archive) {
+      if (!f.isFile || f.name != 'world.json') continue;
+      try {
+        final data = jsonDecode(utf8.decode(f.content as List<int>));
+        return data is Map && data['format'] == 'natsume-world';
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /// 把多个知识库打成一个 `.natsume-kb` 包。
@@ -394,7 +478,9 @@ class KbFileService {
       }
       final manifestFile = File('${tmp.path}/$bundleManifestName');
       if (!manifestFile.existsSync()) {
-        return const KbBundleImportResult(error: '知识库包缺少 kb.json 清单');
+        return const KbBundleImportResult(
+            error: '知识库包缺少 kb.json 清单（若是分类 / 世界导出包，'
+                '请用「导入知识库」重新选择，或到「世界」页导入）');
       }
       final dynamic manifest;
       try {

@@ -159,8 +159,7 @@ class AIService {
       '请到「世界总览 → 插件市场」安装并启用对应插件后重试。';
 
   /// 声明式 DSL 动作的提示词为空时给用户看的话（不发空请求）
-  static const String pluginActionEmptyMessage =
-      '插件动作缺少可用的提示词模板，已取消本次请求。';
+  static const String pluginActionEmptyMessage = '插件动作缺少可用的提示词模板，已取消本次请求。';
 
   /// 声明式 DSL 动作（v1.38）：user 消息来自清单内联模板，宿主已填好槽。
   ///
@@ -193,7 +192,7 @@ class AIService {
   /// v1.27 提速：题目边界感知切块（题干/答案不会被切断）+
   /// [parseConcurrency] 路并发（块间互不依赖，网络等待时间重叠）
   static const int parseConcurrency = 3;
-  
+
   Future<AIParseResult> parseQuestionsFromRawText(
     String rawText,
     int bankId,
@@ -207,7 +206,7 @@ class AIService {
     final allQuestions = <Question>[];
     final errors = <String>[];
     final now = DateTime.now().toIso8601String();
-  
+
     // 并发受限的 worker 池：结果按块号收集（错误上报顺序稳定）
     final results =
         List<(List<Question>, String?)?>.filled(chunks.length, null);
@@ -223,20 +222,21 @@ class AIService {
         onProgress?.call(done, chunks.length);
       }
     }
-  
+
     final workers = min(parseConcurrency, max(1, chunks.length));
     await Future.wait(List.generate(workers, (_) => worker()));
-  
+
     for (var i = 0; i < chunks.length; i++) {
       final r = results[i];
       if (r == null) continue;
       allQuestions.addAll(r.$1);
       if (r.$2 != null) {
         // 内部降级标记不展示给用户。
-        errors.add('第 ${i + 1} 块：${r.$2!.replaceAll(_tokenLimitMarker, '').replaceAll(_permanentMarker, '')}');
+        errors.add(
+            '第 ${i + 1} 块：${r.$2!.replaceAll(_tokenLimitMarker, '').replaceAll(_permanentMarker, '')}');
       }
     }
-  
+
     onProgress?.call(chunks.length, chunks.length);
     return AIParseResult(allQuestions, errors.length, errors);
   }
@@ -250,7 +250,7 @@ class AIService {
 
   static bool isQuestionStart(String line) =>
       questionStartPattern.hasMatch(line);
-  
+
   /// 题目边界感知切块（v1.27 提速 + 防切断）：
   /// 1. 按题目起始行把文本分成完整题目块（题干+选项+答案+解析永不拆散）；
   /// 2. 完整块贪心装箱到 [maxChars] 内，切点永远落在题目与题目之间；
@@ -261,7 +261,7 @@ class AIService {
   static List<String> splitTextIntoQuestionChunks(String text,
       {int maxChars = 2000}) {
     final lines = text.split('\n');
-  
+
     // 1. 按题目起始行分组为完整题目块；记录首题之前的文档头。
     final blocks = <String>[];
     final header = StringBuffer();
@@ -280,12 +280,12 @@ class AIService {
     }
     final tail = cur.toString().trim();
     if (tail.isNotEmpty) blocks.add(tail);
-  
+
     // 无题目起始行：退回按段切块（旧行为，兼容无题号文档）
     if (blocks.isEmpty) {
       return _splitTextIntoChunks(text, maxChars: maxChars);
     }
-  
+
     // 2. 完整块贪心装箱；单块超限也独占一块（不切碎）。
     final chunks = <String>[];
     var buf = '';
@@ -308,7 +308,7 @@ class AIService {
     if (headerPending.isNotEmpty) chunks.insert(0, headerPending);
     return chunks;
   }
-  
+
   /// 将文本按段落分块（无题号文档的退路；题目边界文档请用上面的边界切块）。
   /// v1.27 截断修复：上限同改 2000 字，防输出 JSON 撞模型输出上限被截断。
   static List<String> _splitTextIntoChunks(String text, {int maxChars = 2000}) {
@@ -334,13 +334,13 @@ class AIService {
   /// DeepSeek 8K、OpenAI 系 16K、不少中转站只给 4096/2048）——请求带超过模型上限的
   /// max_tokens 会被接口直接 400 拒绝，换模型时逐档降级重试避免撞墙。
   static const List<int> _maxTokensFallbacks = [8192, 4096, 2048];
-  
+
   /// 内部标记：错误属于「超过模型输出上限」（可自动降级重试，不展示给用户）。
   static const String _tokenLimitMarker = '|TOKEN_LIMIT';
 
   /// 内部标记：终态错误（Key 无效 401 / 余额不足 402），重试无益
   static const String _permanentMarker = '|PERMANENT';
-  
+
   /// 用 AI 解析一个文本块中的题目（失败自动重试 1 次；
   /// 输出上限错误按 [​_maxTokensFallbacks] 逐级降级重试）。
   /// 返回 (题目列表, 失败原因)；失败原因非空表示该块解析失败。
@@ -373,7 +373,7 @@ class AIService {
     }
     return (<Question>[], 'AI请求失败: 输出上限降级重试全部失败');
   }
-  
+
   /// 判定错误响应是否为「超过模型输出上限」（max_tokens 超出模型支持）：
   /// 兼容 OpenAI 兼容接口常见错误文案，供降级重试判定（单测可直接调用）。
   @visibleForTesting
@@ -392,28 +392,29 @@ class AIService {
   /// 直接吐 Unicode 纯文本，渲染端只能原样显示——上下标、分式、根号全糊成一团。
   /// 所以在提示词层就把出口钉死成标准 LaTeX（行内 `$...$`、块级 `$$...$$`），
   /// 再由 `NatsumeMarkdown` 交给 `flutter_math_fork` 排版。
-  static const String latexImportRule =
-      '数学公式、物理符号、化学方程式**必须**转换为标准 LaTeX 输出：'
+  static const String latexImportRule = '数学公式、物理符号、化学方程式**必须**转换为标准 LaTeX 输出：'
       '行内公式用 \$...\$，块级公式用 \$\$...\$\$'
       '（例：\$F=ma\$、\$\\ce{H2SO4}\$、\$\\frac{a}{b}\$、\$\\int_0^1 x^2\\,dx\$）；'
       '绝对不要输出纯文本的奇怪符号（例如用 x^2 / √ / ⇌ 拼出来的伪公式）。';
 
-  /// 单次解析一个文本块。失败返回带原因的错误串，不再静默吞掉。
-  /// [maxTokens]：本次请求的输出上限（超模型上限会被接口拒绝，
-  /// 由调用方按降级序列重试）。
-  Future<(List<Question>, String?)> _parseChunkOnce(
-      String chunk, int bankId, String now,
-      {int maxTokens = 8192}) async {
+  /// 文本切题提示词（DOCX / PDF / JSON 导入共用）。
+  ///
+  /// v1.42：从 [_parseChunkOnce] 里抽出来，是为了让「多小问必须逐问作答」
+  /// 这条约束能被测试锁住（见 `ai_multipart_prompt_test.dart`）。行为与
+  /// 内联版本完全一致，只是入参从 `_settings` 变成显式的知识点体系。
+  @visibleForTesting
+  static String buildImportPrompt(String chunk,
+      {List<String> knowledgePointTypes = const []}) {
     // v1.35：用户在设置里定义了知识点体系时，让 AI 直接按体系归类；
     // 没定义就沿用「教材章节级知识点 + AI 自行判断」的旧口径。
-    final kpTypes = _settings.knowledgePointTypes;
+    final kpTypes = knowledgePointTypes;
     final kpSchema = kpTypes.isEmpty
         ? "\"该题所属的教材章节级知识点，如'解剖学'\""
         : '"必须严格取自用户的知识点体系：${kpTypes.join(' / ')}"';
     final kpRule = kpTypes.isEmpty
         ? '8. knowledge_point 命名规范：统一用教材章节式命名（如"解剖学""生理学""病理学"），不要用自由短语或长句，控制在10字以内'
         : '8. knowledge_point 只能从下列用户定义的知识点体系中选一个，逐字照抄，不得自创新名：${kpTypes.join('、')}；确实无法归类时留空字符串';
-    final prompt = '''你是一个专业的题目解析器。请从以下文本中提取所有题目，返回严格的 JSON 格式。
+    return '''你是一个专业的题目解析器。请从以下文本中提取所有题目，返回严格的 JSON 格式。
 
 文本内容：
 $chunk
@@ -446,32 +447,46 @@ $kpRule
 11. 控制输出长度：题干/选项/答案如实提取即可，不要添加原文没有的冗余描述
 12. 文中形如 {{img:N}} 的图片占位符必须原样保留在对应题目的对应字段（题干/选项/解析）的对应位置，不得删改、翻译、重排或补全
 13. $latexImportRule
+14. $multiPartAnswerRule
 
 请直接返回 JSON：''';
+  }
+
+  /// 单次解析一个文本块。失败返回带原因的错误串，不再静默吞掉。
+  /// [maxTokens]：本次请求的输出上限（超模型上限会被接口拒绝，
+  /// 由调用方按降级序列重试）。
+  Future<(List<Question>, String?)> _parseChunkOnce(
+      String chunk, int bankId, String now,
+      {int maxTokens = 8192}) async {
+    final prompt = buildImportPrompt(chunk,
+        knowledgePointTypes: _settings.knowledgePointTypes);
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {
-              'role': 'system',
-              'content': '你是一个精确的 JSON 格式题目解析器。只返回合法 JSON，不返回任何其他内容。'
-            },
-            {'role': 'user', 'content': prompt},
-          ],
-          'temperature': 0.1,
-          // v1.27 截断修复：默认放宽到 8192；超模型上限时由降级序列重试。
-          'max_tokens': maxTokens,
-          'response_format': {'type': 'json_object'},
-        }),
-      ).timeout(const Duration(seconds: 60));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
+                {
+                  'role': 'system',
+                  'content': '你是一个精确的 JSON 格式题目解析器。只返回合法 JSON，不返回任何其他内容。'
+                },
+                {'role': 'user', 'content': prompt},
+              ],
+              'temperature': 0.1,
+              // v1.27 截断修复：默认放宽到 8192；超模型上限时由降级序列重试。
+              'max_tokens': maxTokens,
+              'response_format': {'type': 'json_object'},
+            }),
+          )
+          .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
         final logger = DebugLogService.instance;
         final rawBytes = response.bodyBytes;
-        logger.logRawResponse(_settings.apiEndpoint, response.statusCode, rawBytes.length);
+        logger.logRawResponse(
+            _settings.apiEndpoint, response.statusCode, rawBytes.length);
         final decoded = utf8.decode(rawBytes);
         logger.logUtf8Decode(rawBytes.length, decoded.length, decoded);
         final data = jsonDecode(decoded);
@@ -483,7 +498,8 @@ $kpRule
         if (_isBlankContent(content)) {
           return (<Question>[], 'AI 返回了空响应（可能是限流或账户余额不足）');
         }
-        logger.log('PIPE:DECODE', 'contentLen=${content.length}  parsing questions...');
+        logger.log('PIPE:DECODE',
+            'contentLen=${content.length}  parsing questions...');
         _trackUsage(data);
 
         // 解析 JSON 响应（容忍 ```json 围栏等常见模型输出格式）；
@@ -496,12 +512,14 @@ $kpRule
           final repaired = repairTruncatedJson(content);
           if (repaired == null) {
             // 不把原始异常串（带 ^ 定位符）抛给用户——它看起来像程序崩溃
-            return (<Question>[], 'AI 解析生成失败：响应不是合法 JSON'
-                '（可能被截断或返回了异常内容，已尝试抢修仍失败）');
+            return (
+              <Question>[],
+              'AI 解析生成失败：响应不是合法 JSON'
+                  '（可能被截断或返回了异常内容，已尝试抢修仍失败）'
+            );
           }
           parsed = repaired;
-          logger.log('PIPE:DECODE',
-              '输出被截断已抢修：挽救前部完整题目（原错：$e）');
+          logger.log('PIPE:DECODE', '输出被截断已抢修：挽救前部完整题目（原错：$e）');
         }
         final questionsList = parsed['questions'] as List?;
         if (questionsList == null) {
@@ -514,7 +532,10 @@ $kpRule
         // 加内部标记供降级重试；其余错误如实上报。
         final bodyText = utf8.decode(response.bodyBytes, allowMalformed: true);
         if (isTokenLimitError(bodyText)) {
-          return (<Question>[], 'AI服务返回错误 (${response.statusCode})$_tokenLimitMarker');
+          return (
+            <Question>[],
+            'AI服务返回错误 (${response.statusCode})$_tokenLimitMarker'
+          );
         }
         // 401/402 是终态错误（Key 无效/余额不足），重试无益——
         // 打标记让重试层直接放行报错；其余状态码在统一前缀后给人话
@@ -561,7 +582,8 @@ $kpRule
         bankId: bankId,
         title: (q['title'] ?? '').toString().trim(),
         options: opts,
-        correctAnswer: (q['correct_answer'] ?? '').toString().trim().toUpperCase(),
+        correctAnswer:
+            (q['correct_answer'] ?? '').toString().trim().toUpperCase(),
         analysis: _nullIfEmpty(q['analysis']?.toString().trim()),
         questionType: _detectType(q),
         knowledgePoint: kpOf(q['knowledge_point']),
@@ -569,7 +591,6 @@ $kpRule
       );
     }).toList();
   }
-
 
   // ════════════════════════════════════════════════════════════
   // 视觉切题（扫描版/图片字 PDF）
@@ -591,6 +612,7 @@ $kpRule
 5. 文中形如 {{img:N}} 的占位符原样保留（若有）
 6. 页面上没有题目时返回 {"questions": []}
 7. $latexImportRule
+8. $multiPartAnswerRule
 ''';
 
   /// v1.35：用户定义了知识点体系时，把清单追加到视觉切题提示词后面。
@@ -600,7 +622,7 @@ $kpRule
     final types = _settings.knowledgePointTypes;
     if (types.isEmpty) return _visionPromptBase;
     return '$_visionPromptBase\n'
-        '8. knowledge_point 只能从下列用户知识点体系中选一个，逐字照抄，不得自创新名：'
+        '9. knowledge_point 只能从下列用户知识点体系中选一个，逐字照抄，不得自创新名：'
         '${types.join('、')}；确实无法归类时留空字符串\n';
   }
 
@@ -647,28 +669,30 @@ $kpRule
       Uint8List jpeg, int bankId, String now) async {
     try {
       final b64 = base64Encode(jpeg);
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {
-              'role': 'user',
-              'content': [
-                {'type': 'text', 'text': _visionPrompt},
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
                 {
-                  'type': 'image_url',
-                  'image_url': {'url': 'data:image/jpeg;base64,$b64'}
+                  'role': 'user',
+                  'content': [
+                    {'type': 'text', 'text': _visionPrompt},
+                    {
+                      'type': 'image_url',
+                      'image_url': {'url': 'data:image/jpeg;base64,$b64'}
+                    },
+                  ],
                 },
               ],
-            },
-          ],
-          'temperature': 0.1,
-          // 视觉模型逐图慢（整页扫描信息量大），超时与输出上限都放宽
-          'max_tokens': 8192,
-        }),
-      ).timeout(const Duration(seconds: 120));
+              'temperature': 0.1,
+              // 视觉模型逐图慢（整页扫描信息量大），超时与输出上限都放宽
+              'max_tokens': 8192,
+            }),
+          )
+          .timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -684,8 +708,11 @@ $kpRule
         } catch (e) {
           final repaired = repairTruncatedJson(content);
           if (repaired == null) {
-            return (<Question>[], 'AI 解析生成失败：响应不是合法 JSON'
-                '（可能被截断或返回了异常内容，已尝试抢修仍失败）');
+            return (
+              <Question>[],
+              'AI 解析生成失败：响应不是合法 JSON'
+                  '（可能被截断或返回了异常内容，已尝试抢修仍失败）'
+            );
           }
           parsed = repaired;
         }
@@ -699,15 +726,19 @@ $kpRule
       // 模型不支持看图是终态：换模型/先转 DOCX 才有意义，重试无益
       final code = response.statusCode;
       final lower = bodyText.toLowerCase();
-      final looksVisionUnsupported = (code == 400 || code == 415 || code == 422) &&
-          (lower.contains('image') ||
-              lower.contains('vision') ||
-              lower.contains('multimodal') ||
-              bodyText.contains('图片'));
+      final looksVisionUnsupported =
+          (code == 400 || code == 415 || code == 422) &&
+              (lower.contains('image') ||
+                  lower.contains('vision') ||
+                  lower.contains('multimodal') ||
+                  bodyText.contains('图片'));
       if (looksVisionUnsupported) {
-        return (<Question>[], '当前模型不支持识别图片：请换支持看图的模型'
-            '（如通义 qwen-vl、智谱 glm-4v、GPT-4o 等 OpenAI 兼容视觉模型），'
-            '或先用 OCR 工具把扫描件转成 DOCX 再导入$_permanentMarker');
+        return (
+          <Question>[],
+          '当前模型不支持识别图片：请换支持看图的模型'
+              '（如通义 qwen-vl、智谱 glm-4v、GPT-4o 等 OpenAI 兼容视觉模型），'
+              '或先用 OCR 工具把扫描件转成 DOCX 再导入$_permanentMarker'
+        );
       }
       if (isTokenLimitError(bodyText)) {
         return (<Question>[], 'AI服务返回错误 ($code)$_tokenLimitMarker');
@@ -735,18 +766,19 @@ $kpRule
   static Map<String, dynamic> _extractJson(String content) {
     return _extractJsonBody(_stripFence(content));
   }
-  
+
   /// 剥 ```json ``` / ``` ``` 围栏
   static String _stripFence(String content) {
     var s = content.trim();
-    final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', caseSensitive: false);
+    final fence =
+        RegExp(r'^```(?:json)?\s*([\s\S]*?)\s*```$', caseSensitive: false);
     final fenceMatch = fence.firstMatch(s);
     if (fenceMatch != null) {
       s = fenceMatch.group(1)!.trim();
     }
     return s;
   }
-  
+
   static Map<String, dynamic> _extractJsonBody(String s) {
     // 剥前后花括号外的散落文本。
     final first = s.indexOf('{');
@@ -757,9 +789,11 @@ $kpRule
     final decoded = jsonDecode(s);
     return decoded is Map<String, dynamic>
         ? decoded
-        : (decoded is Map ? Map<String, dynamic>.from(decoded) : <String, dynamic>{});
+        : (decoded is Map
+            ? Map<String, dynamic>.from(decoded)
+            : <String, dynamic>{});
   }
-  
+
   /// v1.27 截断抢修：模型输出撞 max_tokens 被截断时，截到最后一个完整题目对象、
   /// 补上数组与外层对象的闭合，挽救前部完整部分（避免整块作废）。
   /// 结构约定：{"questions": [{...}, {...} ...——从后往前逐个 '}' 尝试闭合，
@@ -770,7 +804,7 @@ $kpRule
     final first = s.indexOf('{');
     if (first < 0) return null;
     s = s.substring(first);
-  
+
     var end = s.length;
     for (var attempt = 0; attempt < 30; attempt++) {
       final idx = s.lastIndexOf('}', end - 1);
@@ -808,6 +842,20 @@ $kpRule
     final opts = q['options'];
     return (opts is List && opts.isNotEmpty) ? 'single_choice' : 'fill_blank';
   }
+
+  /// v1.42：多小问答案约束。
+  ///
+  /// 真实题库里有大量「一道大题带 1）2）3）小问」的题。旧提示词只写
+  /// 「提取/推断答案」，模型经常把几个小问合成一句笼统结论，解析也无法
+  /// 逐问对照。这里把约束抽成一条常量，文本切题 / 视觉切题 / AI 补答案
+  /// 三处共用，避免各写一份、日后口径漂移。
+  @visibleForTesting
+  static const String multiPartAnswerRule =
+      '如果题目包含多个小问（如 1）、2）、3）或（1）、（2）、（3）），'
+      'correct_answer 必须按小问序号逐一给出详细答案，'
+      'analysis 必须按小问序号逐一进行详细分析；'
+      '绝不能合并为一段或遗漏任何一问。'
+      '格式示例：答案：1. xxx；2. xxx。解析：1. 详述…；2. 详述…。';
 
   /// 批量推断缺失的答案（导入预览「AI 补答案」，v1.34）。
   ///
@@ -848,12 +896,16 @@ $kpRule
       ..writeln('你是医学考试命题与阅卷助手。下面每道题**缺少标准答案**，'
           '请依据题干与选项推断出最可能的正确答案。')
       ..writeln('只输出 JSON，不要任何解释或 Markdown 围栏：')
-      ..writeln('{"answers":[{"i":0,"a":"A"},{"i":1,"a":"对"},{"i":2,"a":"文本答案"}]}')
+      ..writeln(
+          '{"answers":[{"i":0,"a":"A"},{"i":1,"a":"对"},{"i":2,"a":"文本答案"}]}')
       ..writeln('规则：')
       ..writeln('- i 是题目编号（方括号里的数字）')
       ..writeln('- 单选题：a 只写一个选项字母；多选题：多个字母用英文逗号分隔，如 "A,C"')
       ..writeln('- 判断题：a 写「对」或「错」')
       ..writeln('- 填空/名词解释/简答：a 写简洁答案文本（不超过 80 字）')
+      ..writeln('- 若题目包含多个小问（如 1）、2）、3）或（1）、（2）、（3）），'
+          'a 必须按小问序号逐一给出答案，用「1. xxx；2. xxx」串联，'
+          '绝不能合并为一段或遗漏任何一问')
       ..writeln('- **拿不准的题不要出现在 answers 里**（宁缺毋滥，不要编答案）')
       ..writeln()
       ..writeln('题目：');
@@ -904,18 +956,25 @@ $kpRule
     var a = raw.trim();
     if (a.isEmpty) return '';
     // 去掉「答案：」「Answer:」这类前缀与包裹引号
-    a = a.replaceFirst(RegExp(r'^(答案|answer)\s*[:：]\s*', caseSensitive: false), '');
+    a = a.replaceFirst(
+        RegExp(r'^(答案|answer)\s*[:：]\s*', caseSensitive: false), '');
     a = a.replaceAll(RegExp(r'''^["'「”]+|["'」”]+$'''), '').trim();
     if (a.isEmpty) return '';
 
     final type = q.questionType;
     if (type == 'true_false') {
-      if (a.contains('对') || a.contains('正确') || a.contains('√') ||
-          a.toLowerCase() == 'true' || a.toLowerCase() == 't') {
+      if (a.contains('对') ||
+          a.contains('正确') ||
+          a.contains('√') ||
+          a.toLowerCase() == 'true' ||
+          a.toLowerCase() == 't') {
         return '对';
       }
-      if (a.contains('错') || a.contains('错误') || a.contains('×') ||
-          a.toLowerCase() == 'false' || a.toLowerCase() == 'f') {
+      if (a.contains('错') ||
+          a.contains('错误') ||
+          a.contains('×') ||
+          a.toLowerCase() == 'false' ||
+          a.toLowerCase() == 'f') {
         return '错';
       }
       return '';
@@ -951,7 +1010,6 @@ $kpRule
     // 填空 / 名解 / 简答：保留文本，过长则截断（答案库不适合存小作文）
     return a.length <= 200 ? a : a.substring(0, 200);
   }
-
 
   /// [grounding]：知识库约束块（非空时注入提示词、约束答案依据；因缓存键
   /// 不含约束上下文，带 grounding 时不走缓存、不写缓存，保证不同知识库
@@ -1090,30 +1148,33 @@ $kpRule
       ));
       return;
     }
-    final request = http.Request('POST', ApiEndpoint.resolve(_settings.apiEndpoint))
-      ..headers.addAll(await _headers())
-      ..headers['Accept'] = 'text/event-stream'
-      ..body = jsonEncode({
-        'model': _settings.model,
-        'messages': [
-          {
-            'role': 'system',
-            'content': sysPrompt,
-          },
-          {'role': 'user', 'content': userPrompt},
-        ],
-        'temperature': 0.3,
-        'max_tokens': 4096,
-        'stream': true,
-      });
+    final request =
+        http.Request('POST', ApiEndpoint.resolve(_settings.apiEndpoint))
+          ..headers.addAll(await _headers())
+          ..headers['Accept'] = 'text/event-stream'
+          ..body = jsonEncode({
+            'model': _settings.model,
+            'messages': [
+              {
+                'role': 'system',
+                'content': sysPrompt,
+              },
+              {'role': 'user', 'content': userPrompt},
+            ],
+            'temperature': 0.3,
+            'max_tokens': 4096,
+            'stream': true,
+          });
 
     // 30s 只覆盖「拿到响应头」；正文的停滞由下面流上的 60s 空闲超时兜底
-    final response = await _client.send(request).timeout(const Duration(seconds: 30));
+    final response =
+        await _client.send(request).timeout(const Duration(seconds: 30));
     final contentType = response.headers['content-type'] ?? '';
 
     // 兼容一：服务商忽略 stream:true，按老格式一次性返回整段 JSON。
     // 这不是错误——照原样给出内容即可，用户完全无感。
-    if (response.statusCode == 200 && !contentType.contains('text/event-stream')) {
+    if (response.statusCode == 200 &&
+        !contentType.contains('text/event-stream')) {
       final body = await response.stream.bytesToString();
       final content = _contentFromChatBody(body);
       if (content != null && content.isNotEmpty) {
@@ -1125,8 +1186,8 @@ $kpRule
 
     if (response.statusCode != 200) {
       final body = await response.stream.bytesToString();
-      DebugLogService.instance
-          .logRawResponse(_settings.apiEndpoint, response.statusCode, body.length);
+      DebugLogService.instance.logRawResponse(
+          _settings.apiEndpoint, response.statusCode, body.length);
       throw Exception('AI服务返回错误 (${response.statusCode})');
     }
 
@@ -1192,7 +1253,8 @@ $kpRule
 
     try {
       var last = '';
-      await for (final acc in _streamChat(_analysisPrompt(question, grounding))) {
+      await for (final acc
+          in _streamChat(_analysisPrompt(question, grounding))) {
         last = acc;
         yield acc;
       }
@@ -1217,8 +1279,9 @@ $kpRule
   }
 
   /// 追问的流式版本。追问没有缓存语义，失败同样回退一次性。
-  Stream<String> streamFollowUp(Question question, String analysis,
-      String followUpQuestion, {String? grounding}) async* {
+  Stream<String> streamFollowUp(
+      Question question, String analysis, String followUpQuestion,
+      {String? grounding}) async* {
     try {
       var last = '';
       await for (final acc in _streamChat(
@@ -1253,8 +1316,9 @@ $kpRule
   ///
   /// v1.28：篇幅随「AI 解析详细程度」档位浮动；关键词标记沿用同一套约定符号；
   /// 渲染器已支持 Markdown 表格，故不再禁止表格，仅在需要对比/罗列时使用。
-  Future<String> askFollowUp(Question question, String analysis,
-          String followUpQuestion, {String? grounding}) async =>
+  Future<String> askFollowUp(
+          Question question, String analysis, String followUpQuestion,
+          {String? grounding}) async =>
       await _callAI(
           _followUpPrompt(question, analysis, followUpQuestion, grounding));
 
@@ -1321,7 +1385,8 @@ $detail$marking
   /// 生成刷题小结
   Future<String> generateSessionSummary(
       int total, int correct, int wrong, int durationSeconds) async {
-    final accuracy = total > 0 ? ((correct / total) * 100).toStringAsFixed(1) : '0';
+    final accuracy =
+        total > 0 ? ((correct / total) * 100).toStringAsFixed(1) : '0';
     final minutes = durationSeconds ~/ 60;
     final seconds = durationSeconds % 60;
 
@@ -1415,8 +1480,12 @@ $detail$marking
       {List<String> options = const []}) async {
     // v1.35：用户定义了知识点体系时，把清单塞进提示词并禁止自由命名；
     // 否则沿用原来的「教材章节级」开放题。
-    final taxonomy = options.isEmpty ? '' : '\n可选知识点体系（只能从中选一个）：\n'
-        '${[for (var i = 0; i < options.length; i++) '${i + 1}. ${options[i]}'].join('\n')}\n';
+    final taxonomy = options.isEmpty
+        ? ''
+        : '\n可选知识点体系（只能从中选一个）：\n'
+            '${[
+            for (var i = 0; i < options.length; i++) '${i + 1}. ${options[i]}'
+          ].join('\n')}\n';
     final prompt = taxonomy.isEmpty
         ? '''请判断下面这道题属于哪个教材章节级知识点。
 按以下格式回复（直接说知识点名，不说题库名）：
@@ -1437,29 +1506,30 @@ $taxonomy
 ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\n')}' : ''}
 正确答案：${question.correctAnswer}''';
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {
-              'role': 'system',
-              'content': taxonomy.isEmpty
-                  ? '你是医学教材章节分类助手。请判断下面这道题属于哪个教材章节级知识点。'
-                  : '你是医学知识点分类助手。请把题目归类到用户给定的知识点体系中的某一项。'
-            },
-            {'role': 'user', 'content': prompt},
-          ],
-          'temperature': 0.1,
-          'max_tokens': 64,
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
+                {
+                  'role': 'system',
+                  'content': taxonomy.isEmpty
+                      ? '你是医学教材章节分类助手。请判断下面这道题属于哪个教材章节级知识点。'
+                      : '你是医学知识点分类助手。请把题目归类到用户给定的知识点体系中的某一项。'
+                },
+                {'role': 'user', 'content': prompt},
+              ],
+              'temperature': 0.1,
+              'max_tokens': 64,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        final content =
-            data['choices']?[0]?['message']?['content'] as String?;
+        final content = data['choices']?[0]?['message']?['content'] as String?;
         _trackUsage(data);
         final kp = _cleanTag(content ?? '');
         if (kp.isEmpty) return 'AI解析生成失败';
@@ -1482,24 +1552,25 @@ ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\
 内容：
 $text''';
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {'role': 'system', 'content': '你是医学教材章节分类助手，只输出学科名。'},
-            {'role': 'user', 'content': prompt},
-          ],
-          'temperature': 0,
-          'max_tokens': 32,
-        }),
-      ).timeout(const Duration(seconds: 15));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
+                {'role': 'system', 'content': '你是医学教材章节分类助手，只输出学科名。'},
+                {'role': 'user', 'content': prompt},
+              ],
+              'temperature': 0,
+              'max_tokens': 32,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        final content =
-            data['choices']?[0]?['message']?['content'] as String?;
+        final content = data['choices']?[0]?['message']?['content'] as String?;
         _trackUsage(data);
         final kp = _cleanTag(content ?? '');
         if (kp.isEmpty || kp == '其他') return null;
@@ -1526,34 +1597,37 @@ $text''';
   /// [statsText]：本地精炼后的统计文本（知识点 + 错题数 + 正确率）
   Future<String> generateKpAdvice(String statsText) async {
     if (statsText.trim().isEmpty) return '暂无错题数据，无法精炼。';
-    final prompt = '''按优先级从高到低列出 1-3 个最需要复习的知识点，每个点用 **知识点名** 开头，附一句判断依据（如"正确率仅xx%、错题x道"）
+    final prompt =
+        '''按优先级从高到低列出 1-3 个最需要复习的知识点，每个点用 **知识点名** 开头，附一句判断依据（如"正确率仅xx%、错题x道"）
 
 基于以下统计：
 $statsText
 
 控制在180字，用 ## 分标题，**粗体**突出知识点名和关键数据。''';
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {
-              'role': 'system',
-              // v1.0.2 对齐里程碑：根据错题本的知识点分布数据精炼
-              'content': '你是一个学习数据分析助手。根据错题本的知识点分布数据，精炼出最需要优先复习的知识点类型，并给出建议。'
-            },
-            {'role': 'user', 'content': prompt},
-          ],
-          'temperature': 0.3,
-          'max_tokens': 1024,
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
+                {
+                  'role': 'system',
+                  // v1.0.2 对齐里程碑：根据错题本的知识点分布数据精炼
+                  'content':
+                      '你是一个学习数据分析助手。根据错题本的知识点分布数据，精炼出最需要优先复习的知识点类型，并给出建议。'
+                },
+                {'role': 'user', 'content': prompt},
+              ],
+              'temperature': 0.3,
+              'max_tokens': 1024,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        final content =
-            data['choices']?[0]?['message']?['content'] as String?;
+        final content = data['choices']?[0]?['message']?['content'] as String?;
         _trackUsage(data);
         return content ?? '解析生成失败，请检查网络或 API 配置后重试。';
       }
@@ -1611,6 +1685,7 @@ ${question.options.isNotEmpty ? '选项：\n${question.optionsWithLabels.join('\
 $groundingBlock$detail
 # 解题要求
 请严格遵循以下四个步骤拆解这道题，语言务必口语化、逻辑化，杜绝教科书式的背诵列表。
+若本题包含多个小问（如 1）、2）、3）或（1）、（2）、（3）），必须按小问序号逐一分析，绝不能合并为一段或遗漏任何一问。
 
 ## 第一步：抓题眼，定性
 - **动作**：第一句话就点出题干中决定答案的关键数据或特征描述。
@@ -1658,32 +1733,36 @@ $marking
       }
     }
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': [
-            {
-              'role': 'system',
-              'content': effectiveSystemPrompt,
-            },
-            {'role': 'user', 'content': userPrompt},
-          ],
-          'temperature': 0.3,
-          'max_tokens': 4096,
-        }),
-      ).timeout(const Duration(seconds: 30));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': [
+                {
+                  'role': 'system',
+                  'content': effectiveSystemPrompt,
+                },
+                {'role': 'user', 'content': userPrompt},
+              ],
+              'temperature': 0.3,
+              'max_tokens': 4096,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
 
       if (response.statusCode == 200) {
         final logger = DebugLogService.instance;
         final rawBytes = response.bodyBytes;
-        logger.logRawResponse(_settings.apiEndpoint, response.statusCode, rawBytes.length);
+        logger.logRawResponse(
+            _settings.apiEndpoint, response.statusCode, rawBytes.length);
         final decoded = utf8.decode(rawBytes);
         logger.logUtf8Decode(rawBytes.length, decoded.length, decoded);
         final data = jsonDecode(decoded);
         final content = data['choices']?[0]?['message']?['content'] as String?;
-        logger.log('PIPE:DECODE', 'contentLen=${content?.length ?? 0}  hasChoices=${data['choices'] != null}');
+        logger.log('PIPE:DECODE',
+            'contentLen=${content?.length ?? 0}  hasChoices=${data['choices'] != null}');
         _trackUsage(data);
         return content ?? '解析生成失败，请检查网络或 API 配置后重试。';
       } else {
@@ -1705,14 +1784,15 @@ $marking
   /// 仅当主机为 deepseek.com 时请求其专用余额接口，其余主机按通用 /user/balance 尝试
   Future<double?> fetchBalance() async {
     if (_settings.apiKey.isEmpty) return null;
-    if (_cachedBalance != null && _balanceCacheTime != null &&
+    if (_cachedBalance != null &&
+        _balanceCacheTime != null &&
         DateTime.now().difference(_balanceCacheTime!) < _balanceCacheDuration) {
       return _cachedBalance;
     }
     try {
       // 余额接口为 DeepSeek 专用；换供应商时按配置端点尝试，失败则返回 null
-      final balanceUri = ApiEndpoint.balanceUrl(
-          ApiEndpoint.resolve(_settings.apiEndpoint));
+      final balanceUri =
+          ApiEndpoint.balanceUrl(ApiEndpoint.resolve(_settings.apiEndpoint));
       final response = await _client.get(
         balanceUri,
         headers: {
@@ -1724,7 +1804,8 @@ $marking
         final data = jsonDecode(response.body);
         final infos = data['balance_infos'] as List?;
         if (infos != null && infos.isNotEmpty) {
-          final total = double.tryParse(infos[0]['total_balance']?.toString() ?? '') ?? 0;
+          final total =
+              double.tryParse(infos[0]['total_balance']?.toString() ?? '') ?? 0;
           _cachedBalance = total;
           _balanceCacheTime = DateTime.now();
           return total;
@@ -1770,12 +1851,15 @@ $marking
     }
     final uri = ApiEndpoint.modelsUrl(_settings.apiEndpoint);
     try {
-      final response = await _client.get(uri, headers: await _headers())
+      final response = await _client
+          .get(uri, headers: await _headers())
           .timeout(const Duration(seconds: 20));
       if (response.statusCode != 200) {
-        return (<String>[],
-            ApiEndpoint.explainStatus(response.statusCode,
-                utf8.decode(response.bodyBytes)));
+        return (
+          <String>[],
+          ApiEndpoint.explainStatus(
+              response.statusCode, utf8.decode(response.bodyBytes))
+        );
       }
       final body = jsonDecode(utf8.decode(response.bodyBytes));
       final list = (body is Map ? body['data'] : null) ??
@@ -1815,19 +1899,21 @@ $marking
     final normalizedNote =
         uri.toString() == raw ? '' : '（地址已自动补全为 ${uri.toString()}）';
     try {
-      final response = await _client.post(
-        uri,
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model.trim().isEmpty
-              ? AppSettings.defaultModel
-              : _settings.model.trim(),
-          'messages': [
-            {'role': 'user', 'content': 'hi'},
-          ],
-          'max_tokens': 1,
-        }),
-      ).timeout(const Duration(seconds: 20));
+      final response = await _client
+          .post(
+            uri,
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model.trim().isEmpty
+                  ? AppSettings.defaultModel
+                  : _settings.model.trim(),
+              'messages': [
+                {'role': 'user', 'content': 'hi'},
+              ],
+              'max_tokens': 1,
+            }),
+          )
+          .timeout(const Duration(seconds: 20));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -1838,8 +1924,10 @@ $marking
         }
         return (false, '返回结构异常，可能不是 OpenAI 兼容接口$normalizedNote');
       }
-      return (false,
-          '${ApiEndpoint.explainStatus(response.statusCode, utf8.decode(response.bodyBytes))}$normalizedNote');
+      return (
+        false,
+        '${ApiEndpoint.explainStatus(response.statusCode, utf8.decode(response.bodyBytes))}$normalizedNote'
+      );
     } catch (e) {
       final msg = e.toString();
       if (msg.contains('TimeoutException')) {
@@ -1861,21 +1949,26 @@ $marking
     int maxTokens = 4096,
   }) async {
     try {
-      final response = await _client.post(
-        ApiEndpoint.resolve(_settings.apiEndpoint),
-        headers: await _headers(),
-        body: jsonEncode({
-          'model': _settings.model,
-          'messages': messages,
-          'tools': tools,
-          'tool_choice': 'auto',
-          'temperature': temperature,
-          'max_tokens': maxTokens,
-        }),
-      ).timeout(const Duration(seconds: 120));
+      final response = await _client
+          .post(
+            ApiEndpoint.resolve(_settings.apiEndpoint),
+            headers: await _headers(),
+            body: jsonEncode({
+              'model': _settings.model,
+              'messages': messages,
+              'tools': tools,
+              'tool_choice': 'auto',
+              'temperature': temperature,
+              'max_tokens': maxTokens,
+            }),
+          )
+          .timeout(const Duration(seconds: 120));
 
       if (response.statusCode != 200) {
-        return ('AI服务返回错误 (${response.statusCode})', const <Map<String, dynamic>>[]);
+        return (
+          'AI服务返回错误 (${response.statusCode})',
+          const <Map<String, dynamic>>[]
+        );
       }
       final data = jsonDecode(utf8.decode(response.bodyBytes));
       final msg = data['choices']?[0]?['message'];
@@ -1889,7 +1982,8 @@ $marking
           calls.add({
             'id': c['id']?.toString() ?? '',
             'name': fn is Map ? (fn['name']?.toString() ?? '') : '',
-            'arguments': fn is Map ? (fn['arguments']?.toString() ?? '{}') : '{}',
+            'arguments':
+                fn is Map ? (fn['arguments']?.toString() ?? '{}') : '{}',
           });
         }
       }

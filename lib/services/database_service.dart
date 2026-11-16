@@ -478,8 +478,8 @@ class DatabaseService {
         PRIMARY KEY (note_id, target)
       )
     ''');
-    await db.execute(
-        'CREATE INDEX IF NOT EXISTS idx_notes_bank ON notes(bank_id)');
+    await db
+        .execute('CREATE INDEX IF NOT EXISTS idx_notes_bank ON notes(bank_id)');
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_notes_question ON notes(question_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_note_links_target '
@@ -582,8 +582,9 @@ class DatabaseService {
         'ON kb_chunks(doc_id)');
     await db.execute('CREATE INDEX IF NOT EXISTS idx_kb_chunks_kb '
         'ON kb_chunks(kb_id)');
-    await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_bases_uid '
-        'ON knowledge_bases(uid)');
+    await db
+        .execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_bases_uid '
+            'ON knowledge_bases(uid)');
   }
 
   /// 题目配图表（v12）。图片随题存取、随题级联删除；
@@ -1168,8 +1169,8 @@ class DatabaseService {
   /// 全部分类（同级按 sort_order → 名称排序；树结构由 [parentId] 还原）
   Future<List<BankCategory>> getAllBankCategories() async {
     final db = await database;
-    final maps = await db.query('bank_categories',
-        orderBy: 'sort_order ASC, name ASC');
+    final maps =
+        await db.query('bank_categories', orderBy: 'sort_order ASC, name ASC');
     return maps.map((m) => BankCategory.fromMap(m)).toList();
   }
 
@@ -1310,18 +1311,16 @@ class DatabaseService {
     await db.transaction((txn) async {
       final questionScope =
           'question_id IN (SELECT id FROM questions WHERE bank_id IN ($marks))';
-      await txn.delete('answer_records',
-          where: questionScope, whereArgs: ids);
+      await txn.delete('answer_records', where: questionScope, whereArgs: ids);
       await txn.delete('question_annotations',
           where: questionScope, whereArgs: ids);
-      await txn.delete('error_book',
-          where: questionScope, whereArgs: ids);
-      await txn.delete('fsrs_cards',
-          where: questionScope, whereArgs: ids);
-      await txn.delete('question_images',
-          where: questionScope, whereArgs: ids);
-      await txn.delete('questions', where: 'bank_id IN ($marks)', whereArgs: ids);
-      await txn.delete('question_banks', where: 'id IN ($marks)', whereArgs: ids);
+      await txn.delete('error_book', where: questionScope, whereArgs: ids);
+      await txn.delete('fsrs_cards', where: questionScope, whereArgs: ids);
+      await txn.delete('question_images', where: questionScope, whereArgs: ids);
+      await txn.delete('questions',
+          where: 'bank_id IN ($marks)', whereArgs: ids);
+      await txn.delete('question_banks',
+          where: 'id IN ($marks)', whereArgs: ids);
     });
   }
 
@@ -2289,8 +2288,20 @@ class DatabaseService {
 
   /// 按题库获取错题统计（到期题数 + 收藏题数 + 全部去重数）。
   /// v1.0.2 FSRS 可见化：加 next_due_at（该题库到期卡中最早的到期时间）
-  Future<List<Map<String, dynamic>>> getErrorStatsByBank() async {
+  ///
+  /// [questionTypes] 非空时统计口径收窄到这些题型（错题本按题型筛选时，
+  /// 上方统计条与列表必须一致）。题型条件写在 LEFT JOIN 的 ON 里而不是
+  /// WHERE：不会把「该题型下 0 题」的题库整行丢掉，只是计数归零。
+  Future<List<Map<String, dynamic>>> getErrorStatsByBank(
+      {Set<String>? questionTypes}) async {
     final db = await database;
+    final typeCond = (questionTypes == null || questionTypes.isEmpty)
+        ? ''
+        : 'AND q.question_type IN '
+            '(${List.filled(questionTypes.length, '?').join(',')})';
+    final args = <Object>[
+      if (questionTypes != null && questionTypes.isNotEmpty) ...questionTypes,
+    ];
     return await db.rawQuery('''
       SELECT
         qb.id as bank_id,
@@ -2310,13 +2321,13 @@ class DatabaseService {
           THEN fc.next_review_at END
         ) as next_due_at
       FROM question_banks qb
-      LEFT JOIN questions q ON q.bank_id = qb.id
+      LEFT JOIN questions q ON q.bank_id = qb.id $typeCond
       LEFT JOIN fsrs_cards fc ON fc.question_id = q.id
       LEFT JOIN error_book eb ON eb.question_id = q.id
       GROUP BY qb.id
       HAVING due_count > 0 OR bookmark_count > 0
       ORDER BY qb.name
-    ''');
+    ''', args);
   }
 
   // ======================== v1.0.2 新增：统计/模拟/备份 ========================
@@ -2340,34 +2351,53 @@ class DatabaseService {
     }
   }
 
+  /// 题型筛选片段（`AND q.question_type IN (?,?,?)`）。
+  ///
+  /// 传 null / 空集合 = 不限，返回空串——所有老调用方零回归。
+  /// 值来自 `Question.questionType`（single_choice / multi_choice / …）。
+  String _typeWhere(Set<String>? questionTypes) =>
+      (questionTypes == null || questionTypes.isEmpty)
+          ? ''
+          : 'AND q.question_type IN '
+              '(${List.filled(questionTypes.length, '?').join(',')})';
+
   /// 按筛选模式取错题全量题列表（复习范围与统计口径一致）
+  ///
+  /// [questionTypes] 非空时只取这些题型（错题本「按题型专项突破」）。
   Future<List<Question>> getFullErrorQuestions(String mode,
-      {Set<int>? bankIds}) async {
+      {Set<int>? bankIds, Set<String>? questionTypes}) async {
     final db = await database;
     final bankWhere = (bankIds != null && bankIds.isNotEmpty)
         ? 'AND q.bank_id IN (${List.filled(bankIds.length, '?').join(',')})'
         : '';
-    final args =
-        bankIds != null && bankIds.isNotEmpty ? bankIds.toList() : <Object>[];
+    final args = <Object>[
+      if (bankIds != null && bankIds.isNotEmpty) ...bankIds,
+      if (questionTypes != null && questionTypes.isNotEmpty) ...questionTypes,
+    ];
     final rows = await db.rawQuery('''
       SELECT DISTINCT q.* FROM questions q
       WHERE q.id IN (${_errorIdSubquery(mode)}) $bankWhere
+        ${_typeWhere(questionTypes)}
       ORDER BY RANDOM()
     ''', args);
     return rows.map((m) => Question.fromMap(m)).toList();
   }
 
-  /// 按筛选模式的错题总数
-  Future<int> getFullErrorCount(String mode, {Set<int>? bankIds}) async {
+  /// 按筛选模式的错题总数（[questionTypes] 与列表查询同口径）
+  Future<int> getFullErrorCount(String mode,
+      {Set<int>? bankIds, Set<String>? questionTypes}) async {
     final db = await database;
     final bankWhere = (bankIds != null && bankIds.isNotEmpty)
         ? 'AND q.bank_id IN (${List.filled(bankIds.length, '?').join(',')})'
         : '';
-    final args =
-        bankIds != null && bankIds.isNotEmpty ? bankIds.toList() : <Object>[];
+    final args = <Object>[
+      if (bankIds != null && bankIds.isNotEmpty) ...bankIds,
+      if (questionTypes != null && questionTypes.isNotEmpty) ...questionTypes,
+    ];
     final rows = await db.rawQuery('''
       SELECT COUNT(DISTINCT q.id) as cnt FROM questions q
       WHERE q.id IN (${_errorIdSubquery(mode)}) $bankWhere
+        ${_typeWhere(questionTypes)}
     ''', args);
     return rows.first['cnt'] as int;
   }
@@ -2377,13 +2407,15 @@ class DatabaseService {
   /// v1.0.2 设计审查修复：AI 失败标记（AI请求失败/AI服务返回错误/AI解析生成失败）
   /// 与正确率排行同口径排除，不再出现伪分组
   Future<List<Map<String, dynamic>>> getKnowledgePointStats(String mode,
-      {Set<int>? bankIds}) async {
+      {Set<int>? bankIds, Set<String>? questionTypes}) async {
     final db = await database;
     final bankWhere = (bankIds != null && bankIds.isNotEmpty)
         ? 'AND q.bank_id IN (${List.filled(bankIds.length, '?').join(',')})'
         : '';
-    final args =
-        bankIds != null && bankIds.isNotEmpty ? bankIds.toList() : <Object>[];
+    final args = <Object>[
+      if (bankIds != null && bankIds.isNotEmpty) ...bankIds,
+      if (questionTypes != null && questionTypes.isNotEmpty) ...questionTypes,
+    ];
     return await db.rawQuery('''
       SELECT
         CASE
@@ -2393,6 +2425,7 @@ class DatabaseService {
         COUNT(DISTINCT q.id) as cnt
       FROM questions q
       WHERE q.id IN (${_errorIdSubquery(mode)}) $bankWhere
+        ${_typeWhere(questionTypes)}
         AND (q.knowledge_point IS NULL OR q.knowledge_point = ''
              OR (q.knowledge_point NOT LIKE 'AI请求失败%'
                  AND q.knowledge_point NOT LIKE 'AI服务返回错误%'
@@ -2409,22 +2442,22 @@ class DatabaseService {
   /// 按知识点取题（复习范围与主列表同口径；'未打标签' 匹配空知识点）
   Future<List<Question>> getFullQuestionsByKnowledgePoint(
       String kp, String mode,
-      {Set<int>? bankIds}) async {
+      {Set<int>? bankIds, Set<String>? questionTypes}) async {
     final db = await database;
     final bankWhere = (bankIds != null && bankIds.isNotEmpty)
         ? 'AND q.bank_id IN (${List.filled(bankIds.length, '?').join(',')})'
         : '';
     final untagged = kp == '未打标签';
-    // 占位符顺序：bankWhere（bankIds）在前，knowledge_point 在后
-    final args = bankIds != null && bankIds.isNotEmpty
-        ? <Object>[
-            ...bankIds,
-            ...(untagged ? <Object>[] : [kp])
-          ]
-        : (untagged ? <Object>[] : [kp]);
+    // 占位符顺序：bankWhere（bankIds）→ 题型 → knowledge_point
+    final args = <Object>[
+      if (bankIds != null && bankIds.isNotEmpty) ...bankIds,
+      if (questionTypes != null && questionTypes.isNotEmpty) ...questionTypes,
+      if (!untagged) kp,
+    ];
     final rows = await db.rawQuery('''
       SELECT DISTINCT q.* FROM questions q
       WHERE q.id IN (${_errorIdSubquery(mode)}) $bankWhere
+        ${_typeWhere(questionTypes)}
         ${untagged ? "AND (q.knowledge_point IS NULL OR q.knowledge_point = '')" : 'AND q.knowledge_point = ?'}
       ORDER BY RANDOM()
     ''', args);
@@ -3358,12 +3391,72 @@ class DatabaseService {
     return out;
   }
 
+  /// 逐题「上一次作答是否正确」：题号 → true（对）/ false（错）。
+  ///
+  /// 题库题号网格用红 / 绿标出上一轮结果（v1.42）。取 `MAX(id)` 的那条记录，
+  /// 而不是 `MAX(answered_at)`：重答同一题时两次写入可能落在同一毫秒，
+  /// id 才是严格递增的写入顺序。没有作答记录的题不出现在结果里。
+  Future<Map<int, bool>> getLastAnswerStatusByQuestionIds(
+      List<int> questionIds) async {
+    if (questionIds.isEmpty) return const {};
+    final db = await database;
+    final out = <int, bool>{};
+    for (var i = 0; i < questionIds.length; i += maxBindingVars) {
+      final chunk =
+          questionIds.sublist(i, min(i + maxBindingVars, questionIds.length));
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final rows = await db.rawQuery('''
+        SELECT question_id, is_correct
+        FROM answer_records
+        WHERE hidden = 0 AND source IN ${DatabaseService.sourceFilter}
+          AND id IN (
+            SELECT MAX(id) FROM answer_records
+            WHERE hidden = 0 AND source IN ${DatabaseService.sourceFilter}
+              AND question_id IN ($placeholders)
+            GROUP BY question_id
+          )
+      ''', chunk);
+      for (final r in rows) {
+        out[r['question_id'] as int] = (r['is_correct'] as int?) == 1;
+      }
+    }
+    return out;
+  }
+
+  /// 清空某个题库的作答记录与复习计划（「清空记录并重刷」，v1.42）。
+  ///
+  /// 只删该题库题目的 `answer_records` 与 `fsrs_cards`：题目本身、
+  /// 收藏标记（`error_book`）都不动——「重刷」不是「删题」，也不是
+  /// 「取消收藏」。普通「开始刷题 / 继续刷题」**不会**调用本方法，
+  /// 旧记录只会在用户明确点「清空记录并重刷」时被清掉。
+  ///
+  /// 返回 `(作答记录条数, 复习卡数)`，供界面提示实际清了什么。
+  Future<({int records, int cards})> clearBankRecords(int bankId) async {
+    final db = await database;
+    final rows = await db.query('questions',
+        columns: ['id'], where: 'bank_id = ?', whereArgs: [bankId]);
+    final ids = rows.map((r) => r['id'] as int).toList();
+    if (ids.isEmpty) return (records: 0, cards: 0);
+    var records = 0;
+    var cards = 0;
+    for (var i = 0; i < ids.length; i += maxBindingVars) {
+      final chunk = ids.sublist(i, min(i + maxBindingVars, ids.length));
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      records += await db.delete('answer_records',
+          where: 'question_id IN ($placeholders)', whereArgs: chunk);
+      cards += await db.delete('fsrs_cards',
+          where: 'question_id IN ($placeholders)', whereArgs: chunk);
+    }
+    return (records: records, cards: cards);
+  }
+
   /// 取错题（带逐题作答统计）——导出与卡片展示共用同一条查询，避免两处口径分叉。
   ///
   /// - [mode]：与 [getFullErrorQuestions] 同义（all / wrong / bookmark）
   /// - [questionIds]：给定则只取这些题（自定义导出），忽略 [mode] 的错题范围
   /// - [window]：按**最近一次作答时间**过滤，`'7d'` / `'30d'`；null 不限
   /// - [recentFirst]：true = 最近做过的在前；false（默认）= 错得最多的在前
+  /// - [questionTypes]：非空时只取这些题型（错题本按题型筛选 / 导出同口径）
   ///
   /// 返回的每行是 `q.*` 加上 `answered_count` / `correct_count` / `wrong_count` /
   /// `last_answered_at`，因此 `Question.fromMap(row)` 照常可用，统计字段另取。
@@ -3372,6 +3465,7 @@ class DatabaseService {
     Set<int>? bankIds,
     Set<int>? questionIds,
     String? knowledgePoint,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
   }) async {
@@ -3383,9 +3477,10 @@ class DatabaseService {
       if (questionIds.isEmpty) return const [];
       final ids = questionIds.toList();
       final merged = <Map<String, dynamic>>[];
-      // 每条语句的绑定变量 = questionIds + bankIds + knowledgePoint，
-      // 所以每块能放的 id 数要把 bankIds 先扣掉
-      final budget = maxBindingVars - ((bankIds?.length ?? 0) + 1);
+      // 每条语句的绑定变量 = questionIds + bankIds + questionTypes + knowledgePoint，
+      // 所以每块能放的 id 数要先把其余条件占用的名额扣掉
+      final budget = maxBindingVars -
+          ((bankIds?.length ?? 0) + (questionTypes?.length ?? 0) + 1);
       final chunkSize = budget < 1 ? 1 : budget;
       for (var i = 0; i < ids.length; i += chunkSize) {
         final chunk = ids.sublist(i, min(i + chunkSize, ids.length));
@@ -3394,6 +3489,7 @@ class DatabaseService {
           bankIds: bankIds,
           questionIds: chunk,
           knowledgePoint: knowledgePoint,
+          questionTypes: questionTypes,
           window: window,
           recentFirst: recentFirst,
         ));
@@ -3406,6 +3502,7 @@ class DatabaseService {
       mode,
       bankIds: bankIds,
       knowledgePoint: knowledgePoint,
+      questionTypes: questionTypes,
       window: window,
       recentFirst: recentFirst,
     );
@@ -3437,13 +3534,14 @@ class DatabaseService {
   }
 
   /// 内部：单条查询。调用方保证 [questionIds] 已分块，且
-  /// `questionIds + bankIds + knowledgePoint` 的绑定变量总数不超过 [maxBindingVars]
-  /// （见 [getErrorQuestionsWithStats] 里按 bankIds 扣减的 chunkSize）。
+  /// `questionIds + bankIds + questionTypes + knowledgePoint` 的绑定变量总数
+  /// 不超过 [maxBindingVars]（见 [getErrorQuestionsWithStats] 里的 chunkSize）。
   Future<List<Map<String, dynamic>>> _errorWithStatsQuery(
     String mode, {
     Set<int>? bankIds,
     List<int>? questionIds,
     String? knowledgePoint,
+    Set<String>? questionTypes,
     String? window,
     bool recentFirst = false,
   }) async {
@@ -3460,6 +3558,11 @@ class DatabaseService {
     if (bankIds != null && bankIds.isNotEmpty) {
       where.add('q.bank_id IN (${List.filled(bankIds.length, '?').join(',')})');
       args.addAll(bankIds);
+    }
+    if (questionTypes != null && questionTypes.isNotEmpty) {
+      where.add(
+          'q.question_type IN (${List.filled(questionTypes.length, '?').join(',')})');
+      args.addAll(questionTypes);
     }
     if (knowledgePoint != null && knowledgePoint.isNotEmpty) {
       // 与 getKnowledgePointStats / getFullQuestionsByKnowledgePoint 同一约定：
@@ -3484,9 +3587,7 @@ class DatabaseService {
       // 「近 N 天」在这里取严格的 N×24 小时，与 UI 文案一致。
       where.add('s.last_answered_at IS NOT NULL AND '
           'datetime(s.last_answered_at) >= datetime(?)');
-      args.add(DateTime.now()
-          .subtract(Duration(days: days))
-          .toIso8601String());
+      args.add(DateTime.now().subtract(Duration(days: days)).toIso8601String());
     }
 
     final orderBy = recentFirst
@@ -3545,8 +3646,7 @@ class DatabaseService {
 
   Future<List<KnowledgeBase>> getAllKnowledgeBases() async {
     final db = await database;
-    final maps =
-        await db.query('knowledge_bases', orderBy: 'created_at DESC');
+    final maps = await db.query('knowledge_bases', orderBy: 'created_at DESC');
     return maps.map((m) => KnowledgeBase.fromMap(m)).toList();
   }
 
@@ -3585,8 +3685,10 @@ class DatabaseService {
           where:
               'doc_id IN (SELECT id FROM kb_documents WHERE kb_id IN ($marks))',
           whereArgs: ids);
-      await txn.delete('kb_documents', where: 'kb_id IN ($marks)', whereArgs: ids);
-      await txn.delete('knowledge_bases', where: 'id IN ($marks)', whereArgs: ids);
+      await txn.delete('kb_documents',
+          where: 'kb_id IN ($marks)', whereArgs: ids);
+      await txn.delete('knowledge_bases',
+          where: 'id IN ($marks)', whereArgs: ids);
     });
   }
 
@@ -3621,8 +3723,7 @@ class DatabaseService {
   Future<void> deleteKbDocument(int docId) async {
     final db = await database;
     await db.transaction((txn) async {
-      await txn
-          .delete('kb_chunks', where: 'doc_id = ?', whereArgs: [docId]);
+      await txn.delete('kb_chunks', where: 'doc_id = ?', whereArgs: [docId]);
       await txn.delete('kb_documents', where: 'id = ?', whereArgs: [docId]);
     });
   }
@@ -3641,8 +3742,8 @@ class DatabaseService {
 
   Future<List<KbChunk>> getKbChunks(int kbId) async {
     final db = await database;
-    final maps = await db
-        .query('kb_chunks', where: 'kb_id = ?', whereArgs: [kbId], orderBy: 'id');
+    final maps = await db.query('kb_chunks',
+        where: 'kb_id = ?', whereArgs: [kbId], orderBy: 'id');
     return maps.map((m) => KbChunk.fromMap(m)).toList();
   }
 
@@ -3689,8 +3790,8 @@ class DatabaseService {
     final map = note.toMap()..remove('id');
     // v17：新行一律带 uid + 来源设备，同步合并才有身份
     map['uid'] = note.uid ?? const Uuid().v4();
-    map['origin_device'] = note.originDevice ??
-        await DeviceService.instance.deviceId;
+    map['origin_device'] =
+        note.originDevice ?? await DeviceService.instance.deviceId;
     return db.insert('notes', map);
   }
 
@@ -3783,8 +3884,8 @@ class DatabaseService {
     final map = item.toMap()..remove('id');
     // v17：与笔记同一口径
     map['uid'] = item.uid ?? const Uuid().v4();
-    map['origin_device'] = item.originDevice ??
-        await DeviceService.instance.deviceId;
+    map['origin_device'] =
+        item.originDevice ?? await DeviceService.instance.deviceId;
     return db.insert('schedule_items', map);
   }
 
@@ -3801,8 +3902,7 @@ class DatabaseService {
   }
 
   /// 取待办；[includeDone] 为 false 时只返回未完成项
-  Future<List<ScheduleItem>> getScheduleItems(
-      {bool includeDone = true}) async {
+  Future<List<ScheduleItem>> getScheduleItems({bool includeDone = true}) async {
     final db = await database;
     final maps = await db.query(
       'schedule_items',

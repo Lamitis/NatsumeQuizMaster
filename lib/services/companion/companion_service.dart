@@ -39,6 +39,78 @@ class CompanionService {
   /// 角色名（头像、气泡、插件说明共用）
   static const String personaName = '小鲸';
 
+  /// v1.42：软件内的真实功能路径。
+  ///
+  /// 「软件客服」能力不靠模型自由发挥：这一份是本机真实菜单，提示词里
+  /// 原样注入，模型只负责组织语言。菜单改名时只改这里，不会出现
+  /// 「AI 说有某个按钮、界面上却没有」的幻觉。
+  static const String softwareGuide = '''
+- AI Key / 模型 / 接口地址：底部「我的」→「设置」→「AI 接口」，填好后点「保存设置」。
+- 导入题库：底部「开始」→「导入题库」，支持 DOCX / PDF / JSON / TXT；导入前会先给预览，可让 AI 补答案。
+- 管理题库 / 编辑题目：底部「开始」→「管理题库」，点进题库可看题号网格、编辑 / 删除 / 移动题目。
+- 错题本：底部「开始」→「错题本」，可按题库、知识点、题型筛选，也能导出 JSON / DOCX。
+- 知识库：底部「我的」→「知识库」，导入资料后可在「设置 → AI 接口」里让解析引用。
+- 局域网同步 / 提醒：底部「我的」→「设置」→「同步与提醒」。
+- 助教设置（形象 / 人设 / 独立接口）：小鲸助教页右上角「助教设置」。
+- 数据备份：底部「我的」→「设置」→「高级」→ 备份。
+- 答题节奏（答完是否自动切下一题）：底部「我的」→「设置」→「外观」→「做题节奏」。
+''';
+
+  /// 用户这句话是不是在问软件怎么用（客服模式）。
+  static bool isSoftwareQuestion(String text) {
+    final t = text.trim().toLowerCase();
+    if (t.isEmpty) return false;
+    const keys = [
+      '导入题库',
+      '导入题目',
+      '怎么导入',
+      '题库在哪',
+      '管理题库',
+      '配置api',
+      'api',
+      'api key',
+      'apikey',
+      '如何配置',
+      '怎么配置',
+      '在哪里设置',
+      '在哪设置',
+      '设置在哪',
+      '错题本在哪',
+      '知识库在哪',
+      '怎么备份',
+      '怎么同步',
+      '怎么导出',
+      '怎么换形象',
+      '自动跳题',
+      '为什么打不开',
+    ];
+    return keys.any(t.contains);
+  }
+
+  /// 用户这句话是不是在问学术内容（老师模式）。
+  static bool isAcademicQuestion(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return false;
+    const keys = [
+      '是什么',
+      '为什么',
+      '怎么理解',
+      '解释',
+      '区别',
+      '机制',
+      '原理',
+      '知识点',
+      '这道题',
+      '病因',
+      '诊断',
+      '治疗',
+      '表现',
+      '定义',
+      '口诀',
+    ];
+    return keys.any(t.contains);
+  }
+
   /// 陪伴状态在 settings 表里的键（一行 JSON，避免为几个字段再涨 schema）
   static const String stateKey = 'companion_state_v1';
 
@@ -55,7 +127,6 @@ class CompanionService {
   /// 真实取值请用 [CompanionSettings.avatarAsset]；这个常量保留给
   /// 「默认项 / 老备份没有 avatar 字段」的场景。
   static const String avatarAsset = CompanionAvatarOption.defaultAsset;
-
 
   /// 与 `CompanionSnapshot.dailyGoal` 同值的本地别名，文案里直接用
   static const int dailyGoal = CompanionSnapshot.dailyGoal;
@@ -103,58 +174,55 @@ class CompanionService {
       case CompanionScene.fresh:
         return [
           const CompanionLine(
-              '你好呀，我是小鲸。今天先来 5 道题试试水好吗？我陪着你。',
-              CompanionMood.idle),
-          CompanionLine('题库已经准备好了，$who 只要开始第一题，今天就算开张。',
-              CompanionMood.idle),
-          const CompanionLine('第一次见面～要不要先做 1 道题？让我看看你更擅长哪一科。',
-              CompanionMood.idle),
+              '你好呀，我是小鲸。今天先来 5 道题试试水好吗？我陪着你。', CompanionMood.idle),
+          CompanionLine('题库已经准备好了，$who 只要开始第一题，今天就算开张。', CompanionMood.idle),
+          const CompanionLine(
+              '第一次见面～要不要先做 1 道题？让我看看你更擅长哪一科。', CompanionMood.idle),
         ];
       case CompanionScene.idle:
         return [
-          CompanionLine('你已经连续打卡 ${s.streakDays} 天啦，今天还差一点就断在这里。',
-              CompanionMood.cheer),
+          CompanionLine(
+              '你已经连续打卡 ${s.streakDays} 天啦，今天还差一点就断在这里。', CompanionMood.cheer),
           CompanionLine('第 ${s.streakDays + 1} 天的小鲸在等你：先刷 10 题热身怎么样？',
               CompanionMood.cheer),
-          CompanionLine('今天还没开张哦。之前连着 ${s.streakDays} 天，别让它停在今天。',
-              CompanionMood.cheer),
+          CompanionLine(
+              '今天还没开张哦。之前连着 ${s.streakDays} 天，别让它停在今天。', CompanionMood.cheer),
         ];
       case CompanionScene.onTrack:
         return [
           CompanionLine('已经 ${s.todayAnswered} 题啦，再 $remain 题就到今天的 50 题线，稳的。',
               CompanionMood.happy),
-          CompanionLine('这个节奏很好，$remain 题之后今天的打卡就拿到了。',
-              CompanionMood.happy),
+          CompanionLine('这个节奏很好，$remain 题之后今天的打卡就拿到了。', CompanionMood.happy),
           CompanionLine('${s.todayAnswered} / $dailyGoal，差一点点，我在这边等你写完。',
               CompanionMood.happy),
         ];
       case CompanionScene.goalReached:
         return [
-          CompanionLine('今天 50 题达标！连续 ${s.streakDays} 天，我记下来了。',
-              CompanionMood.proud),
-          CompanionLine('收工撒花～今天一共 ${s.todayAnswered} 题，去休息一下吧。',
-              CompanionMood.proud),
-          CompanionLine('目标达成，${s.todayAnswered} 题到手。明天我还在这里。',
-              CompanionMood.proud),
+          CompanionLine(
+              '今天 50 题达标！连续 ${s.streakDays} 天，我记下来了。', CompanionMood.proud),
+          CompanionLine(
+              '收工撒花～今天一共 ${s.todayAnswered} 题，去休息一下吧。', CompanionMood.proud),
+          CompanionLine(
+              '目标达成，${s.todayAnswered} 题到手。明天我还在这里。', CompanionMood.proud),
         ];
       case CompanionScene.lowAccuracy:
         return [
           CompanionLine(
               '本周正确率 ${s.weekAccuracyText}，先别急，错题本里正好有 ${s.dueReviews} 道到期题。',
               CompanionMood.worried),
-          const CompanionLine('正确率偏低的时候，复习错题比再刷 50 道新题管用得多。',
-              CompanionMood.worried),
+          const CompanionLine(
+              '正确率偏低的时候，复习错题比再刷 50 道新题管用得多。', CompanionMood.worried),
           CompanionLine('把错题过一遍再看新题，正确率会自己回来的（${s.weekAccuracyText} 起）。',
               CompanionMood.worried),
         ];
       case CompanionScene.reviewBacklog:
         return [
-          CompanionLine('待复习已经 ${s.dueReviews} 道了，先清 10 道，我陪你数。',
-              CompanionMood.worried),
+          CompanionLine(
+              '待复习已经 ${s.dueReviews} 道了，先清 10 道，我陪你数。', CompanionMood.worried),
           CompanionLine('错题堆着会越滚越大，今天先还 10 道债好吗？（共 ${s.dueReviews} 道）',
               CompanionMood.worried),
-          CompanionLine('到期 ${s.dueReviews} 道题在排队，清一小批也比一直拖强。',
-              CompanionMood.worried),
+          CompanionLine(
+              '到期 ${s.dueReviews} 道题在排队，清一小批也比一直拖强。', CompanionMood.worried),
         ];
     }
   }
@@ -176,7 +244,11 @@ class CompanionService {
     }
     list
       ..add('夸夸我')
-      ..add('我有点累');
+      ..add('我有点累')
+      // v1.42：把「学术老师 / 软件客服」两种新能力摆到台面上，
+      // 用户不用猜能问什么
+      ..add('怎么导入题库？')
+      ..add('如何配置 API？');
     return list;
   }
 
@@ -363,8 +435,26 @@ ${refs.join('\n\n')}
 - 称呼：用「你」，需要时叫用户的昵称。
 - 只依据下面给出的真实统计数据说话，**不要编造任何题目数、正确率、天数**；数据没给就不提。
 - 不给医疗诊断与用药建议；被问到专业知识时，提醒以教材与已导入知识库为准。
-- 不说「你可以做到一切」这类空话，给一条今天就能执行的小动作。
-- 长度：2~3 句话以内。
+- 不说「你可以做到一切」这类空话；闲聊时给一条今天就能执行的小动作。
+- 长度：闲聊时 2~3 句以内；被问知识点 / 题目或软件用法时不受这一句限制，按下面的模式展开。
+
+# 你可以切换的三种身份（按用户这句话自动选择，不要向用户报菜单）
+1. **学习陪伴**（默认）：回应情绪 + 结合真实统计给一条今天能执行的建议。
+2. **学术老师**：用户问知识点、概念、机制或某道题时——
+   - 先判断他是「没懂概念」还是「想不通这道题」；没懂概念先用生活化类比讲清，再补一句严谨定义；
+   - 想不通题目时，可以像苏格拉底一样只问一个关键问题引导他，也可以直接给出专业且通俗的完整解释（用户说「直接讲」就别反问）；
+   - 分层讲：一句话结论 → 机制 / 推导 → 易混点对比 → 记忆钩子；必要时举临床或生活例子；
+   - 有公式或计算就写出代入过程；依据知识库时说明「依据你导入的资料」，资料没覆盖的部分标明「通用知识」。
+3. **软件客服**：用户问「怎么导入题库」「如何配置 API」「错题本在哪」等用法问题时——
+   - 只按下面这份**真实路径**回答，说清点哪里、看到什么；**不要编造不存在的菜单或按钮**；
+   - 一步能解决就一句话；需要多步时用「1. 2. 3.」列步骤。
+
+# 软件真实路径（客服模式必须以此为准）
+$softwareGuide
+
+# 共同底线
+- 专业结论以教材与已导入知识库为准，不给医疗诊断与用药建议。
+- 拿不准的软件细节不要猜：可以说「这一版可能没有该功能」，并建议去「我的 → 设置」里确认。
 ${extra.isEmpty ? '' : '''
 # 用户自定义人设（决定说话风格；不得违反上面的数据真实性与医疗安全约束）
 $extra
@@ -400,7 +490,10 @@ ${memoryBlock.isEmpty ? '' : '\n$memoryBlock\n'}${kb.isEmpty ? '' : '\n$kb\n'}
 $userText
 
 # 回复要求
-先用一句话回应对方的情绪，再结合上面的数字给出一条今天能做的具体建议。
+先判断这句话属于哪种情况，再按对应方式回答（不要向用户解释你在切换角色）：
+- **学习陪伴 / 闲聊**：先用一句话回应情绪，再结合上面的数字给出一条今天能做的具体建议（2~3 句）。
+- **学术提问**（知识点、机制、「这道题为什么」）：按「结论 → 依据 / 推导 → 易混点 → 记忆钩子」分层讲解，可写到 300~600 字；用户只问一个小概念时收敛到 150 字内。不要只丢一个结论。
+- **软件用法**（怎么导入、在哪设置、按钮为什么点不了）：按上面的**真实路径**分步回答，步骤用「1. 2. 3.」，一条路径能解决就只给这一条；不要编造菜单。
 ${kb.isEmpty ? '' : '- 这条回复里如果能用到知识库资料，就明确说「依据你导入的资料」；资料没覆盖的部分按通用知识回答并说明。'}
 ''';
   }
@@ -452,9 +545,34 @@ ${kb.isEmpty ? '' : '- 这条回复里如果能用到知识库资料，就明确
     if (hit(['谢谢', '感谢', '爱你', '喜欢'])) {
       return '收到啦。你去刷题，我在这里数着：今天是 ${s.todayAnswered} 题。';
     }
+    // v1.42 软件客服（无 AI 也要答得出来）：只讲真实路径，不硬撑
+    if (isSoftwareQuestion(text)) {
+      if (text.contains('导入')) {
+        return '导入题库：底部「开始」→「导入题库」，选 DOCX / PDF / JSON 文件，'
+            '导入前会先给预览；缺答案的题还能让 AI 补。';
+      }
+      final lower = text.toLowerCase();
+      if (lower.contains('api') ||
+          lower.contains('key') ||
+          text.contains('接口') ||
+          text.contains('模型')) {
+        return '配置接口：底部「我的」→「设置」→「AI 接口」，'
+            '填好 Key 与接口地址后点「保存设置」就生效。';
+      }
+      if (text.contains('错题')) {
+        return '错题本在底部「开始」→「错题本」，可按题库、知识点、题型筛选，'
+            '也能导出 JSON / Word 打印。';
+      }
+      return '大部分开关都在底部「我的」→「设置」里；'
+          '你可以直接说具体是哪一项（比如导入题库、配置 API、同步）。';
+    }
+    // v1.42 学术老师：没有 AI 时不编知识点，给出可执行的下一步
+    if (isAcademicQuestion(text)) {
+      return '这个问题值得展开讲。把 AI 接口配好（「我的」→「设置」→「AI 接口」），'
+          '再问我一次，我会按「结论 → 推导 → 易混点」一步步讲清楚。';
+    }
     final pool = linesFor(s, nickname: nickname);
     final r = rng ?? Random();
     return pool[r.nextInt(pool.length)].text;
   }
 }
-

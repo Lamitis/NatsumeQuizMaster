@@ -526,7 +526,9 @@ class _QuizScreenState extends State<QuizScreen> {
                                           Center(
                                             child: Text(
                                               answerHintText(
-                                                  question.questionType),
+                                                  question.questionType,
+                                                  autoAdvance: appState.settings
+                                                      .autoAdvanceAfterAnswer),
                                               style: TextStyle(
                                                   fontSize: NatsumeType.body,
                                                   color: ac.textSecondary),
@@ -1311,12 +1313,17 @@ class _QuizScreenState extends State<QuizScreen> {
           _playSound('wrong.wav', appState);
         }
       }
-      if (record != null && record.isCorrect && !appState.isLastQuestion) {
-        // v1.0.2 修复：延迟自动跳题前比对题号，
-        // 用户在窗口内手动跳题时不重复跳转（避免跳过中间题）
-        // v1.0.2 UI 审查修复：600 → 800ms，给答案反馈留足节奏
+      // v1.42 做题节奏：是否自动切题由「设置 → 外观 → 答完题自动切下一题」
+      // 决定。关闭时停留在当前题，完整展示判定与解析，等用户点「下一题」。
+      final autoAdvance = appState.settings.autoAdvanceAfterAnswer;
+      if (record != null &&
+          autoAdvance &&
+          widget.quizMode == QuizMode.normal &&
+          !appState.isLastQuestion) {
+        // 延迟自动跳题前比对题号，用户在窗口内手动跳题时不重复跳转
+        // （避免跳过中间题）。1.2s 既够看清对错反馈与正确选项，又不至于让人干等。
         final answeredIndex = appState.currentQuestionIndex;
-        await Future.delayed(const Duration(milliseconds: 800));
+        await Future.delayed(const Duration(milliseconds: 1200));
         if (mounted && appState.currentQuestionIndex == answeredIndex) {
           _advanceQuestion(appState);
         }

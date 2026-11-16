@@ -97,7 +97,8 @@ class _CompanionHostState extends State<CompanionHost> {
   bool _chatOpen = false;
 
   /// 迷你聊天面板的 state 句柄：戳一下时要把回话塞进正在开着的面板
-  final GlobalKey<_MiniChatPanelState> _chatKey = GlobalKey<_MiniChatPanelState>();
+  final GlobalKey<_MiniChatPanelState> _chatKey =
+      GlobalKey<_MiniChatPanelState>();
 
   /// 已经在栈上 / 正在 push 的页面类型（`runtimeType.toString()`）。
   /// 用途见 [_openPage]：同一页只允许一个实例，避免连点叠层。
@@ -276,7 +277,8 @@ class _CompanionHostState extends State<CompanionHost> {
     final ac = AppThemeColors.of(context);
     final size = MediaQuery.sizeOf(context);
     final stored = (settings.overlayX != null && settings.overlayY != null)
-        ? Offset(settings.overlayX! * size.width, settings.overlayY! * size.height)
+        ? Offset(
+            settings.overlayX! * size.width, settings.overlayY! * size.height)
         : null;
     // 默认位置：右下角、让开底部导航栏
     final fallback = Offset(
@@ -868,6 +870,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
       }
     }
   }
+
   CompanionMood _moodFor(String userText) {
     if (userText.contains('累') ||
         userText.contains('困') ||
@@ -901,6 +904,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
       duration: const Duration(seconds: 2),
     ));
   }
+
   @override
   Widget build(BuildContext context) {
     final ac = AppThemeColors.of(context);
@@ -1003,7 +1007,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
                         .copyWith(color: ac.textPrimary),
                     decoration: InputDecoration(
                       isDense: true,
-                      hintText: '跟${widget.botName}说点什么…',
+                      hintText: '问${widget.botName}学习问题或软件用法…',
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: NatsumeSpace.xs, vertical: 6),
                     ),

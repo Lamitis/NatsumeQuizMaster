@@ -1,4 +1,4 @@
-﻿import '../utils/design_tokens.dart';
+import '../utils/design_tokens.dart';
 import '../widgets/guide/guide_anchor.dart';
 import '../widgets/guide/guide_steps.dart';
 import 'dart:async';
@@ -69,9 +69,8 @@ enum SettingsGroup {
         SettingsGroup.appearance => '主题、深色模式、音效',
         SettingsGroup.knowledge => '知识点体系、打标签、重导',
         SettingsGroup.sync => '局域网、假期、每日提醒',
-        SettingsGroup.advanced => isWindowsPlatform
-            ? 'MinerU、电池优化、备份、网络加速、日志'
-            : '电池优化、备份、网络加速、日志',
+        SettingsGroup.advanced =>
+          isWindowsPlatform ? 'MinerU、电池优化、备份、网络加速、日志' : '电池优化、备份、网络加速、日志',
       };
 
   /// 组在「全部设置」里的先后（越小越靠前）。
@@ -560,609 +559,641 @@ class _SettingsScreenState extends State<SettingsScreen>
             padding: const EdgeInsets.all(16),
             child: Builder(builder: (context) {
               final specs = <_SettingsSpec>[
-                _spec(SettingsGroup.ai, 10,
+                _spec(
+                    SettingsGroup.ai,
+                    10,
                     // API 配置卡片
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.api, color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('AI 接口配置',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '默认使用 DeepSeek API，填写你的 API Key 即可使用。'
-                        '也支持任意 OpenAI 兼容的官方或第三方接口。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body, color: ac.textSecondary),
-                      ),
-                      const SizedBox(height: NatsumeSpace.md),
-
-                      // v1.28 预设供应商：一键填入端点 + 模型
-                      Text('快速选择服务商',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w500,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: NatsumeSpace.xs),
-                      Wrap(
-                        spacing: NatsumeSpace.xs,
-                        runSpacing: NatsumeSpace.xs,
-                        children: [
-                          for (final p in kApiPresets)
-                            InkWell(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.pill),
-                              onTap: () => _applyPreset(p),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: NatsumeSpace.sm + 2,
-                                    vertical: NatsumeSpace.xs - 1),
-                                decoration: BoxDecoration(
-                                  color: _isPresetActive(p)
-                                      ? ac.accentSoft
-                                      : ac.surface,
-                                  borderRadius:
-                                      BorderRadius.circular(NatsumeRadius.pill),
-                                  border: Border.all(
-                                    color: _isPresetActive(p)
-                                        ? ac.accent
-                                        : ac.border,
-                                    width: _isPresetActive(p) ? 1.4 : 1,
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    if (p.isCustom) ...[
-                                      Icon(Icons.tune,
-                                          size: 13,
-                                          color: _isPresetActive(p)
-                                              ? ac.accent
-                                              : ac.textSecondary),
-                                      const SizedBox(width: 4),
-                                    ],
-                                    Text(p.name,
-                                        style: NatsumeType.captionStyle.copyWith(
-                                          color: _isPresetActive(p)
-                                              ? ac.accent
-                                              : ac.textSecondary,
-                                          fontWeight: _isPresetActive(p)
-                                              ? FontWeight.w600
-                                              : FontWeight.w400,
-                                        )),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: NatsumeSpace.md),
-
-                      // API Key
-                      Text('API Key',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w500,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: 6),
-                      GuideAnchor(
-                        id: GuideAnchorIds.settingsApiKey,
-                        child: TextField(
-                          controller: _apiKeyController,
-                          obscureText: _obscureKey,
-                          decoration: InputDecoration(
-                            hintText: 'sk-xxxxxxxxxxxxxxxxxxxxxxxx',
-                            border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(
-                                    NatsumeRadius.small)),
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 12),
-                            suffixIcon: IconButton(
-                              icon: Icon(
-                                  _obscureKey
-                                      ? Icons.visibility_off
-                                      : Icons.visibility,
-                                  size: 20),
-                              onPressed: () =>
-                                  setState(() => _obscureKey = !_obscureKey),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-
-                      // 余额展示
-                      if (_balance != null) ...[
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: ac.accentSoft.withOpacity(0.4),
-                            borderRadius:
-                                BorderRadius.circular(NatsumeRadius.small),
-                          ),
-                          child: Row(
+                          Row(
                             children: [
-                              // v1.0.2 设计审查修复：硬编码色 → 主题语义色
-                              Icon(Icons.account_balance_wallet,
-                                  size: 18,
-                                  color: AppThemeColors.of(context).warning),
+                              Icon(Icons.api, color: ac.accent, size: 20),
                               const SizedBox(width: 8),
-                              Text('剩余 ¥${_balance!.toStringAsFixed(2)}',
+                              Text('AI 接口配置',
                                   style: TextStyle(
-                                      fontSize: NatsumeType.body,
-                                      fontWeight: FontWeight.w600,
-                                      color: ac.accent)),
-                              if (_estimated > 0) ...[
-                                const SizedBox(width: 8),
-                                Text('≈ $_estimated 题',
-                                    style: TextStyle(
-                                        fontSize: NatsumeType.body,
-                                        color: ac.accent.withOpacity(0.7))),
-                              ],
-                              const Spacer(),
-                              _balanceLoading
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2))
-                                  : IconButton(
-                                      icon: const Icon(Icons.refresh, size: 18),
-                                      onPressed: _fetchBalance,
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                    ),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
                             ],
                           ),
-                        ),
-                        const SizedBox(height: 14),
-                      ],
+                          const SizedBox(height: 8),
+                          Text(
+                            '默认使用 DeepSeek API，填写你的 API Key 即可使用。'
+                            '也支持任意 OpenAI 兼容的官方或第三方接口。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary),
+                          ),
+                          const SizedBox(height: NatsumeSpace.md),
 
-                      // v1.0.2 对齐里程碑：余额不足提示
-                      if (_balance != null && _balance! < 1) ...[
-                        Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: BoxDecoration(
-                            color: ac.danger.withOpacity(0.1),
-                            borderRadius:
-                                BorderRadius.circular(NatsumeRadius.small),
-                          ),
-                          child: Row(
-                            children: [
-                              // v1.0.2 设计审查修复：硬编码色 → 主题错误色
-                              Icon(Icons.warning_amber,
-                                  size: 16, color: ac.danger),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text('API 余额不足 ¥1，建议尽快充值以免影响使用',
-                                    style: TextStyle(
-                                        fontSize: NatsumeType.body,
-                                        color: ac.danger)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                      ],
-
-                      // API Endpoint
-                      Text('API 地址',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w500,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _endpointController,
-                        focusNode: _endpointFocus,
-                        // v1.0.2 UI 审查修复：长 API 地址单行截断，
-                        // 改为最多 2 行换行完整显示
-                        minLines: 1,
-                        maxLines: 2,
-                        keyboardType: TextInputType.url,
-                        decoration: InputDecoration(
-                          hintText: AppSettings.defaultApiEndpoint,
-                          border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.small)),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 12),
-                        ),
-                        style: const TextStyle(fontSize: NatsumeType.body),
-                      ),
-                      const SizedBox(height: 14),
-
-                      // v1.28 连接测试：填完 Key/地址后可直接验证是否可用
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              onPressed: _testing ? null : _testConnection,
-                              icon: _testing
-                                  ? const SizedBox(
-                                      width: 15,
-                                      height: 15,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2))
-                                  : const Icon(Icons.bolt_outlined, size: 18),
-                              label: Text(_testing ? '测试中…' : '测试连接'),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (_testResult != null) ...[
-                        const SizedBox(height: NatsumeSpace.xs),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(NatsumeSpace.sm),
-                          decoration: BoxDecoration(
-                            color: (_testOk ? ac.success : ac.danger)
-                                .withOpacity(0.10),
-                            borderRadius: NatsumeRadius.smallBorder,
-                            border: Border.all(
-                                color: (_testOk ? ac.success : ac.danger)
-                                    .withOpacity(0.45)),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                  _testOk
-                                      ? Icons.check_circle_outline
-                                      : Icons.error_outline,
-                                  size: 17,
-                                  color: _testOk ? ac.success : ac.danger),
-                              const SizedBox(width: NatsumeSpace.xs),
-                              Expanded(
-                                child: Text(_testResult!,
-                                    style: NatsumeType.captionStyle.copyWith(
-                                        color: _testOk ? ac.success : ac.danger,
-                                        height: 1.5)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-
-                      // Model
-                      Row(
-                        children: [
-                          Text('模型名称',
+                          // v1.28 预设供应商：一键填入端点 + 模型
+                          Text('快速选择服务商',
                               style: TextStyle(
                                   fontSize: NatsumeType.body,
                                   fontWeight: FontWeight.w500,
                                   color: ac.textPrimary)),
-                          const Spacer(),
-                          // v1.28：从接口拉取模型列表供选择（第三方网关模型名各异，
-                          // 手填易错；能拉取的供应商直接点选）
-                          TextButton.icon(
-                            onPressed: _modelsLoading ? null : _loadModels,
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: NatsumeSpace.xs, vertical: 2),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                            ),
-                            icon: _modelsLoading
-                                ? const SizedBox(
-                                    width: 13,
-                                    height: 13,
-                                    child: CircularProgressIndicator(
-                                        strokeWidth: 2))
-                                : const Icon(Icons.list_alt_rounded, size: 15),
-                            label: Text(_modelsLoading ? '拉取中…' : '选择模型',
-                                style: NatsumeType.captionStyle
-                                    .copyWith(color: ac.accent)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _modelController,
-                        decoration: InputDecoration(
-                          hintText: AppSettings.defaultModel,
-                          border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.small)),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 12),
-                        ),
-                      ),
-                      if (_modelsError != null) ...[
-                        const SizedBox(height: NatsumeSpace.xs),
-                        Text(_modelsError!,
-                            style: NatsumeType.captionStyle
-                                .copyWith(color: ac.danger)),
-                      ],
-                      if (_modelOptions.isNotEmpty) ...[
-                        const SizedBox(height: NatsumeSpace.sm),
-                        // 模型选择：点击即填入（超过 12 个时缩略为可横向滚动）
-                        Container(
-                          constraints: const BoxConstraints(maxHeight: 168),
-                          decoration: BoxDecoration(
-                            color: ac.surface,
-                            borderRadius: NatsumeRadius.smallBorder,
-                            border: Border.all(
-                                color: ac.border, width: NatsumeShadow.hairline),
-                          ),
-                          child: SingleChildScrollView(
-                            padding: const EdgeInsets.all(NatsumeSpace.xs),
-                            child: Wrap(
-                              spacing: NatsumeSpace.xs,
-                              runSpacing: NatsumeSpace.xs,
-                              children: [
-                                for (final m in _modelOptions)
-                                  InkWell(
-                                    borderRadius:
-                                        BorderRadius.circular(NatsumeRadius.pill),
-                                    onTap: () => setState(() {
-                                      _modelController.text = m;
-                                      _testResult = null;
-                                    }),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: NatsumeSpace.sm,
-                                          vertical: NatsumeSpace.xxs + 1),
-                                      decoration: BoxDecoration(
-                                        color: _modelController.text.trim() == m
-                                            ? ac.accentSoft
-                                            : ac.surfaceAlt,
-                                        borderRadius: BorderRadius.circular(
-                                            NatsumeRadius.pill),
-                                        border: Border.all(
-                                          color:
-                                              _modelController.text.trim() == m
-                                                  ? ac.accent
-                                                  : Colors.transparent,
-                                        ),
+                          const SizedBox(height: NatsumeSpace.xs),
+                          Wrap(
+                            spacing: NatsumeSpace.xs,
+                            runSpacing: NatsumeSpace.xs,
+                            children: [
+                              for (final p in kApiPresets)
+                                InkWell(
+                                  borderRadius:
+                                      BorderRadius.circular(NatsumeRadius.pill),
+                                  onTap: () => _applyPreset(p),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: NatsumeSpace.sm + 2,
+                                        vertical: NatsumeSpace.xs - 1),
+                                    decoration: BoxDecoration(
+                                      color: _isPresetActive(p)
+                                          ? ac.accentSoft
+                                          : ac.surface,
+                                      borderRadius: BorderRadius.circular(
+                                          NatsumeRadius.pill),
+                                      border: Border.all(
+                                        color: _isPresetActive(p)
+                                            ? ac.accent
+                                            : ac.border,
+                                        width: _isPresetActive(p) ? 1.4 : 1,
                                       ),
-                                      child: Text(m,
-                                          style: NatsumeType.microStyle.copyWith(
-                                            color:
-                                                _modelController.text.trim() ==
-                                                        m
-                                                    ? ac.accent
-                                                    : ac.textSecondary,
-                                            fontWeight:
-                                                _modelController.text.trim() ==
-                                                        m
-                                                    ? FontWeight.w600
-                                                    : FontWeight.w400,
-                                          )),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (p.isCustom) ...[
+                                          Icon(Icons.tune,
+                                              size: 13,
+                                              color: _isPresetActive(p)
+                                                  ? ac.accent
+                                                  : ac.textSecondary),
+                                          const SizedBox(width: 4),
+                                        ],
+                                        Text(p.name,
+                                            style: NatsumeType.captionStyle
+                                                .copyWith(
+                                              color: _isPresetActive(p)
+                                                  ? ac.accent
+                                                  : ac.textSecondary,
+                                              fontWeight: _isPresetActive(p)
+                                                  ? FontWeight.w600
+                                                  : FontWeight.w400,
+                                            )),
+                                      ],
                                     ),
                                   ),
-                              ],
-                            ),
+                                ),
+                            ],
                           ),
-                        ),
-                      ],
-                      const SizedBox(height: 14),
+                          const SizedBox(height: NatsumeSpace.md),
 
-                      // v1.0.2 对齐里程碑：昵称（首页专属问候）
-                      Text('你的昵称',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w500,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: 6),
-                      TextField(
-                        controller: _nicknameController,
-                        decoration: InputDecoration(
-                          hintText: '设置后，首页会显示对你的专属问候。',
-                          border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.small)),
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 12),
-                        ),
-                        style: const TextStyle(fontSize: NatsumeType.body),
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.ai, 10,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.ai, 20,
-                    // v1.28 AI 回答风格：篇幅档位 + 关键词高亮开关
-                // 「先试一下吧，或者在设置里面加一个切换的开关」
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.auto_awesome, color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('AI 回答风格',
+                          // API Key
+                          Text('API Key',
                               style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
+                                  fontSize: NatsumeType.body,
+                                  fontWeight: FontWeight.w500,
                                   color: ac.textPrimary)),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-
-                      // 篇幅档位（三选一）
-                      Text('回答详细程度',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body,
-                              fontWeight: FontWeight.w500,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: AnalysisDetail.values.map((d) {
-                          final active = _detail == d;
-                          return Expanded(
-                            child: Padding(
-                              padding: EdgeInsets.only(
-                                  right:
-                                      d == AnalysisDetail.values.last ? 0 : 8),
-                              child: GestureDetector(
-                                onTap: () => setState(() => _detail = d),
-                                child: AnimatedContainer(
-                                  duration: NatsumeMotion.fast,
-                                  curve: NatsumeMotion.standard,
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 10),
-                                  decoration: BoxDecoration(
-                                    color: active ? ac.accentSoft : ac.surface,
-                                    borderRadius:
-                                        BorderRadius.circular(NatsumeRadius.small),
-                                    border: Border.all(
-                                      color: active ? ac.accent : ac.border,
-                                      width: active ? 1.4 : 1,
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(d.label,
-                                        style: TextStyle(
-                                          fontSize: NatsumeType.body,
-                                          color: active
-                                              ? ac.accent
-                                              : ac.textSecondary,
-                                          fontWeight: active
-                                              ? FontWeight.w600
-                                              : FontWeight.w400,
-                                        )),
-                                  ),
+                          const SizedBox(height: 6),
+                          GuideAnchor(
+                            id: GuideAnchorIds.settingsApiKey,
+                            child: TextField(
+                              controller: _apiKeyController,
+                              obscureText: _obscureKey,
+                              decoration: InputDecoration(
+                                hintText: 'sk-xxxxxxxxxxxxxxxxxxxxxxxx',
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                        NatsumeRadius.small)),
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 12, vertical: 12),
+                                suffixIcon: IconButton(
+                                  icon: Icon(
+                                      _obscureKey
+                                          ? Icons.visibility_off
+                                          : Icons.visibility,
+                                      size: 20),
+                                  onPressed: () => setState(
+                                      () => _obscureKey = !_obscureKey),
                                 ),
                               ),
                             ),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(_detail.hint,
-                          style: TextStyle(
-                              fontSize: NatsumeType.caption,
-                              color: ac.textTertiary,
-                              height: 1.4)),
+                          ),
+                          const SizedBox(height: 14),
 
-                      const SizedBox(height: 14),
-                      Divider(height: 1, color: ac.border),
+                          // 余额展示
+                          if (_balance != null) ...[
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: ac.accentSoft.withOpacity(0.4),
+                                borderRadius:
+                                    BorderRadius.circular(NatsumeRadius.small),
+                              ),
+                              child: Row(
+                                children: [
+                                  // v1.0.2 设计审查修复：硬编码色 → 主题语义色
+                                  Icon(Icons.account_balance_wallet,
+                                      size: 18,
+                                      color:
+                                          AppThemeColors.of(context).warning),
+                                  const SizedBox(width: 8),
+                                  Text('剩余 ¥${_balance!.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.body,
+                                          fontWeight: FontWeight.w600,
+                                          color: ac.accent)),
+                                  if (_estimated > 0) ...[
+                                    const SizedBox(width: 8),
+                                    Text('≈ $_estimated 题',
+                                        style: TextStyle(
+                                            fontSize: NatsumeType.body,
+                                            color: ac.accent.withOpacity(0.7))),
+                                  ],
+                                  const Spacer(),
+                                  _balanceLoading
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2))
+                                      : IconButton(
+                                          icon: const Icon(Icons.refresh,
+                                              size: 18),
+                                          onPressed: _fetchBalance,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                        ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                          ],
 
-                      // 关键词高亮开关
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        value: _keywordHighlight,
-                        onChanged: (v) => setState(() => _keywordHighlight = v),
-                        title: Text(_keywordHighlight ? '关键词高亮已开启' : '关键词高亮已关闭',
-                            style: TextStyle(
-                                fontSize: NatsumeType.h3, color: ac.textPrimary)),
-                        subtitle: Text(
-                          '开启后，AI 会用颜色标出决定答案的关键词和易错陷阱，一眼抓重点。',
-                          style: TextStyle(
-                              fontSize: NatsumeType.caption,
-                              color: ac.textSecondary,
-                              height: 1.4),
-                        ),
-                        secondary: Icon(
-                          _keywordHighlight
-                              ? Icons.format_color_text
-                              : Icons.format_color_reset,
-                          color:
-                              _keywordHighlight ? ac.accent : ac.textTertiary,
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.ai, 20,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 10,
-                    // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
-                // 连开关、Token 与署名提示一起隐藏（导入侧还有运行时门禁兜底）。
-                isWindowsPlatform ?
-                  _SettingsCard(
-                  bordered: true,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.document_scanner_outlined,
-                              size: 18, color: ac.accent),
-                          const SizedBox(width: 6),
-                          Text('扫描件识别增强（MinerU）',
+                          // v1.0.2 对齐里程碑：余额不足提示
+                          if (_balance != null && _balance! < 1) ...[
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: ac.danger.withOpacity(0.1),
+                                borderRadius:
+                                    BorderRadius.circular(NatsumeRadius.small),
+                              ),
+                              child: Row(
+                                children: [
+                                  // v1.0.2 设计审查修复：硬编码色 → 主题错误色
+                                  Icon(Icons.warning_amber,
+                                      size: 16, color: ac.danger),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text('API 余额不足 ¥1，建议尽快充值以免影响使用',
+                                        style: TextStyle(
+                                            fontSize: NatsumeType.body,
+                                            color: ac.danger)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                          ],
+
+                          // API Endpoint
+                          Text('API 地址',
                               style: TextStyle(
                                   fontSize: NatsumeType.body,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.w500,
                                   color: ac.textPrimary)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _endpointController,
+                            focusNode: _endpointFocus,
+                            // v1.0.2 UI 审查修复：长 API 地址单行截断，
+                            // 改为最多 2 行换行完整显示
+                            minLines: 1,
+                            maxLines: 2,
+                            keyboardType: TextInputType.url,
+                            decoration: InputDecoration(
+                              hintText: AppSettings.defaultApiEndpoint,
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                      NatsumeRadius.small)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 12),
+                            ),
+                            style: const TextStyle(fontSize: NatsumeType.body),
+                          ),
+                          const SizedBox(height: 14),
+
+                          // v1.28 连接测试：填完 Key/地址后可直接验证是否可用
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: _testing ? null : _testConnection,
+                                  icon: _testing
+                                      ? const SizedBox(
+                                          width: 15,
+                                          height: 15,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2))
+                                      : const Icon(Icons.bolt_outlined,
+                                          size: 18),
+                                  label: Text(_testing ? '测试中…' : '测试连接'),
+                                ),
+                              ),
+                            ],
+                          ),
+                          if (_testResult != null) ...[
+                            const SizedBox(height: NatsumeSpace.xs),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(NatsumeSpace.sm),
+                              decoration: BoxDecoration(
+                                color: (_testOk ? ac.success : ac.danger)
+                                    .withOpacity(0.10),
+                                borderRadius: NatsumeRadius.smallBorder,
+                                border: Border.all(
+                                    color: (_testOk ? ac.success : ac.danger)
+                                        .withOpacity(0.45)),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                      _testOk
+                                          ? Icons.check_circle_outline
+                                          : Icons.error_outline,
+                                      size: 17,
+                                      color: _testOk ? ac.success : ac.danger),
+                                  const SizedBox(width: NatsumeSpace.xs),
+                                  Expanded(
+                                    child: Text(_testResult!,
+                                        style: NatsumeType.captionStyle
+                                            .copyWith(
+                                                color: _testOk
+                                                    ? ac.success
+                                                    : ac.danger,
+                                                height: 1.5)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+
+                          // Model
+                          Row(
+                            children: [
+                              Text('模型名称',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      fontWeight: FontWeight.w500,
+                                      color: ac.textPrimary)),
+                              const Spacer(),
+                              // v1.28：从接口拉取模型列表供选择（第三方网关模型名各异，
+                              // 手填易错；能拉取的供应商直接点选）
+                              TextButton.icon(
+                                onPressed: _modelsLoading ? null : _loadModels,
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: NatsumeSpace.xs, vertical: 2),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                icon: _modelsLoading
+                                    ? const SizedBox(
+                                        width: 13,
+                                        height: 13,
+                                        child: CircularProgressIndicator(
+                                            strokeWidth: 2))
+                                    : const Icon(Icons.list_alt_rounded,
+                                        size: 15),
+                                label: Text(_modelsLoading ? '拉取中…' : '选择模型',
+                                    style: NatsumeType.captionStyle
+                                        .copyWith(color: ac.accent)),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _modelController,
+                            decoration: InputDecoration(
+                              hintText: AppSettings.defaultModel,
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                      NatsumeRadius.small)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 12),
+                            ),
+                          ),
+                          if (_modelsError != null) ...[
+                            const SizedBox(height: NatsumeSpace.xs),
+                            Text(_modelsError!,
+                                style: NatsumeType.captionStyle
+                                    .copyWith(color: ac.danger)),
+                          ],
+                          if (_modelOptions.isNotEmpty) ...[
+                            const SizedBox(height: NatsumeSpace.sm),
+                            // 模型选择：点击即填入（超过 12 个时缩略为可横向滚动）
+                            Container(
+                              constraints: const BoxConstraints(maxHeight: 168),
+                              decoration: BoxDecoration(
+                                color: ac.surface,
+                                borderRadius: NatsumeRadius.smallBorder,
+                                border: Border.all(
+                                    color: ac.border,
+                                    width: NatsumeShadow.hairline),
+                              ),
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.all(NatsumeSpace.xs),
+                                child: Wrap(
+                                  spacing: NatsumeSpace.xs,
+                                  runSpacing: NatsumeSpace.xs,
+                                  children: [
+                                    for (final m in _modelOptions)
+                                      InkWell(
+                                        borderRadius: BorderRadius.circular(
+                                            NatsumeRadius.pill),
+                                        onTap: () => setState(() {
+                                          _modelController.text = m;
+                                          _testResult = null;
+                                        }),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: NatsumeSpace.sm,
+                                              vertical: NatsumeSpace.xxs + 1),
+                                          decoration: BoxDecoration(
+                                            color:
+                                                _modelController.text.trim() ==
+                                                        m
+                                                    ? ac.accentSoft
+                                                    : ac.surfaceAlt,
+                                            borderRadius: BorderRadius.circular(
+                                                NatsumeRadius.pill),
+                                            border: Border.all(
+                                              color: _modelController.text
+                                                          .trim() ==
+                                                      m
+                                                  ? ac.accent
+                                                  : Colors.transparent,
+                                            ),
+                                          ),
+                                          child: Text(m,
+                                              style: NatsumeType.microStyle
+                                                  .copyWith(
+                                                color: _modelController.text
+                                                            .trim() ==
+                                                        m
+                                                    ? ac.accent
+                                                    : ac.textSecondary,
+                                                fontWeight: _modelController
+                                                            .text
+                                                            .trim() ==
+                                                        m
+                                                    ? FontWeight.w600
+                                                    : FontWeight.w400,
+                                              )),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 14),
+
+                          // v1.0.2 对齐里程碑：昵称（首页专属问候）
+                          Text('你的昵称',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  fontWeight: FontWeight.w500,
+                                  color: ac.textPrimary)),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: _nicknameController,
+                            decoration: InputDecoration(
+                              hintText: '设置后，首页会显示对你的专属问候。',
+                              border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                      NatsumeRadius.small)),
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 12),
+                            ),
+                            style: const TextStyle(fontSize: NatsumeType.body),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '开启后无需每次手动选择：桌面端导入 PDF 时会先抽样前几页文字层，'
-                        '只有扫描件/乱码才自动交给 MinerU 做版面识别；电子版直接本地解析，不跑 OCR。'
-                        '不填 Token 走官方轻量通道（≤10MB、≤20 页）；填了 Token 走精准解析（≤200MB、≤200 页）。',
-                        style: NatsumeType.captionStyle
-                            .copyWith(color: ac.textSecondary, height: 1.4),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '识别到扫描件时，会把该文件上传到 MinerU 官方服务（mineru.net）。',
-                        style: NatsumeType.microStyle
-                            .copyWith(color: ac.textTertiary, height: 1.4),
-                      ),
-                      SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        dense: true,
-                        title: Text('允许扫描件使用 MinerU（桌面端自动判断）',
-                            style: TextStyle(
-                                fontSize: NatsumeType.body,
-                                color: ac.textPrimary)),
-                        value: _mineruEnabled,
-                        onChanged: (v) => setState(() => _mineruEnabled = v),
-                      ),
-                      TextField(
-                        controller: _mineruTokenController,
-                        obscureText: _obscureMineru,
-                        decoration: InputDecoration(
-                          labelText: 'MinerU Token（可留空）',
-                          hintText: '留空＝免 Token 轻量通道',
-                          isDense: true,
-                          border: OutlineInputBorder(
-                              borderRadius:
-                                  BorderRadius.circular(NatsumeRadius.small)),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                                _obscureMineru
-                                    ? Icons.visibility_off
-                                    : Icons.visibility,
-                                size: 20),
-                            onPressed: () =>
-                                setState(() => _obscureMineru = !_obscureMineru),
+                    )),
+                _spec(SettingsGroup.ai, 10, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.ai,
+                    20,
+                    // v1.28 AI 回答风格：篇幅档位 + 关键词高亮开关
+                    // 「先试一下吧，或者在设置里面加一个切换的开关」
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.auto_awesome,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('AI 回答风格',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
                           ),
-                        ),
+                          const SizedBox(height: 12),
+
+                          // 篇幅档位（三选一）
+                          Text('回答详细程度',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  fontWeight: FontWeight.w500,
+                                  color: ac.textPrimary)),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: AnalysisDetail.values.map((d) {
+                              final active = _detail == d;
+                              return Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.only(
+                                      right: d == AnalysisDetail.values.last
+                                          ? 0
+                                          : 8),
+                                  child: GestureDetector(
+                                    onTap: () => setState(() => _detail = d),
+                                    child: AnimatedContainer(
+                                      duration: NatsumeMotion.fast,
+                                      curve: NatsumeMotion.standard,
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color:
+                                            active ? ac.accentSoft : ac.surface,
+                                        borderRadius: BorderRadius.circular(
+                                            NatsumeRadius.small),
+                                        border: Border.all(
+                                          color: active ? ac.accent : ac.border,
+                                          width: active ? 1.4 : 1,
+                                        ),
+                                      ),
+                                      child: Center(
+                                        child: Text(d.label,
+                                            style: TextStyle(
+                                              fontSize: NatsumeType.body,
+                                              color: active
+                                                  ? ac.accent
+                                                  : ac.textSecondary,
+                                              fontWeight: active
+                                                  ? FontWeight.w600
+                                                  : FontWeight.w400,
+                                            )),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(_detail.hint,
+                              style: TextStyle(
+                                  fontSize: NatsumeType.caption,
+                                  color: ac.textTertiary,
+                                  height: 1.4)),
+
+                          const SizedBox(height: 14),
+                          Divider(height: 1, color: ac.border),
+
+                          // 关键词高亮开关
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: _keywordHighlight,
+                            onChanged: (v) =>
+                                setState(() => _keywordHighlight = v),
+                            title: Text(
+                                _keywordHighlight ? '关键词高亮已开启' : '关键词高亮已关闭',
+                                style: TextStyle(
+                                    fontSize: NatsumeType.h3,
+                                    color: ac.textPrimary)),
+                            subtitle: Text(
+                              '开启后，AI 会用颜色标出决定答案的关键词和易错陷阱，一眼抓重点。',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.caption,
+                                  color: ac.textSecondary,
+                                  height: 1.4),
+                            ),
+                            secondary: Icon(
+                              _keywordHighlight
+                                  ? Icons.format_color_text
+                                  : Icons.format_color_reset,
+                              color: _keywordHighlight
+                                  ? ac.accent
+                                  : ac.textTertiary,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        MineruService.attribution,
-                        style: NatsumeType.microStyle
-                            .copyWith(color: ac.textTertiary),
-                      ),
-                    ],
-                  ),
-                ) : const SizedBox.shrink()),
-                _spec(SettingsGroup.advanced, 10,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.ai, 90,
+                    )),
+                _spec(SettingsGroup.ai, 20, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.advanced,
+                    10,
+                    // v1.41：MinerU 只在桌面端提供——移动端底层依赖不可用/极慢，
+                    // 连开关、Token 与署名提示一起隐藏（导入侧还有运行时门禁兜底）。
+                    isWindowsPlatform
+                        ? _SettingsCard(
+                            bordered: true,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.document_scanner_outlined,
+                                        size: 18, color: ac.accent),
+                                    const SizedBox(width: 6),
+                                    Text('扫描件识别增强（MinerU）',
+                                        style: TextStyle(
+                                            fontSize: NatsumeType.body,
+                                            fontWeight: FontWeight.w600,
+                                            color: ac.textPrimary)),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '开启后无需每次手动选择：桌面端导入 PDF 时会先抽样前几页文字层，'
+                                  '只有扫描件/乱码才自动交给 MinerU 做版面识别；电子版直接本地解析，不跑 OCR。'
+                                  '不填 Token 走官方轻量通道（≤10MB、≤20 页）；填了 Token 走精准解析（≤200MB、≤200 页）。',
+                                  style: NatsumeType.captionStyle.copyWith(
+                                      color: ac.textSecondary, height: 1.4),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '识别到扫描件时，会把该文件上传到 MinerU 官方服务（mineru.net）。',
+                                  style: NatsumeType.microStyle.copyWith(
+                                      color: ac.textTertiary, height: 1.4),
+                                ),
+                                SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  dense: true,
+                                  title: Text('允许扫描件使用 MinerU（桌面端自动判断）',
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.body,
+                                          color: ac.textPrimary)),
+                                  value: _mineruEnabled,
+                                  onChanged: (v) =>
+                                      setState(() => _mineruEnabled = v),
+                                ),
+                                TextField(
+                                  controller: _mineruTokenController,
+                                  obscureText: _obscureMineru,
+                                  decoration: InputDecoration(
+                                    labelText: 'MinerU Token（可留空）',
+                                    hintText: '留空＝免 Token 轻量通道',
+                                    isDense: true,
+                                    border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(
+                                            NatsumeRadius.small)),
+                                    suffixIcon: IconButton(
+                                      icon: Icon(
+                                          _obscureMineru
+                                              ? Icons.visibility_off
+                                              : Icons.visibility,
+                                          size: 20),
+                                      onPressed: () => setState(() =>
+                                          _obscureMineru = !_obscureMineru),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  MineruService.attribution,
+                                  style: NatsumeType.microStyle
+                                      .copyWith(color: ac.textTertiary),
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink()),
+                _spec(SettingsGroup.advanced, 10, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.ai,
+                    90,
                     SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      final newSettings =
-                          context.read<AppState>().settings.copyWith(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          final newSettings = context
+                              .read<AppState>()
+                              .settings
+                              .copyWith(
                                 apiKey: _apiKeyController.text.trim(),
                                 apiEndpoint:
                                     _endpointController.text.trim().isEmpty
@@ -1177,203 +1208,265 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 // 移动端隐藏了开关：绝不把 MinerU 写回开启态
                                 mineruEnabled:
                                     isWindowsPlatform && _mineruEnabled,
-                                mineruToken:
-                                    _mineruTokenController.text.trim(),
+                                mineruToken: _mineruTokenController.text.trim(),
                               );
-                      // v1.0.2 修复：等待保存完成再提示/返回（此前 fire-and-forget）
-                      // 先同步取 messenger / navigator，避免 await 之后跨异步使用 context
-                      final messenger = ScaffoldMessenger.of(context);
-                      final nav = Navigator.of(context);
-                      await context
-                          .read<AppState>()
-                          .updateSettings(newSettings);
-                      if (!mounted) return;
-                      messenger.showSnackBar(
-                        SnackBar(
-                          content: const Text('设置已保存'),
-                          backgroundColor: ac.accent,
-                        ),
-                      );
-                      nav.pop();
-                    },
-                    child: const Text('保存设置',
-                        style: TextStyle(fontSize: NatsumeType.h3)),
-                  ),
-                )),
-                _spec(SettingsGroup.ai, 90,
-                    const SizedBox(height: 24)),
-                _spec(SettingsGroup.knowledge, 10,
+                          // v1.0.2 修复：等待保存完成再提示/返回（此前 fire-and-forget）
+                          // 先同步取 messenger / navigator，避免 await 之后跨异步使用 context
+                          final messenger = ScaffoldMessenger.of(context);
+                          final nav = Navigator.of(context);
+                          await context
+                              .read<AppState>()
+                              .updateSettings(newSettings);
+                          if (!mounted) return;
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: const Text('设置已保存'),
+                              backgroundColor: ac.accent,
+                            ),
+                          );
+                          nav.pop();
+                        },
+                        child: const Text('保存设置',
+                            style: TextStyle(fontSize: NatsumeType.h3)),
+                      ),
+                    )),
+                _spec(SettingsGroup.ai, 90, const SizedBox(height: 24)),
+                _spec(
+                    SettingsGroup.knowledge,
+                    10,
                     // v1.0.2 对齐里程碑：为剩余题目打标签
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.sell_outlined, color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text('为剩余题目打标签',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: NatsumeType.h3,
-                                    color: ac.textPrimary)),
-                          ),
-                          if (_untaggedCount > 0)
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: ac.danger.withOpacity(0.12),
-                                borderRadius:
-                                    BorderRadius.circular(NatsumeRadius.small),
+                          Row(
+                            children: [
+                              Icon(Icons.sell_outlined,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text('为剩余题目打标签',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: NatsumeType.h3,
+                                        color: ac.textPrimary)),
                               ),
-                              child: Text('$_untaggedCount 题未打标签',
-                                  style: TextStyle(
-                                      fontSize: NatsumeType.caption,
-                                      color: ac.danger)),
+                              if (_untaggedCount > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: ac.danger.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(
+                                        NatsumeRadius.small),
+                                  ),
+                                  child: Text('$_untaggedCount 题未打标签',
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.caption,
+                                          color: ac.danger)),
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          // v1.0.2 对齐里程碑：打标签用途说明
+                          Text(
+                            '用于：根据错题分析薄弱知识点、错题本按章节分组。按知识点统计错题分布，优先攻克薄弱类型',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary,
+                                height: 1.4),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '部分错题未打知识点标签，可去设置页「为剩余题目打标签」补齐后精炼更准。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary,
+                                height: 1.4),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.tonalIcon(
+                              icon: const Icon(Icons.auto_awesome, size: 16),
+                              label: Text(
+                                  _untaggedCount > 0 ? '开始打标签' : '暂无未打标签题目',
+                                  style: const TextStyle(
+                                      fontSize: NatsumeType.body)),
+                              onPressed: (_untaggedCount > 0 &&
+                                      context
+                                          .read<AppState>()
+                                          .settings
+                                          .isConfigured)
+                                  ? () => _startTagging()
+                                  : null,
                             ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      // v1.0.2 对齐里程碑：打标签用途说明
-                      Text(
-                        '用于：根据错题分析薄弱知识点、错题本按章节分组。按知识点统计错题分布，优先攻克薄弱类型',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '部分错题未打知识点标签，可去设置页「为剩余题目打标签」补齐后精炼更准。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.tonalIcon(
-                          icon: const Icon(Icons.auto_awesome, size: 16),
-                          label: Text(_untaggedCount > 0 ? '开始打标签' : '暂无未打标签题目',
-                              style: const TextStyle(fontSize: NatsumeType.body)),
-                          onPressed: (_untaggedCount > 0 &&
-                                  context
-                                      .read<AppState>()
-                                      .settings
-                                      .isConfigured)
-                              ? () => _startTagging()
-                              : null,
-                        ),
-                      ),
+                          ),
 
-                      // ===== v1.35 知识点体系 + 一键重导 =====
-                      const SizedBox(height: 12),
-                      Divider(height: 1, color: ac.border),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Icon(Icons.category_outlined,
-                              size: 18, color: ac.textTertiary),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              settings.hasKnowledgePointTypes
-                                  ? '知识点体系：${settings.knowledgePointTypes.length} 类'
-                                  : '知识点体系：未设置（AI 自行判断）',
-                              style: TextStyle(
-                                  fontSize: NatsumeType.body,
-                                  fontWeight: FontWeight.w500,
-                                  color: ac.textPrimary),
-                            ),
-                          ),
-                          TextButton(
-                            onPressed: _openKnowledgePointTypes,
-                            child: const Text('设计体系'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '自己定一套知识点口径（如「呼吸系统 / 循环系统」），'
-                        '导入解析和打标签都会只在这套口径里选；'
-                        '定好后可一键把全库题目按新体系重打标签。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.caption,
-                            color: ac.textSecondary,
-                            height: 1.5),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.tonalIcon(
-                          icon: const Icon(Icons.sync_alt_rounded, size: 16),
-                          label: const Text('一键重导知识点',
-                              style: TextStyle(fontSize: NatsumeType.body)),
-                          onPressed: (settings.hasKnowledgePointTypes &&
-                                  settings.isConfigured)
-                              ? () => _startRetagAll()
-                              : null,
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.knowledge, 10,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.appearance, 30,
-                    // 音效开关
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.music_note, color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('音效',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text('答对/答错时播放提示音',
-                          style: TextStyle(
-                              fontSize: NatsumeType.body, color: ac.textSecondary)),
-                      const SizedBox(height: 8),
-                      Consumer<AppState>(
-                        builder: (context, appState, _) => Column(
-                          children: [
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                  appState.settings.soundEnabled
-                                      ? '音效已开启'
-                                      : '音效已关闭',
+                          // ===== v1.35 知识点体系 + 一键重导 =====
+                          const SizedBox(height: 12),
+                          Divider(height: 1, color: ac.border),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Icon(Icons.category_outlined,
+                                  size: 18, color: ac.textTertiary),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  settings.hasKnowledgePointTypes
+                                      ? '知识点体系：${settings.knowledgePointTypes.length} 类'
+                                      : '知识点体系：未设置（AI 自行判断）',
                                   style: TextStyle(
                                       fontSize: NatsumeType.body,
-                                      color: ac.textPrimary)),
-                              value: appState.settings.soundEnabled,
-                              onChanged: (v) {
-                                appState.updateSettings(appState.settings
-                                    .copyWith(soundEnabled: v));
-                              },
+                                      fontWeight: FontWeight.w500,
+                                      color: ac.textPrimary),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _openKnowledgePointTypes,
+                                child: const Text('设计体系'),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '自己定一套知识点口径（如「呼吸系统 / 循环系统」），'
+                            '导入解析和打标签都会只在这套口径里选；'
+                            '定好后可一键把全库题目按新体系重打标签。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.caption,
+                                color: ac.textSecondary,
+                                height: 1.5),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton.tonalIcon(
+                              icon:
+                                  const Icon(Icons.sync_alt_rounded, size: 16),
+                              label: const Text('一键重导知识点',
+                                  style: TextStyle(fontSize: NatsumeType.body)),
+                              onPressed: (settings.hasKnowledgePointTypes &&
+                                      settings.isConfigured)
+                                  ? () => _startRetagAll()
+                                  : null,
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.appearance, 30,
-                    const SizedBox(height: 16)),
+                    )),
+                _spec(SettingsGroup.knowledge, 10, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.appearance,
+                    20,
+                    // v1.42 做题节奏：答完题是否自动切下一题
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.playlist_add_check_circle_outlined,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('做题节奏',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text('答完一题后是否自动切到下一题',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  color: ac.textSecondary)),
+                          Consumer<AppState>(
+                            builder: (context, appState, _) {
+                              final on =
+                                  appState.settings.autoAdvanceAfterAnswer;
+                              return SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(on ? '答完题自动切下一题' : '答完题停留在本题',
+                                    style: TextStyle(
+                                        fontSize: NatsumeType.body,
+                                        color: ac.textPrimary)),
+                                subtitle: Text(
+                                  on
+                                      ? '答完后约 1.2 秒自动进入下一题；想细看解析可随时关闭。'
+                                      : '答完停留在当前题、完整展示解析，点「下一题」再继续。',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.caption,
+                                      color: ac.textSecondary,
+                                      height: 1.4),
+                                ),
+                                value: on,
+                                onChanged: (v) {
+                                  appState.updateSettings(appState.settings
+                                      .copyWith(autoAdvanceAfterAnswer: v));
+                                },
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    )),
+                _spec(SettingsGroup.appearance, 20, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.appearance,
+                    30,
+                    // 音效开关
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.music_note,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('音效',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text('答对/答错时播放提示音',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  color: ac.textSecondary)),
+                          const SizedBox(height: 8),
+                          Consumer<AppState>(
+                            builder: (context, appState, _) => Column(
+                              children: [
+                                SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                      appState.settings.soundEnabled
+                                          ? '音效已开启'
+                                          : '音效已关闭',
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.body,
+                                          color: ac.textPrimary)),
+                                  value: appState.settings.soundEnabled,
+                                  onChanged: (v) {
+                                    appState.updateSettings(appState.settings
+                                        .copyWith(soundEnabled: v));
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    )),
+                _spec(SettingsGroup.appearance, 30, const SizedBox(height: 16)),
                 _spec(SettingsGroup.sync, 10,
                     // 局域网同步（v11：纯本地、无云端，同一局域网设备间同步）
-                Consumer2<AppState, SyncEngine>(
+                    Consumer2<AppState, SyncEngine>(
                   builder: (context, appState, sync, _) {
                     final syncSettings = appState.settings;
                     final displayName = syncSettings.deviceName.isEmpty
@@ -1440,7 +1533,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                             dense: true,
                             leading: const Icon(Icons.devices_other, size: 20),
                             title: Text('设备名：$displayName',
-                                style: const TextStyle(fontSize: NatsumeType.body)),
+                                style: const TextStyle(
+                                    fontSize: NatsumeType.body)),
                             trailing: const Icon(Icons.edit, size: 18),
                             onTap: () => _editDeviceName(displayName),
                           ),
@@ -1601,13 +1695,13 @@ class _SettingsScreenState extends State<SettingsScreen>
                                   style: TextStyle(
                                       fontSize: NatsumeType.caption,
                                       fontWeight: FontWeight.w600,
-                                      color: _pairStateColor(
-                                          sync.pairState, ac)),
+                                      color:
+                                          _pairStateColor(sync.pairState, ac)),
                                 ),
                               ),
-                              if (sync.pairState == SyncPairState.awaitingPeer ||
-                                  sync.pairState ==
-                                      SyncPairState.verifying)
+                              if (sync.pairState ==
+                                      SyncPairState.awaitingPeer ||
+                                  sync.pairState == SyncPairState.verifying)
                                 TextButton(
                                   onPressed: () => sync.verifyPairing(),
                                   child: const Text('重试'),
@@ -1631,10 +1725,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                                     isDense: true,
                                     labelText: '对端识别码',
                                     hintText: '粘贴长码或输入 6 位临时码',
-                                    helperText: sync.pairState ==
-                                            SyncPairState.verified
-                                        ? '已确认连通，可自动同步'
-                                        : '保存后会向对端确认，未确认前不算已配对',
+                                    helperText:
+                                        sync.pairState == SyncPairState.verified
+                                            ? '已确认连通，可自动同步'
+                                            : '保存后会向对端确认，未确认前不算已配对',
                                   ),
                                   onSubmitted: (_) => _applyPeerCode(sync),
                                 ),
@@ -1718,8 +1812,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                                           strokeWidth: 2))
                                   : const Icon(Icons.sync, size: 16),
                               label: Text(sync.syncing ? '同步中...' : '立即同步',
-                                  style:
-                                      const TextStyle(fontSize: NatsumeType.body)),
+                                  style: const TextStyle(
+                                      fontSize: NatsumeType.body)),
                               onPressed: sync.syncing ? null : _syncNow,
                             ),
                           ),
@@ -1737,8 +1831,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                                   onPressed: () {
                                     sync.cancelSync();
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                          content: Text('正在中止同步…')),
+                                      const SnackBar(content: Text('正在中止同步…')),
                                     );
                                   },
                                 ),
@@ -1767,8 +1860,7 @@ class _SettingsScreenState extends State<SettingsScreen>
                                       color: ac.textSecondary)),
                               children: [
                                 if (!sync.started)
-                                  _diagLine('同步服务', '未启动（打开自动同步或点「立即同步」）',
-                                      ac),
+                                  _diagLine('同步服务', '未启动（打开自动同步或点「立即同步」）', ac),
                                 _diagLine('同步服务端口', '${sync.httpPort}', ac),
                                 _diagLine(
                                     '信标监听端口',
@@ -1833,8 +1925,8 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 Align(
                                   alignment: Alignment.centerLeft,
                                   child: TextButton.icon(
-                                    icon: const Icon(Icons.restart_alt,
-                                        size: 16),
+                                    icon:
+                                        const Icon(Icons.restart_alt, size: 16),
                                     label: const Text('重置同步进度（下次全量）'),
                                     onPressed: () => sync.resetSyncProgress(),
                                   ),
@@ -1847,11 +1939,10 @@ class _SettingsScreenState extends State<SettingsScreen>
                     );
                   },
                 )),
-                _spec(SettingsGroup.sync, 10,
-                    const SizedBox(height: 16)),
+                _spec(SettingsGroup.sync, 10, const SizedBox(height: 16)),
                 _spec(SettingsGroup.sync, 20,
                     // 假期模式（v1.0.2）
-                Consumer<AppState>(
+                    Consumer<AppState>(
                   builder: (context, appState, _) {
                     final now = DateTime.now();
                     return _SettingsCard(
@@ -1954,657 +2045,700 @@ class _SettingsScreenState extends State<SettingsScreen>
                     );
                   },
                 )),
-                _spec(SettingsGroup.sync, 20,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.sync, 30,
+                _spec(SettingsGroup.sync, 20, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.sync,
+                    30,
                     // 每日提醒（v1.0.2）
-                Consumer<AppState>(
-                  builder: (context, appState, _) => _SettingsCard(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                    Consumer<AppState>(
+                      builder: (context, appState, _) => _SettingsCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Icon(Icons.notifications_outlined,
-                                color: ac.accent, size: 20),
-                            const SizedBox(width: 8),
-                            // v1.0.2 对齐里程碑：提醒与复习
-                            Text('提醒与复习',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: NatsumeType.h3,
-                                    color: ac.textPrimary)),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        // v1.0.2 对齐里程碑：到点会提醒你刷题打卡，保持连胜
-                        Text('到点会提醒你刷题打卡，保持连胜',
-                            style: TextStyle(
-                                fontSize: NatsumeType.body,
-                                color: ac.textSecondary)),
-                        const SizedBox(height: 8),
-                        SwitchListTile(
-                          contentPadding: EdgeInsets.zero,
-                          key: const ValueKey('settings-reminder-switch'),
-                          title: Text(
-                              _notificationGranted == null
-                                  ? '正在检查通知权限…'
-                                  : appState.reminderEnabled &&
-                                          _notificationGranted!
-                                      ? '已开启'
-                                      : '已关闭',
-                              style: TextStyle(
-                                  fontSize: NatsumeType.body,
-                                  color: ac.textPrimary)),
-                          value: appState.reminderEnabled &&
-                              _notificationGranted == true,
-                          onChanged:
-                              _reminderChanging || _notificationGranted == null
-                                  ? null
-                                  : _changeReminder,
-                        ),
-                        if (_reminderChanging) const Text('正在应用提醒设置…'),
-                        if (_reminderError != null)
-                          Text(_reminderError!,
-                              style: TextStyle(color: ac.danger)),
-                        if (_notificationGranted == false &&
-                            _reminderError == null)
-                          const Text('通知权限未开启，提醒不可用。请到系统设置允许通知权限。'),
-                        if (appState.reminderEnabled &&
-                            _notificationGranted == true)
-                          ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            leading: const Icon(Icons.schedule, size: 20),
-                            title: Text(
-                              '提醒时间：${_fmtTime(appState.reminderTime)}',
-                              style: const TextStyle(fontSize: NatsumeType.body),
-                            ),
-                            trailing: const Icon(Icons.edit, size: 18),
-                            onTap: () async {
-                              final now = DateTime.now();
-                              final current = appState.reminderTime ??
-                                  DateTime(now.year, now.month, now.day, 20);
-                              final picked = await showTimePicker(
-                                context: context,
-                                initialTime: TimeOfDay.fromDateTime(current),
-                              );
-                              if (picked != null) {
-                                await appState.setReminderSettings(
-                                    enabled: true,
-                                    time: DateTime(
-                                        current.year,
-                                        current.month,
-                                        current.day,
-                                        picked.hour,
-                                        picked.minute));
-                                await ReminderService.instance.syncSchedule();
-                              }
-                            },
-                          ),
-                        const SizedBox(height: 4),
-                        // v1.0.2 对齐里程碑：测试通知
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.notifications_active,
-                                size: 16),
-                            label: const Text('发送测试通知',
-                                style: TextStyle(fontSize: NatsumeType.body)),
-                            onPressed: () async {
-                              // 先同步取 messenger，避免 await 之后跨异步使用 context
-                              final messenger = ScaffoldMessenger.of(context);
-                              // v1.0.2 修复：Android 13+ 先请求通知权限，再发测试通知
-                              await ReminderService.instance
-                                  .requestNotificationPermission();
-                              final sent = await ReminderService.instance
-                                  .sendTestNotification();
-                              if (!mounted) return;
-                              messenger.showSnackBar(
-                                SnackBar(
-                                    content: Text(sent
-                                        ? '测试通知已发送，下拉通知栏查看'
-                                        // v1.0.2 设计审查修复：按真实原因提示
-                                        : (Platform.isAndroid
-                                            ? '通知权限未开启，请到系统设置允许通知权限'
-                                            : '当前平台不支持发送测试通知'))),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                )),
-                _spec(SettingsGroup.sync, 30,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 20,
-                    // v1.0.2 设计审查修复（简化保活）：移除无障碍保活
-                // （过度保活 + 商店合规风险），保留电池优化豁免
-                // （前台提醒服务不被系统激进清理）
-                // v1.41.2：仅移动端显示（桌面端没有电池优化豁免概念）
-                isMobilePlatform ?
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.battery_charging_full,
-                              color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('电池优化',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
-                          const Spacer(),
-                          Icon(
-                            _batteryIgnored
-                                ? Icons.check_circle
-                                : Icons.error_outline,
-                            size: 18,
-                            color: _batteryIgnored ? ac.accent : ac.danger,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _batteryIgnored ? '电池优化：已豁免' : '电池优化：未豁免',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: _batteryIgnored ? ac.accent : ac.danger),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        '允许忽略电池优化，防止系统在后台清理每日提醒服务',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '若仍收不到提醒：最近任务中长按本应用并锁定',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              icon: const Icon(Icons.battery_alert, size: 16),
-                              label: Text(
-                                  _batteryIgnored ? '电池优化：已豁免' : '请求忽略电池优化',
-                                  style: const TextStyle(
-                                      fontSize: NatsumeType.caption)),
-                              onPressed: _batteryIgnored
-                                  ? null
-                                  : () async {
-                                      await KeepAliveService.instance
-                                          .requestIgnoreBatteryOptimizations();
-                                      await _loadKeepaliveStatus();
-                                    },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ) : const SizedBox.shrink()),
-                _spec(SettingsGroup.advanced, 20,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.appearance, 10,
-                    // 主题切换
-                Text('主题外观',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: NatsumeType.h3,
-                        color: ac.textPrimary))),
-                _spec(SettingsGroup.appearance, 10,
-                    const SizedBox(height: 8)),
-                _spec(SettingsGroup.appearance, 11,
-                    Consumer<ThemeService>(
-                  builder: (context, themeService, _) => Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(children: [
-                        ...AppTheme.values.map((t) {
-                          final label = ThemeService.labelOf(t);
-                          // v1.0.2 UI 审查修复：主题选择行加三色预览
-                          // （导航/背景/强调），降低切换决策成本
-                          final previews = ThemeService.previewColorsOf(t);
-                          return RadioListTile<AppTheme>(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Row(
+                            Row(
                               children: [
-                                ...previews.map((c) => Padding(
-                                      padding: const EdgeInsets.only(right: 4),
-                                      child: Container(
-                                        width: 14,
-                                        height: 14,
-                                        decoration: BoxDecoration(
-                                          color: c,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                              color: ac.textPrimary
-                                                  .withOpacity(0.15),
-                                              width: 0.8),
-                                        ),
-                                      ),
-                                    )),
-                                const SizedBox(width: 6),
-                                Text(label,
-                                    style: const TextStyle(
-                                        fontSize: NatsumeType.body)),
+                                Icon(Icons.notifications_outlined,
+                                    color: ac.accent, size: 20),
+                                const SizedBox(width: 8),
+                                // v1.0.2 对齐里程碑：提醒与复习
+                                Text('提醒与复习',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: NatsumeType.h3,
+                                        color: ac.textPrimary)),
                               ],
                             ),
-                            value: t,
-                            groupValue: themeService.current,
-                            onChanged: (v) => themeService.switchTo(v!),
-                          );
-                        }),
-                      ]),
-                    ),
-                  ),
-                )),
-                _spec(SettingsGroup.appearance, 11,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.appearance, 20,
-                    // v1.0.2 七项改进：深色模式（跟随系统/浅色/深色）
-                Text('深色模式',
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: NatsumeType.h3,
-                        color: ac.textPrimary))),
-                _spec(SettingsGroup.appearance, 20,
-                    const SizedBox(height: 8)),
-                _spec(SettingsGroup.appearance, 21,
-                    Consumer<ThemeService>(
-                  builder: (context, themeService, _) => Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(children: [
-                        for (final (mode, label) in [
-                          (ThemeMode.system, '跟随系统'),
-                          (ThemeMode.light, '浅色'),
-                          (ThemeMode.dark, '深色'),
-                        ])
-                          RadioListTile<ThemeMode>(
-                            dense: true,
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(label,
-                                style: const TextStyle(fontSize: NatsumeType.body)),
-                            value: mode,
-                            groupValue: themeService.themeMode,
-                            onChanged: (v) => themeService.switchThemeMode(v!),
-                          ),
-                      ]),
-                    ),
-                  ),
-                )),
-                _spec(SettingsGroup.appearance, 21,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 45,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 50,
-                    // 调试日志
-                // （v1.0.2 UI 审查：星际穿越等主题下卡片与页面背景对比微弱，
-                //   bordered 加一圈细边框分隔；底色走 _SettingsCard 的 Material，
-                //   避免内部 SwitchListTile 的水波纹被底色盖住）
-                _SettingsCard(
-                  bordered: true,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.bug_report,
-                              color: ac.textSecondary, size: 20),
-                          const SizedBox(width: 8),
-                          Text('调试日志',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '开启后记录 AI 渲染链路、答案提交等关键数据，帮助排查前端 Bug。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body, color: ac.textSecondary),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                _debugEnabled ? '日志已开启' : '日志已关闭',
+                            const SizedBox(height: 8),
+                            // v1.0.2 对齐里程碑：到点会提醒你刷题打卡，保持连胜
+                            Text('到点会提醒你刷题打卡，保持连胜',
                                 style: TextStyle(
                                     fontSize: NatsumeType.body,
-                                    color: ac.textPrimary),
-                              ),
-                              value: _debugEnabled,
-                              onChanged: (v) {
-                                setState(() => _debugEnabled = v);
-                                if (v) {
-                                  DebugLogService.instance.enable();
-                                } else {
-                                  DebugLogService.instance.disable();
-                                }
-                              },
+                                    color: ac.textSecondary)),
+                            const SizedBox(height: 8),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              key: const ValueKey('settings-reminder-switch'),
+                              title: Text(
+                                  _notificationGranted == null
+                                      ? '正在检查通知权限…'
+                                      : appState.reminderEnabled &&
+                                              _notificationGranted!
+                                          ? '已开启'
+                                          : '已关闭',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      color: ac.textPrimary)),
+                              value: appState.reminderEnabled &&
+                                  _notificationGranted == true,
+                              onChanged: _reminderChanging ||
+                                      _notificationGranted == null
+                                  ? null
+                                  : _changeReminder,
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton.icon(
-                              icon: const Icon(Icons.file_download, size: 16),
-                              // v1.0.2 UI 审查修复：短文案 + 单行 + 紧凑，
-                              // 原"导出日志文件"在窄按钮内换行两行
-                              label: const Text('导出日志',
-                                  maxLines: 1,
-                                  softWrap: false,
-                                  style: TextStyle(fontSize: NatsumeType.body)),
-                              style: OutlinedButton.styleFrom(
-                                padding:
-                                    const EdgeInsets.symmetric(horizontal: 6),
-                                visualDensity: VisualDensity.compact,
-                              ),
-                              onPressed: () async {
-                                // 先同步取 messenger，避免 await 之后跨异步使用 context
-                                final messenger = ScaffoldMessenger.of(context);
-                                try {
-                                  if (!DebugLogService.instance.enabled) {
-                                    DebugLogService.instance.enable();
+                            if (_reminderChanging) const Text('正在应用提醒设置…'),
+                            if (_reminderError != null)
+                              Text(_reminderError!,
+                                  style: TextStyle(color: ac.danger)),
+                            if (_notificationGranted == false &&
+                                _reminderError == null)
+                              const Text('通知权限未开启，提醒不可用。请到系统设置允许通知权限。'),
+                            if (appState.reminderEnabled &&
+                                _notificationGranted == true)
+                              ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                dense: true,
+                                leading: const Icon(Icons.schedule, size: 20),
+                                title: Text(
+                                  '提醒时间：${_fmtTime(appState.reminderTime)}',
+                                  style: const TextStyle(
+                                      fontSize: NatsumeType.body),
+                                ),
+                                trailing: const Icon(Icons.edit, size: 18),
+                                onTap: () async {
+                                  final now = DateTime.now();
+                                  final current = appState.reminderTime ??
+                                      DateTime(
+                                          now.year, now.month, now.day, 20);
+                                  final picked = await showTimePicker(
+                                    context: context,
+                                    initialTime:
+                                        TimeOfDay.fromDateTime(current),
+                                  );
+                                  if (picked != null) {
+                                    await appState.setReminderSettings(
+                                        enabled: true,
+                                        time: DateTime(
+                                            current.year,
+                                            current.month,
+                                            current.day,
+                                            picked.hour,
+                                            picked.minute));
+                                    await ReminderService.instance
+                                        .syncSchedule();
                                   }
-                                  final file = await DebugLogService.instance
-                                      .exportToFile();
+                                },
+                              ),
+                            const SizedBox(height: 4),
+                            // v1.0.2 对齐里程碑：测试通知
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.notifications_active,
+                                    size: 16),
+                                label: const Text('发送测试通知',
+                                    style:
+                                        TextStyle(fontSize: NatsumeType.body)),
+                                onPressed: () async {
+                                  // 先同步取 messenger，避免 await 之后跨异步使用 context
+                                  final messenger =
+                                      ScaffoldMessenger.of(context);
+                                  // v1.0.2 修复：Android 13+ 先请求通知权限，再发测试通知
+                                  await ReminderService.instance
+                                      .requestNotificationPermission();
+                                  final sent = await ReminderService.instance
+                                      .sendTestNotification();
+                                  if (!mounted) return;
+                                  messenger.showSnackBar(
+                                    SnackBar(
+                                        content: Text(sent
+                                            ? '测试通知已发送，下拉通知栏查看'
+                                            // v1.0.2 设计审查修复：按真实原因提示
+                                            : (Platform.isAndroid
+                                                ? '通知权限未开启，请到系统设置允许通知权限'
+                                                : '当前平台不支持发送测试通知'))),
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )),
+                _spec(SettingsGroup.sync, 30, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.advanced,
+                    20,
+                    // v1.0.2 设计审查修复（简化保活）：移除无障碍保活
+                    // （过度保活 + 商店合规风险），保留电池优化豁免
+                    // （前台提醒服务不被系统激进清理）
+                    // v1.41.2：仅移动端显示（桌面端没有电池优化豁免概念）
+                    isMobilePlatform
+                        ? _SettingsCard(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.battery_charging_full,
+                                        color: ac.accent, size: 20),
+                                    const SizedBox(width: 8),
+                                    Text('电池优化',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: NatsumeType.h3,
+                                            color: ac.textPrimary)),
+                                    const Spacer(),
+                                    Icon(
+                                      _batteryIgnored
+                                          ? Icons.check_circle
+                                          : Icons.error_outline,
+                                      size: 18,
+                                      color: _batteryIgnored
+                                          ? ac.accent
+                                          : ac.danger,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _batteryIgnored ? '电池优化：已豁免' : '电池优化：未豁免',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      color: _batteryIgnored
+                                          ? ac.accent
+                                          : ac.danger),
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  '允许忽略电池优化，防止系统在后台清理每日提醒服务',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      color: ac.textSecondary,
+                                      height: 1.4),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '若仍收不到提醒：最近任务中长按本应用并锁定',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      color: ac.textSecondary,
+                                      height: 1.4),
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton.icon(
+                                        icon: const Icon(Icons.battery_alert,
+                                            size: 16),
+                                        label: Text(
+                                            _batteryIgnored
+                                                ? '电池优化：已豁免'
+                                                : '请求忽略电池优化',
+                                            style: const TextStyle(
+                                                fontSize: NatsumeType.caption)),
+                                        onPressed: _batteryIgnored
+                                            ? null
+                                            : () async {
+                                                await KeepAliveService.instance
+                                                    .requestIgnoreBatteryOptimizations();
+                                                await _loadKeepaliveStatus();
+                                              },
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          )
+                        : const SizedBox.shrink()),
+                _spec(SettingsGroup.advanced, 20, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.appearance,
+                    10,
+                    // 主题切换
+                    Text('主题外观',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: NatsumeType.h3,
+                            color: ac.textPrimary))),
+                _spec(SettingsGroup.appearance, 10, const SizedBox(height: 8)),
+                _spec(
+                    SettingsGroup.appearance,
+                    11,
+                    Consumer<ThemeService>(
+                      builder: (context, themeService, _) => Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(children: [
+                            ...AppTheme.values.map((t) {
+                              final label = ThemeService.labelOf(t);
+                              // v1.0.2 UI 审查修复：主题选择行加三色预览
+                              // （导航/背景/强调），降低切换决策成本
+                              final previews = ThemeService.previewColorsOf(t);
+                              return RadioListTile<AppTheme>(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Row(
+                                  children: [
+                                    ...previews.map((c) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(right: 4),
+                                          child: Container(
+                                            width: 14,
+                                            height: 14,
+                                            decoration: BoxDecoration(
+                                              color: c,
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                  color: ac.textPrimary
+                                                      .withOpacity(0.15),
+                                                  width: 0.8),
+                                            ),
+                                          ),
+                                        )),
+                                    const SizedBox(width: 6),
+                                    Text(label,
+                                        style: const TextStyle(
+                                            fontSize: NatsumeType.body)),
+                                  ],
+                                ),
+                                value: t,
+                                groupValue: themeService.current,
+                                onChanged: (v) => themeService.switchTo(v!),
+                              );
+                            }),
+                          ]),
+                        ),
+                      ),
+                    )),
+                _spec(SettingsGroup.appearance, 11, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.appearance,
+                    20,
+                    // v1.0.2 七项改进：深色模式（跟随系统/浅色/深色）
+                    Text('深色模式',
+                        style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: NatsumeType.h3,
+                            color: ac.textPrimary))),
+                _spec(SettingsGroup.appearance, 20, const SizedBox(height: 8)),
+                _spec(
+                    SettingsGroup.appearance,
+                    21,
+                    Consumer<ThemeService>(
+                      builder: (context, themeService, _) => Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(children: [
+                            for (final (mode, label) in [
+                              (ThemeMode.system, '跟随系统'),
+                              (ThemeMode.light, '浅色'),
+                              (ThemeMode.dark, '深色'),
+                            ])
+                              RadioListTile<ThemeMode>(
+                                dense: true,
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(label,
+                                    style: const TextStyle(
+                                        fontSize: NatsumeType.body)),
+                                value: mode,
+                                groupValue: themeService.themeMode,
+                                onChanged: (v) =>
+                                    themeService.switchThemeMode(v!),
+                              ),
+                          ]),
+                        ),
+                      ),
+                    )),
+                _spec(SettingsGroup.appearance, 21, const SizedBox(height: 16)),
+                _spec(SettingsGroup.advanced, 45, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.advanced,
+                    50,
+                    // 调试日志
+                    // （v1.0.2 UI 审查：星际穿越等主题下卡片与页面背景对比微弱，
+                    //   bordered 加一圈细边框分隔；底色走 _SettingsCard 的 Material，
+                    //   避免内部 SwitchListTile 的水波纹被底色盖住）
+                    _SettingsCard(
+                      bordered: true,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.bug_report,
+                                  color: ac.textSecondary, size: 20),
+                              const SizedBox(width: 8),
+                              Text('调试日志',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '开启后记录 AI 渲染链路、答案提交等关键数据，帮助排查前端 Bug。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: SwitchListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                    _debugEnabled ? '日志已开启' : '日志已关闭',
+                                    style: TextStyle(
+                                        fontSize: NatsumeType.body,
+                                        color: ac.textPrimary),
+                                  ),
+                                  value: _debugEnabled,
+                                  onChanged: (v) {
+                                    setState(() => _debugEnabled = v);
+                                    if (v) {
+                                      DebugLogService.instance.enable();
+                                    } else {
+                                      DebugLogService.instance.disable();
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  icon:
+                                      const Icon(Icons.file_download, size: 16),
+                                  // v1.0.2 UI 审查修复：短文案 + 单行 + 紧凑，
+                                  // 原"导出日志文件"在窄按钮内换行两行
+                                  label: const Text('导出日志',
+                                      maxLines: 1,
+                                      softWrap: false,
+                                      style: TextStyle(
+                                          fontSize: NatsumeType.body)),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 6),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                  onPressed: () async {
+                                    // 先同步取 messenger，避免 await 之后跨异步使用 context
+                                    final messenger =
+                                        ScaffoldMessenger.of(context);
+                                    try {
+                                      if (!DebugLogService.instance.enabled) {
+                                        DebugLogService.instance.enable();
+                                      }
+                                      final file = await DebugLogService
+                                          .instance
+                                          .exportToFile();
+                                      if (mounted) {
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content:
+                                                Text('日志已导出到: ${file.path}'),
+                                            backgroundColor: ac.accent,
+                                            duration:
+                                                const Duration(seconds: 4),
+                                          ),
+                                        );
+                                      }
+                                    } catch (e) {
+                                      if (mounted) {
+                                        messenger.showSnackBar(
+                                          SnackBar(
+                                            content: Text('导出失败: $e'),
+                                            backgroundColor: ac.danger,
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  },
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              OutlinedButton.icon(
+                                icon:
+                                    const Icon(Icons.delete_outline, size: 16),
+                                label: const Text('清空',
+                                    style:
+                                        TextStyle(fontSize: NatsumeType.body)),
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: ac.danger,
+                                ),
+                                onPressed: () {
+                                  DebugLogService.instance.clear();
                                   if (mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: const Text('日志已清空'),
+                                        backgroundColor: ac.textSecondary,
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                              const SizedBox(width: 10),
+                              OutlinedButton.icon(
+                                icon: const Icon(Icons.save_alt, size: 16),
+                                label: const Text('另存为',
+                                    style:
+                                        TextStyle(fontSize: NatsumeType.body)),
+                                style: OutlinedButton.styleFrom(
+                                    foregroundColor: ac.accent),
+                                onPressed: () async {
+                                  // 先同步取 messenger，避免 await 之后跨异步使用 context
+                                  final messenger =
+                                      ScaffoldMessenger.of(context);
+                                  try {
+                                    if (!DebugLogService.instance.enabled) {
+                                      DebugLogService.instance.enable();
+                                    }
+                                    final file = await DebugLogService.instance
+                                        .exportToFile();
+                                    // v1.34：用「另存为」取代系统分享面板
+                                    final saved =
+                                        await ExportStorage.saveFileAs(
+                                      file.path,
+                                      dialogTitle: '保存调试日志',
+                                    );
+                                    if (!mounted) return;
                                     messenger.showSnackBar(
                                       SnackBar(
-                                        content: Text('日志已导出到: ${file.path}'),
+                                        content: Text(saved.saved
+                                            ? '已另存为: ${saved.path}'
+                                            : '已取消保存（日志仍在: ${file.path}）'),
                                         backgroundColor: ac.accent,
                                         duration: const Duration(seconds: 4),
                                       ),
                                     );
+                                  } catch (e) {
+                                    if (mounted) {
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                            content: Text('另存为失败: $e'),
+                                            backgroundColor: ac.danger),
+                                      );
+                                    }
                                   }
-                                } catch (e) {
-                                  if (mounted) {
-                                    messenger.showSnackBar(
-                                      SnackBar(
-                                        content: Text('导出失败: $e'),
-                                        backgroundColor: ac.danger,
-                                      ),
-                                    );
-                                  }
-                                }
-                              },
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          OutlinedButton.icon(
-                            icon: const Icon(Icons.delete_outline, size: 16),
-                            label: const Text('清空',
-                                style: TextStyle(fontSize: NatsumeType.body)),
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: ac.danger,
-                            ),
-                            onPressed: () {
-                              DebugLogService.instance.clear();
-                              if (mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: const Text('日志已清空'),
-                                    backgroundColor: ac.textSecondary,
-                                  ),
-                                );
-                              }
-                            },
-                          ),
-                          const SizedBox(width: 10),
-                          OutlinedButton.icon(
-                            icon: const Icon(Icons.save_alt, size: 16),
-                            label: const Text('另存为',
-                                style: TextStyle(fontSize: NatsumeType.body)),
-                            style: OutlinedButton.styleFrom(
-                                foregroundColor: ac.accent),
-                            onPressed: () async {
-                              // 先同步取 messenger，避免 await 之后跨异步使用 context
-                              final messenger = ScaffoldMessenger.of(context);
-                              try {
-                                if (!DebugLogService.instance.enabled) {
-                                  DebugLogService.instance.enable();
-                                }
-                                final file = await DebugLogService.instance
-                                    .exportToFile();
-                                // v1.34：用「另存为」取代系统分享面板
-                                final saved = await ExportStorage.saveFileAs(
-                                  file.path,
-                                  dialogTitle: '保存调试日志',
-                                );
-                                if (!mounted) return;
-                                messenger.showSnackBar(
-                                  SnackBar(
-                                    content: Text(saved.saved
-                                        ? '已另存为: ${saved.path}'
-                                        : '已取消保存（日志仍在: ${file.path}）'),
-                                    backgroundColor: ac.accent,
-                                    duration: const Duration(seconds: 4),
-                                  ),
-                                );
-                              } catch (e) {
-                                if (mounted) {
-                                  messenger.showSnackBar(
-                                    SnackBar(
-                                        content: Text('另存为失败: $e'),
-                                        backgroundColor: ac.danger),
-                                  );
-                                }
-                              }
-                            },
+                                },
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.advanced, 50,
-                    const SizedBox(height: 24)),
-                _spec(SettingsGroup.ai, 35,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.ai, 40,
+                    )),
+                _spec(SettingsGroup.advanced, 50, const SizedBox(height: 24)),
+                _spec(SettingsGroup.ai, 35, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.ai,
+                    40,
                     // 使用说明
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('使用说明',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: NatsumeType.h3,
-                              color: ac.textPrimary)),
-                      const SizedBox(height: 12),
-                      _HelpItem(
-                        icon: Icons.lock_outline,
-                        text: 'API Key 仅保存在本地，不会上传到任何服务器',
-                        ac: ac,
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('使用说明',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: NatsumeType.h3,
+                                  color: ac.textPrimary)),
+                          const SizedBox(height: 12),
+                          _HelpItem(
+                            icon: Icons.lock_outline,
+                            text: 'API Key 仅保存在本地，不会上传到任何服务器',
+                            ac: ac,
+                          ),
+                          _HelpItem(
+                            icon: Icons.shield_outlined,
+                            // v1.0.2 设计审查修复：如实说明保护强度（本地混淆存储，非强加密）
+                            text: 'API Key 本地混淆存储（防随手翻看，非强加密保护）',
+                            ac: ac,
+                          ),
+                          _HelpItem(
+                            icon: Icons.cached,
+                            text: 'AI 解析结果会本地缓存，同一道题不会重复消耗 Token',
+                            ac: ac,
+                          ),
+                          _HelpItem(
+                            icon: Icons.file_present,
+                            text: '支持导入 DOC/DOCX 格式题库文件，自动识别题目和选项',
+                            ac: ac,
+                          ),
+                          _HelpItem(
+                            icon: Icons.phone_android,
+                            // v1.0.2 只做 Android 端（Windows 平台工程已移除）
+                            text: '支持 Android 端使用',
+                            ac: ac,
+                          ),
+                        ],
                       ),
-                      _HelpItem(
-                        icon: Icons.shield_outlined,
-                        // v1.0.2 设计审查修复：如实说明保护强度（本地混淆存储，非强加密）
-                        text: 'API Key 本地混淆存储（防随手翻看，非强加密保护）',
-                        ac: ac,
-                      ),
-                      _HelpItem(
-                        icon: Icons.cached,
-                        text: 'AI 解析结果会本地缓存，同一道题不会重复消耗 Token',
-                        ac: ac,
-                      ),
-                      _HelpItem(
-                        icon: Icons.file_present,
-                        text: '支持导入 DOC/DOCX 格式题库文件，自动识别题目和选项',
-                        ac: ac,
-                      ),
-                      _HelpItem(
-                        icon: Icons.phone_android,
-                        // v1.0.2 只做 Android 端（Windows 平台工程已移除）
-                        text: '支持 Android 端使用',
-                        ac: ac,
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.ai, 45,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 30,
+                    )),
+                _spec(SettingsGroup.ai, 45, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.advanced,
+                    30,
                     // 数据库备份（不放开发者选项——整库备份/恢复是常规数据管理能力）
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.backup_outlined,
-                              color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('数据库备份',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
+                          Row(
+                            children: [
+                              Icon(Icons.backup_outlined,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('数据库备份',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '整库备份与恢复：换机、重装或留档时使用。'
+                            '备份包含题库、刷题记录、错题与批注；导出时可选是否包含 API Key。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary,
+                                height: 1.4),
+                          ),
+                          const SizedBox(height: 12),
+                          NatsumeButton(
+                            label: '打开备份与恢复',
+                            expand: true,
+                            onPressed: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                  builder: (_) => const BackupScreen()),
+                            ),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '整库备份与恢复：换机、重装或留档时使用。'
-                        '备份包含题库、刷题记录、错题与批注；导出时可选是否包含 API Key。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: 12),
-                      NatsumeButton(
-                        label: '打开备份与恢复',
-                        expand: true,
-                        onPressed: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const BackupScreen()),
-                        ),
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.ai, 30,
+                    )),
+                _spec(
+                    SettingsGroup.ai,
+                    30,
                     // v13 多接口：AI 提供方（即时生效，不走保存按钮）
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.hub_outlined, color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('AI 提供方',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
+                          Row(
+                            children: [
+                              Icon(Icons.hub_outlined,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('AI 提供方',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '选择 AI 请求走哪种协议/后端。OpenAI 兼容覆盖 DeepSeek、通义、智谱、Kimi、Ollama 等。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary),
+                          ),
+                          const SizedBox(height: NatsumeSpace.sm),
+                          Wrap(
+                            spacing: NatsumeSpace.xs,
+                            runSpacing: NatsumeSpace.xs,
+                            children: [
+                              for (final k in AiProviderKind.values)
+                                _providerChip(k, ac),
+                            ],
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '选择 AI 请求走哪种协议/后端。OpenAI 兼容覆盖 DeepSeek、通义、智谱、Kimi、Ollama 等。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body, color: ac.textSecondary),
-                      ),
-                      const SizedBox(height: NatsumeSpace.sm),
-                      Wrap(
-                        spacing: NatsumeSpace.xs,
-                        runSpacing: NatsumeSpace.xs,
-                        children: [
-                          for (final k in AiProviderKind.values)
-                            _providerChip(k, ac),
-                        ],
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.sync, 40,
+                    )),
+                _spec(
+                    SettingsGroup.sync,
+                    40,
                     // v1.35 插件内容同步：每台设备各自决定带不带插件数据
-                _SettingsCard(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                    _SettingsCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.extension_outlined,
-                              color: ac.accent, size: 20),
-                          const SizedBox(width: 8),
-                          Text('插件内容同步',
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: NatsumeType.h3,
-                                  color: ac.textPrimary)),
+                          Row(
+                            children: [
+                              Icon(Icons.extension_outlined,
+                                  color: ac.accent, size: 20),
+                              const SizedBox(width: 8),
+                              Text('插件内容同步',
+                                  style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: NatsumeType.h3,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '默认三项都跟着局域网同步；关掉只是「本机不再收发该插件的数据」，'
+                            '已经同步过去的内容不会被删除。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.body,
+                                color: ac.textSecondary,
+                                height: 1.4),
+                          ),
+                          const SizedBox(height: NatsumeSpace.xs),
+                          _pluginSyncSwitch(
+                            ac,
+                            title: '双链笔记',
+                            subtitle: '笔记正文与 [[双链]]：按 uid 合并，同一条只更新不重复',
+                            pluginId: PluginSyncScope.notesPluginId,
+                          ),
+                          _pluginSyncSwitch(
+                            ac,
+                            title: '小鲸助教',
+                            subtitle: '角色名 / 形象 / 语气 / 自定义人设 / 对话记忆',
+                            pluginId: PluginSyncScope.companionPluginId,
+                          ),
+                          _pluginSyncSwitch(
+                            ac,
+                            title: '日程待办',
+                            subtitle: '待办标题、备注、到期日与完成状态',
+                            pluginId: PluginSyncScope.schedulePluginId,
+                          ),
+                          const SizedBox(height: NatsumeSpace.xxs),
+                          Text(
+                            '永不参与同步：助教的 API Key、接口地址、知识库选择、'
+                            '悬浮位置与好感度（那是这台设备上的相处记录）。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.caption,
+                                color: ac.textTertiary,
+                                height: 1.4),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '默认三项都跟着局域网同步；关掉只是「本机不再收发该插件的数据」，'
-                        '已经同步过去的内容不会被删除。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.body,
-                            color: ac.textSecondary,
-                            height: 1.4),
-                      ),
-                      const SizedBox(height: NatsumeSpace.xs),
-                      _pluginSyncSwitch(
-                        ac,
-                        title: '双链笔记',
-                        subtitle: '笔记正文与 [[双链]]：按 uid 合并，同一条只更新不重复',
-                        pluginId: PluginSyncScope.notesPluginId,
-                      ),
-                      _pluginSyncSwitch(
-                        ac,
-                        title: '小鲸助教',
-                        subtitle: '角色名 / 形象 / 语气 / 自定义人设 / 对话记忆',
-                        pluginId: PluginSyncScope.companionPluginId,
-                      ),
-                      _pluginSyncSwitch(
-                        ac,
-                        title: '日程待办',
-                        subtitle: '待办标题、备注、到期日与完成状态',
-                        pluginId: PluginSyncScope.schedulePluginId,
-                      ),
-                      const SizedBox(height: NatsumeSpace.xxs),
-                      Text(
-                        '永不参与同步：助教的 API Key、接口地址、知识库选择、'
-                        '悬浮位置与好感度（那是这台设备上的相处记录）。',
-                        style: TextStyle(
-                            fontSize: NatsumeType.caption,
-                            color: ac.textTertiary,
-                            height: 1.4),
-                      ),
-                    ],
-                  ),
-                )),
-                _spec(SettingsGroup.advanced, 35,
-                    const SizedBox(height: 16)),
-                _spec(SettingsGroup.advanced, 40,
+                    )),
+                _spec(SettingsGroup.advanced, 35, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.advanced,
+                    40,
                     // v1.36 网络加速：插件表 / 插件包的多源回退
-                _networkAccelCard(ac))
+                    _networkAccelCard(ac))
               ];
 
               // 分组过滤（v1.41.1）：每个区块自带 group/order，不再维护「sections
@@ -3031,9 +3165,9 @@ class _SettingsScreenState extends State<SettingsScreen>
     final message = ok
         ? '已与「$name」配对并完成一次同步'
         : switch (sync.pairState) {
-            SyncPairState.rejected =>
-              '识别码不匹配：「$name」拒绝了本机出示的识别码',
-            SyncPairState.awaitingPeer || SyncPairState.none =>
+            SyncPairState.rejected => '识别码不匹配：「$name」拒绝了本机出示的识别码',
+            SyncPairState.awaitingPeer ||
+            SyncPairState.none =>
               '已保存识别码，但还连不上「$name」：${sync.pairDetail}',
             _ => '已保存识别码，但同步失败：${sync.statusMessage}',
           };
@@ -3082,9 +3216,8 @@ class _SettingsScreenState extends State<SettingsScreen>
     // 被用户取消（或对端取消）：提示「已取消」而不是「失败」
     if (engine.lastSyncCancelled) {
       messenger.showSnackBar(SnackBar(
-        content: Text(engine.statusMessage.isEmpty
-            ? '已取消同步'
-            : engine.statusMessage),
+        content:
+            Text(engine.statusMessage.isEmpty ? '已取消同步' : engine.statusMessage),
       ));
       return;
     }
@@ -3314,8 +3447,7 @@ class _TaggingDialogState extends State<_TaggingDialog> {
   final List<(Question, String)> _labels = [];
   static const int _maxLog = 80;
 
-  int get _total =>
-      widget.retagAll ? widget.total : widget.questions.length;
+  int get _total => widget.retagAll ? widget.total : widget.questions.length;
 
   @override
   void initState() {
@@ -3340,8 +3472,7 @@ class _TaggingDialogState extends State<_TaggingDialog> {
     }
     for (final q in widget.questions) {
       if (!await _gate()) break;
-      final kp =
-          await widget.ai.tagKnowledgePoint(q, options: widget.options);
+      final kp = await widget.ai.tagKnowledgePoint(q, options: widget.options);
       if (_cancelled) break;
       _labels.add((q, kp));
       if (mounted) setState(() => _done++);
@@ -3494,8 +3625,8 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                   onPressed: _applying
                       ? null
                       : (widget.retagAll
-                          ? () => Navigator.pop(context,
-                              (applied: _applied, skipped: _failed))
+                          ? () => Navigator.pop(
+                              context, (applied: _applied, skipped: _failed))
                           : _apply),
                   child: _applying
                       ? const SizedBox(
@@ -3510,7 +3641,8 @@ class _TaggingDialogState extends State<_TaggingDialog> {
                   onPressed: () {
                     _cancelled = true;
                     _resumeCompleter?.complete();
-                    Navigator.pop(context, (applied: _applied, skipped: _failed));
+                    Navigator.pop(
+                        context, (applied: _applied, skipped: _failed));
                   },
                   child: const Text('取消'),
                 ),
@@ -3604,7 +3736,8 @@ class _DateField extends StatelessWidget {
               value == null
                   ? label
                   : '${value!.year}-${value!.month.toString().padLeft(2, '0')}-${value!.day.toString().padLeft(2, '0')}',
-              style: TextStyle(fontSize: NatsumeType.body, color: ac.textPrimary),
+              style:
+                  TextStyle(fontSize: NatsumeType.body, color: ac.textPrimary),
             ),
           ],
         ),

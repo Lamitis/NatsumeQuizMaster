@@ -234,8 +234,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
         if (settings.hasOwnApi) ai?.dispose();
       }
     } else if (mounted) {
-      setState(() =>
-          _notice = '未配置 AI 接口，当前是固定文案模式（设置里填好 Key 会自动切换）');
+      setState(() => _notice = '未配置 AI 接口，当前是固定文案模式（设置里填好 Key 会自动切换）');
     }
     if (!mounted) return;
     setState(() {
@@ -302,7 +301,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
       curve: Curves.easeOut,
     );
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -430,11 +428,12 @@ class _CompanionScreenState extends State<CompanionScreen> {
                       if (settings.memoryEnabled && _memory.length > 0)
                         NatsumeTag('记忆 ${_memory.length} 条'),
                       if (settings.hasOwnApi)
-                        const NatsumeTag('独立接口',
-                            tone: NatsumeTagTone.accent),
+                        const NatsumeTag('独立接口', tone: NatsumeTagTone.accent),
                       if (settings.kbEnabled)
-                        const NatsumeTag('可查知识库',
-                            tone: NatsumeTagTone.success),
+                        const NatsumeTag('可查知识库', tone: NatsumeTagTone.success),
+                      // v1.42：两种新身份摆到台面上（学术答疑 / 软件客服）
+                      const NatsumeTag('学术答疑', tone: NatsumeTagTone.accent),
+                      const NatsumeTag('软件客服'),
                     ],
                   ),
                   if (_notice != null) ...[
@@ -484,7 +483,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
                           textInputAction: TextInputAction.send,
                           onSubmitted: (_) => _send(),
                           decoration: InputDecoration(
-                            hintText: '跟$botName说点什么…',
+                            hintText: '问$botName学习问题、题目或软件用法…',
                           ),
                         ),
                       ),
@@ -498,7 +497,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
                   ),
                   const SizedBox(height: NatsumeSpace.sm),
                   Text(
-                    '$botName只复述本机的真实统计；专业知识以教材与知识库为准，'
+                    '$botName可以陪你打气，也能当学术老师讲知识点、当客服回答软件用法；'
+                    '只复述本机的真实统计，专业知识以教材与知识库为准，'
                     '不提供诊断与用药建议。',
                     style: NatsumeType.microStyle
                         .copyWith(color: ac.textTertiary, height: 1.6),
@@ -509,7 +509,6 @@ class _CompanionScreenState extends State<CompanionScreen> {
     );
   }
 }
-
 
 /// 一条对话消息（bot 文本可流式更新，故 [text] 可变）
 class _ChatMessage {
@@ -589,4 +588,3 @@ class _Bubble extends StatelessWidget {
     );
   }
 }
-
