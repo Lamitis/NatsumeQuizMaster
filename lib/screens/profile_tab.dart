@@ -196,15 +196,15 @@ class _ProfileTabState extends State<ProfileTab> {
               GuideAnchor(
                 id: GuideAnchorIds.profileNotes,
                 child: _EntryTile(
-                icon: Icons.sticky_note_2_outlined,
-                title: '双链笔记',
-                // 同步边界写在入口上：插件数据不入同步清单，用户点进去前就该知道
-                subtitle: '刷题随手记 · [[双链]] 与 Graph · 可随局域网同步',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const NotesScreen()),
+                  icon: Icons.sticky_note_2_outlined,
+                  title: '双链笔记',
+                  // 同步边界写在入口上：插件数据不入同步清单，用户点进去前就该知道
+                  subtitle: '刷题随手记 · [[双链]] 与 Graph · 可随局域网同步',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const NotesScreen()),
+                  ),
                 ),
-              ),
               ),
             ],
             // v1.32 小鲸助教：同样是内置插件，停用后整条收起
@@ -213,14 +213,14 @@ class _ProfileTabState extends State<ProfileTab> {
               GuideAnchor(
                 id: GuideAnchorIds.profileCompanion,
                 child: _EntryTile(
-                icon: Icons.pets_outlined,
-                title: '小鲸助教',
-                subtitle: '鲸鱼娘陪伴 · 按连胜与正确率打气 · 人设与记忆可同步',
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const CompanionScreen()),
+                  icon: Icons.pets_outlined,
+                  title: '小鲸助教',
+                  subtitle: '鲸鱼娘陪伴 · 按连胜与正确率打气 · 人设与记忆可同步',
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const CompanionScreen()),
+                  ),
                 ),
-              ),
               ),
             ],
             // v1.34 日程待办插件：停用后整条收起（与笔记/陪伴同一规则）
@@ -345,7 +345,6 @@ class _ProfileTabState extends State<ProfileTab> {
       ),
     );
   }
-
 }
 
 /// 入口行：单色描边小图标 + 标题（副标题另起一行）+ 细箭头。
@@ -516,16 +515,14 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   }
 
   Future<void> _launchInstaller(UpdateDownloadResult download) async {
-    final ok = await UpdateService.installUpdate(download);
+    final outcome = await UpdateService.installUpdateDetailed(download);
     if (!mounted) return;
     setState(() {
       _installing = false;
-      _installed = ok;
-      if (!ok) {
-        _downloadError = '安装程序启动失败，可点「打开安装包」重试，或复制下载链接手动安装。';
-      }
+      _installed = outcome.ok;
+      _downloadError = outcome.reason;
     });
-    if (ok) {
+    if (outcome.ok) {
       _showSnack('已启动安装程序，请按提示完成安装。');
     }
   }
@@ -617,9 +614,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           else if (_download != null)
             FilledButton(
               onPressed: _installing ? null : _reopenInstaller,
-              child: Text(_installing
-                  ? '正在启动…'
-                  : (_installed ? '再次打开安装包' : '打开安装包')),
+              child: Text(
+                  _installing ? '正在启动…' : (_installed ? '再次打开安装包' : '打开安装包')),
             )
           else if (canInApp)
             FilledButton(
@@ -659,8 +655,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('暂时查不到新版本',
-              style:
-                  NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
+              style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
           const SizedBox(height: NatsumeSpace.xs),
           Text(
             result.error ?? '未知原因',
@@ -685,12 +680,12 @@ class _UpdateDialogState extends State<_UpdateDialog> {
               style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
           const SizedBox(height: NatsumeSpace.xs),
           Text('当前版本 ${result.currentVersion}',
-              style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+              style:
+                  NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
           if (result.source != null) ...[
             const SizedBox(height: 2),
             Text('检查来源：${result.source}',
-                style:
-                    NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
+                style: NatsumeType.microStyle.copyWith(color: ac.textTertiary)),
           ],
         ],
       );
@@ -740,6 +735,18 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
           ),
         ],
+        // v1.42.1：覆盖安装 / 系统拦截的可执行提示（安装失败时最常见的两类原因）
+        if (canInApp && _downloadError == null) ...[
+          const SizedBox(height: NatsumeSpace.sm),
+          Text(
+            UpdateService.currentPlatform == UpdatePlatform.android
+                ? '首次应用内更新需允许「安装未知应用」。'
+                    '若提示「签名不一致 / 应用未安装」，说明旧版来自其他渠道，请先卸载旧版本再安装。'
+                : '若安装包被 SmartScreen 拦截，点「更多信息 → 仍要运行」；'
+                    '仍失败可右键安装包 →「以管理员身份运行」。',
+            style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+          ),
+        ],
       ],
     );
   }
@@ -763,8 +770,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           children: [
             Text(
               percent == null ? '正在下载…' : '正在下载 $percent%',
-              style: NatsumeType.captionStyle.copyWith(
-                  fontWeight: FontWeight.w600, color: ac.textPrimary),
+              style: NatsumeType.captionStyle
+                  .copyWith(fontWeight: FontWeight.w600, color: ac.textPrimary),
             ),
             const Spacer(),
             if (p != null)
@@ -772,8 +779,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
                 '${_fmtSpeed(p.bytesPerSecond)} · '
                 '${_fmtBytes(p.receivedBytes)}'
                 '${total == null ? '' : ' / ${_fmtBytes(total)}'}',
-                style:
-                    NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                style: NatsumeType.microStyle.copyWith(color: ac.textTertiary),
               ),
           ],
         ),
@@ -797,9 +803,24 @@ class _UpdateDialogState extends State<_UpdateDialog> {
           Icon(Icons.check_circle_outline, size: 18, color: ac.success),
           const SizedBox(width: NatsumeSpace.xs),
           Expanded(
-            child: Text(
-              text,
-              style: NatsumeType.captionStyle.copyWith(color: ac.textPrimary),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  text,
+                  style:
+                      NatsumeType.captionStyle.copyWith(color: ac.textPrimary),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  // v1.42.1：明确告诉用户这次有没有走 SHA-256 校验
+                  (_download?.checksumVerified ?? false)
+                      ? 'SHA-256 已校验，安装包完整'
+                      : '发布未提供 SHA256SUMS.txt，本次未校验 SHA-256',
+                  style:
+                      NatsumeType.microStyle.copyWith(color: ac.textTertiary),
+                ),
+              ],
             ),
           ),
         ],
@@ -819,17 +840,16 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('下载 / 安装失败',
-              style: NatsumeType.captionStyle.copyWith(
-                  fontWeight: FontWeight.w600, color: ac.danger)),
+              style: NatsumeType.captionStyle
+                  .copyWith(fontWeight: FontWeight.w600, color: ac.danger)),
           const SizedBox(height: 2),
           Text(
             error,
-            style: NatsumeType.microStyle.copyWith(
-                color: ac.textSecondary, height: 1.5),
+            style: NatsumeType.microStyle
+                .copyWith(color: ac.textSecondary, height: 1.5),
           ),
         ],
       ),
     );
   }
 }
-
