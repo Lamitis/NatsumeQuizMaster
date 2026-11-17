@@ -36,6 +36,26 @@ void main() {
         AppSettings.defaultEmbeddingModel);
   });
 
+  test('存储键包含模型 + 端点：换端点后旧向量视为缺失', () {
+    const a = KbEmbeddingConfig(
+      enabled: true,
+      apiKey: 'k',
+      apiEndpoint: 'https://api.openai.com/v1',
+      model: 'nomic-embed-text',
+      providerKind: AiProviderKind.openaiCompat,
+    );
+    const b = KbEmbeddingConfig(
+      enabled: true,
+      apiKey: 'k',
+      apiEndpoint: 'http://localhost:11434/v1',
+      model: 'nomic-embed-text',
+      providerKind: AiProviderKind.ollama,
+    );
+    expect(a.storageKey, isNot(b.storageKey));
+    expect(a.storageKey, contains('nomic-embed-text'));
+    expect(a.storageKey, contains('api.openai.com'));
+  });
+
   test('usable：开关 + 供应商支持 + Key（Ollama 免 Key）', () {
     KbEmbeddingConfig config({
       bool enabled = true,

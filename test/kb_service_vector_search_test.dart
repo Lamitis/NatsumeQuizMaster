@@ -75,7 +75,7 @@ void main() {
       KbEmbedding(
         chunkId: chunks[0].id!,
         kbId: kbId,
-        model: config.model,
+        model: config.storageKey,
         dim: 2,
         vector: const [1, 0],
         createdAt: '2026-11-17T00:00:00.000',
@@ -83,7 +83,7 @@ void main() {
       KbEmbedding(
         chunkId: chunks[1].id!,
         kbId: kbId,
-        model: config.model,
+        model: config.storageKey,
         dim: 2,
         vector: const [0, 1],
         createdAt: '2026-11-17T00:00:00.000',
@@ -143,7 +143,7 @@ void main() {
     final written = await KbService.instance.ensureEmbeddings(s.kbId);
     expect(written, 2);
     expect(calls, 1);
-    final stored = await db.getKbEmbeddings(s.kbId, model: config.model);
+    final stored = await db.getKbEmbeddings(s.kbId, model: config.storageKey);
     expect(stored, hasLength(2));
     expect(stored.every((e) => e.dim == 2), isTrue);
     // 再跑一次：没有缺失，不再请求
@@ -159,7 +159,7 @@ void main() {
         await db.getKbChunksMissingEmbedding(s.kbId, 'another-model');
     expect(missing, hasLength(2));
     final sameModel =
-        await db.getKbChunksMissingEmbedding(s.kbId, config.model);
+        await db.getKbChunksMissingEmbedding(s.kbId, config.storageKey);
     expect(sameModel, isEmpty);
   });
 

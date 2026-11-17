@@ -50,6 +50,13 @@ class KbEmbeddingConfig {
     if (providerKind == AiProviderKind.ollama) return true;
     return apiKey.trim().isNotEmpty;
   }
+
+  /// 存库用的键：模型 + 端点。
+  ///
+  /// 换端点后同名模型的维度/语义可能完全不同（例如 OpenAI 与本地 Ollama
+  /// 都叫 `nomic-embed-text`），用复合键能保证「换端点 ⇒ 旧向量视为缺失、
+  /// 自动重建」，而不是拿两套不兼容的向量算余弦。
+  String get storageKey => '${model.trim()}@${apiEndpoint.trim()}';
 }
 
 /// 知识库向量化（Embedding）客户端（v1.43）。

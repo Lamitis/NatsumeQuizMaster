@@ -39,11 +39,12 @@ class KbService {
   /// 当前是否真的走向量检索（开关 + Key + 供应商都满足）。
   bool get vectorSearchActive => _embeddingConfig?.usable ?? false;
 
-  /// AppState 每次设置变化时调用；停用/换模型时清掉向量缓存。
+  /// AppState 每次设置变化时调用；停用 / 换模型 / 换端点时清掉向量缓存。
   void configure(KbEmbeddingConfig? config) {
     final old = _embeddingConfig;
     _embeddingConfig = config;
-    if (old?.model != config?.model || old?.enabled != config?.enabled) {
+    if (old?.storageKey != config?.storageKey ||
+        old?.enabled != config?.enabled) {
       _vectorIndexes.clear();
     }
   }
@@ -217,7 +218,7 @@ class KbService {
   Future<List<KbHit>> search(int kbId, String query, {int topK = 5}) async {
     final config = _embeddingConfig;
     if (config != null && config.usable && query.trim().isNotEmpty) {
-      final index = await _vectorIndexFor(kbId, config.model);
+      final index = await _vectorIndexFor(kbId, config.storageKey);
       if (index == null || index.isEmpty) {
         // 后台补齐（不 await）：这次先用 BM25，不让首问等待几十次请求
         _scheduleBackfill(kbId);
@@ -279,7 +280,7 @@ class KbService {
     if (chunks.isEmpty) return 0;
     final existing = force
         ? const <int>{}
-        : (await _db.getKbEmbeddings(kbId, model: config.model))
+        : (await _db.getKbEmbeddings(kbId, model: config.storageKey))
             .map((e) => e.chunkId)
             .toSet();
     final pending =
@@ -304,7 +305,8 @@ class KbService {
   Future<int> ensureEmbeddings(int kbId) async {
     final config = _embeddingConfig;
     if (config == null || !config.usable) return 0;
-    final pending = await _db.getKbChunksMissingEmbedding(kbId, config.model);
+    final pending =
+        await _db.getKbChunksMissingEmbedding(kbId, config.storageKey);
     return _embedChunks(kbId, pending, config);
   }
 
@@ -352,7 +354,7 @@ class KbService {
         items.add(KbEmbedding(
           chunkId: id,
           kbId: kbId,
-          model: config.model,
+          model: config.storageKey,
           dim: vector.length,
           vector: vector,
           createdAt: now,
