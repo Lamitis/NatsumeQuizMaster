@@ -180,6 +180,11 @@ class _SettingsScreenState extends State<SettingsScreen>
   /// 自定义镜像输入框（v1.36 · 网络加速；留空 = 只用内置加速池）
   final _mirrorController = TextEditingController();
 
+  // v1.43 知识库向量检索（未保存的本地态，点「保存设置」才落库）
+  final _embeddingModelController =
+      TextEditingController(text: AppSettings.defaultEmbeddingModel);
+  bool _kbVectorEnabled = true;
+
   /// 临时码倒计时的秒级刷新定时器（仅有效期内运行）
   Timer? _tempCodeTicker;
 
@@ -452,10 +457,12 @@ class _SettingsScreenState extends State<SettingsScreen>
       _nicknameController.text = settings.nickname;
       _mineruTokenController.text = settings.mineruToken;
       _mirrorController.text = settings.customMirror;
+      _embeddingModelController.text = settings.embeddingModel;
       setState(() {
         _detail = settings.analysisDetail;
         _keywordHighlight = settings.keywordHighlight;
         _mineruEnabled = settings.mineruEnabled;
+        _kbVectorEnabled = settings.kbVectorEnabled;
       });
       _fetchBalance();
       _loadKeepaliveStatus();
@@ -503,6 +510,7 @@ class _SettingsScreenState extends State<SettingsScreen>
     _mineruTokenController.dispose();
     _peerCodeController.dispose();
     _mirrorController.dispose();
+    _embeddingModelController.dispose();
     _stopTempCodeTicker();
     _endpointFocus.dispose();
     super.dispose();
@@ -520,7 +528,9 @@ class _SettingsScreenState extends State<SettingsScreen>
         _detail != settings.analysisDetail ||
         _keywordHighlight != settings.keywordHighlight ||
         _mineruEnabled != settings.mineruEnabled ||
-        _mineruTokenController.text != settings.mineruToken;
+        _mineruTokenController.text != settings.mineruToken ||
+        _kbVectorEnabled != settings.kbVectorEnabled ||
+        _embeddingModelController.text.trim() != settings.embeddingModel;
     return PopScope(
       canPop: !dirty,
       onPopInvokedWithResult: (didPop, _) async {
@@ -1185,6 +1195,79 @@ class _SettingsScreenState extends State<SettingsScreen>
                 _spec(SettingsGroup.advanced, 10, const SizedBox(height: 16)),
                 _spec(
                     SettingsGroup.ai,
+                    30,
+                    // v1.43 知识库向量检索（Vector RAG）
+                    _SettingsCard(
+                      bordered: true,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.hub_outlined,
+                                  size: 18, color: ac.accent),
+                              const SizedBox(width: 6),
+                              Text('知识库向量检索',
+                                  style: TextStyle(
+                                      fontSize: NatsumeType.body,
+                                      fontWeight: FontWeight.w600,
+                                      color: ac.textPrimary)),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            '开启后导入知识库会用 Embeddings 把文本块转成向量，'
+                            '检索按余弦相似度取最相关的 3~5 段，比关键词更准。'
+                            '未配置 Key / 断网 / 供应商不支持 Embeddings 时自动回退关键词检索。',
+                            style: TextStyle(
+                                fontSize: NatsumeType.caption,
+                                color: ac.textSecondary,
+                                height: 1.5),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: _kbVectorEnabled,
+                            onChanged: (v) =>
+                                setState(() => _kbVectorEnabled = v),
+                            title: Text(
+                              _kbVectorEnabled ? '向量化已开启' : '向量化已关闭',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.body,
+                                  color: ac.textPrimary),
+                            ),
+                            subtitle: Text(
+                              _kbVectorEnabled
+                                  ? '导入时异步生成向量；保存后后台补齐已有知识库'
+                                  : '仅使用 BM25 关键词检索，不产生额外 API 调用',
+                              style: TextStyle(
+                                  fontSize: NatsumeType.caption,
+                                  color: ac.textSecondary),
+                            ),
+                          ),
+                          if (_kbVectorEnabled) ...[
+                            const SizedBox(height: 4),
+                            TextField(
+                              controller: _embeddingModelController,
+                              decoration: InputDecoration(
+                                labelText: 'Embedding 模型',
+                                hintText: AppSettings.defaultEmbeddingModel,
+                                helperText:
+                                    '走 OpenAI 兼容 /embeddings；聚合平台可填 BAAI/bge-m3，'
+                                    '本地 Ollama 可填 nomic-embed-text',
+                                helperMaxLines: 2,
+                                isDense: true,
+                                border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(
+                                        NatsumeRadius.small)),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    )),
+                _spec(SettingsGroup.ai, 30, const SizedBox(height: 16)),
+                _spec(
+                    SettingsGroup.ai,
                     90,
                     SizedBox(
                       width: double.infinity,
@@ -1209,6 +1292,12 @@ class _SettingsScreenState extends State<SettingsScreen>
                                 mineruEnabled:
                                     isWindowsPlatform && _mineruEnabled,
                                 mineruToken: _mineruTokenController.text.trim(),
+                                kbVectorEnabled: _kbVectorEnabled,
+                                embeddingModel: _embeddingModelController.text
+                                        .trim()
+                                        .isEmpty
+                                    ? AppSettings.defaultEmbeddingModel
+                                    : _embeddingModelController.text.trim(),
                               );
                           // v1.0.2 修复：等待保存完成再提示/返回（此前 fire-and-forget）
                           // 先同步取 messenger / navigator，避免 await 之后跨异步使用 context

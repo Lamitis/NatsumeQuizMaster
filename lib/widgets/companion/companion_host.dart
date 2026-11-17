@@ -13,8 +13,10 @@ import '../../services/ai_service.dart';
 import '../../services/app_state.dart';
 import '../../services/companion/companion_service.dart';
 import '../../services/theme_service.dart';
+import '../../utils/companion_text.dart';
 import '../../utils/design_tokens.dart';
 import '../../utils/typewriter.dart';
+import '../ai_response_widget.dart';
 import 'companion_avatar.dart';
 
 /// 应用内悬浮「小鲸助教」（v1.33）。
@@ -720,7 +722,10 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     typer.cancel();
     final message = _typingMessage;
     final reply = _typingReply;
-    if (message != null && reply != null) message.text = reply;
+    if (message != null && reply != null) {
+      message.text = reply;
+      message.typing = false;
+    }
     _typewriter = null;
     _typingMessage = null;
     _typingReply = null;
@@ -743,7 +748,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
 
     final app = widget.appState;
     final service = CompanionService.instance;
-    final botMessage = _MiniMessage.bot('');
+    final botMessage = _MiniMessage.bot('')..typing = true;
     setState(() {
       _messages
         ..add(_MiniMessage.user(text))
@@ -762,9 +767,12 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
       },
       onDrained: () {
         // 这条已经全放完：交还所有权，避免下次发送时再「补全」一次
+        final m = _typingMessage;
+        if (m != null) m.typing = false;
         _typewriter = null;
         _typingMessage = null;
         _typingReply = null;
+        if (mounted) setState(() {});
       },
     );
     _typewriter = typer;
@@ -788,12 +796,12 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
         : app.aiService;
     final configured =
         settings.hasOwnApi || (app.settings.isConfigured && ai != null);
-    var reply = service.fallbackReply(
+    var reply = cleanCompanionMarkdown(service.fallbackReply(
       text,
       _snapshot,
       nickname: app.settings.nickname,
       rng: widget.rng,
-    );
+    ));
 
     if (configured) {
       try {
@@ -809,7 +817,8 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
             kbBlock: kbBlock,
           ),
         )) {
-          acc = chunk;
+          // v1.43：流式阶段就剥掉最外层 ```markdown 围栏
+          acc = cleanCompanionMarkdown(chunk);
           if (!mounted) return;
           // 逐字显示：chunk 是累计全文，TypewriterBuffer 只取新增部分
           typer.feedCumulative(acc);
@@ -817,7 +826,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
         if (acc.trim().isEmpty || AIService.isAiError(acc)) {
           _toast('AI 这次没有给出内容，先用固定文案陪你');
         } else {
-          reply = acc.trim();
+          reply = cleanCompanionMarkdown(acc);
         }
       } catch (_) {
         _toast('AI 暂时连不上，先用固定文案陪你');
@@ -831,6 +840,7 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     if (!mounted) return;
     setState(() {
       botMessage.fromKb = kbUsed;
+      botMessage.typing = false;
       _mood = _moodFor(text);
       _replying = false;
     });
@@ -842,7 +852,10 @@ class _MiniChatPanelState extends State<_MiniChatPanel> {
     } else {
       // AI 中途失败、该用固定文案：直接替换，别把两段文字拼成怪句子
       typer.cancel();
-      setState(() => botMessage.text = reply);
+      setState(() {
+        botMessage.text = reply;
+        botMessage.typing = false;
+      });
     }
     _scrollToEnd();
     // 发送结束后仍把焦点留在输入框：用户可以立刻接着问下一句
@@ -1121,6 +1134,9 @@ class _MiniMessage {
   final bool fromUser;
   String text;
 
+  /// 打字机还没放完：先用纯文本预览，结束后再切 Markdown（v1.43）
+  bool typing = false;
+
   /// 这条回复用到了知识库资料（面板小，只标一个小字）
   bool fromKb = false;
 }
@@ -1158,13 +1174,23 @@ class _MiniBubble extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                text.isEmpty ? '…' : text,
-                style: NatsumeType.captionStyle.copyWith(
-                  color: isUser ? ac.textPrimary : ac.textSecondary,
-                  height: 1.5,
+              if (isUser || text.isEmpty || message.typing)
+                Text(
+                  text.isEmpty
+                      ? '…'
+                      : (isUser ? text : companionTypingPreview(text)),
+                  style: NatsumeType.captionStyle.copyWith(
+                    color: isUser ? ac.textPrimary : ac.textSecondary,
+                    height: 1.5,
+                  ),
+                )
+              else
+                // v1.43：bot 气泡用 Markdown 渲染，`**加粗**` / `### 标题` 不再露源码
+                AiResponseWidget(
+                  text: text,
+                  fontSize: NatsumeType.caption,
+                  color: ac.textSecondary,
                 ),
-              ),
               if (!isUser && message.fromKb)
                 Text(
                   '依据知识库',

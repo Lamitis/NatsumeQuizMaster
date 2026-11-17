@@ -171,11 +171,93 @@ void main() {
     final path = '${tmp.path}/分类测试.natsume-world.zip';
     File(path).writeAsBytesSync(ZipEncoder().encode(archive)!);
 
-    expect(await KbFileService.isBundleFile(path), isTrue);
+    // v1.43：同是 .zip，类型只认包内清单——world 包不是知识库包
+    expect(await KbFileService.isZipFile(path), isTrue);
     expect(await KbFileService.isWorldFile(path), isTrue);
-    // 不会被误当成普通知识库 JSON
+    expect(await KbFileService.isBundleFile(path), isFalse);
+    // 也不会被误当成普通知识库 JSON
     final (id, err) = await KbFileService.importKbFile(path);
     expect(id, 0);
     expect(err, isNotNull);
+  });
+
+  // ═══════════ v1.43：批量导出改 .zip，靠包内清单识别 ═══════════
+
+  Future<int> seedKb(String name, String content) async {
+    final db = DatabaseService.instance;
+    final kbId = await KbService.instance.createKnowledgeBase(name);
+    await db.insertKbDocument(KbDocument(
+      kbId: kbId,
+      name: '$name.md',
+      content: content,
+      createdAt: now,
+    ));
+    return kbId;
+  }
+
+  test('批量导出：强制 .zip，包内 format=natsume-kb，可再导入', () async {
+    final db = DatabaseService.instance;
+    final a = await seedKb('内科', '休克的本质是有效循环血量不足。');
+    final b = await seedKb('外科', '无菌术是外科基本操作。');
+
+    final dest = '${tmp.path}/知识库合集_2项.zip';
+    final result =
+        await KbFileService.exportBundle(kbIds: [a, b], destPath: dest);
+    expect(result.saved, isTrue);
+    expect(result.kbCount, 2);
+    expect(result.path!.toLowerCase().endsWith('.zip'), isTrue);
+    expect(await KbFileService.isBundleFile(result.path!), isTrue);
+    expect(await KbFileService.isWorldFile(result.path!), isFalse);
+
+    // 包内清单是新标记
+    final archive =
+        ZipDecoder().decodeBytes(File(result.path!).readAsBytesSync());
+    final manifestFile = archive.files.firstWhere((f) => f.name == 'kb.json');
+    final manifest =
+        jsonDecode(utf8.decode(manifestFile.content as List<int>)) as Map;
+    expect(manifest['format'], 'natsume-kb');
+    expect(manifest['count'], 2);
+
+    // 删掉原库再导入，两个库都能回来
+    await db.deleteKnowledgeBase(a);
+    await db.deleteKnowledgeBase(b);
+    final imported = await KbFileService.importBundle(result.path!);
+    expect(imported.kbCount, 2);
+    expect(imported.error, isNull);
+  });
+
+  test('旧版 .natsume-kb + 旧 format 标记仍可导入（向后兼容）', () async {
+    final db = DatabaseService.instance;
+    final kbId = await KbService.instance.createKnowledgeBase('旧版知识库');
+    await db.insertKbDocument(KbDocument(
+      kbId: kbId,
+      name: 'old.md',
+      content: '旧版包里的内容。',
+      createdAt: now,
+    ));
+    final memberPath = '${tmp.path}/member.json';
+    final member = await KbFileService.exportKnowledgeBase(kbId, memberPath);
+    expect(member, isNotNull);
+
+    final manifest = {
+      'format': 'natsume-kb-bundle',
+      'version': '1',
+      'knowledge_bases': [
+        {'name': '旧版知识库', 'file': 'kb/1.json'},
+      ],
+    };
+    final manifestBytes = utf8.encode(jsonEncode(manifest));
+    final memberBytes = File(member!).readAsBytesSync();
+    final archive = Archive()
+      ..addFile(ArchiveFile('kb.json', manifestBytes.length, manifestBytes))
+      ..addFile(ArchiveFile('kb/1.json', memberBytes.length, memberBytes));
+    final legacy = '${tmp.path}/旧版合集.natsume-kb';
+    File(legacy).writeAsBytesSync(ZipEncoder().encode(archive)!);
+
+    expect(await KbFileService.isBundleFile(legacy), isTrue);
+    await db.deleteKnowledgeBase(kbId);
+    final imported = await KbFileService.importBundle(legacy);
+    expect(imported.kbCount, 1);
+    expect(imported.error, isNull);
   });
 }

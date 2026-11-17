@@ -133,6 +133,22 @@ class AppSettings {
   /// `auto_advance_after_answer`，随备份一起带走。
   bool autoAdvanceAfterAnswer;
 
+  /// v1.43：知识库向量检索（Vector RAG）总开关。
+  ///
+  /// 开启后：导入文档会**异步**调用 Embeddings 把文本块转成向量，检索时用
+  /// 余弦相似度取 Top K；未配置 Key / 断网 / 供应商不支持 Embeddings 时
+  /// 自动回退 BM25（关键词）检索，功能不会变砖。
+  bool kbVectorEnabled;
+
+  /// v1.43：Embedding 模型名（走 OpenAI 兼容 `/embeddings`）。
+  ///
+  /// 默认 `text-embedding-3-small`；聚合平台/本地 Ollama 可改成
+  /// `BAAI/bge-m3`、`nomic-embed-text` 等。换模型后旧向量视为缺失，
+  /// 会在下次检索 / 导入时后台重建。
+  String embeddingModel;
+
+  static const String defaultEmbeddingModel = 'text-embedding-3-small';
+
   AppSettings({
     this.apiKey = '',
     this.apiEndpoint = defaultApiEndpoint,
@@ -150,6 +166,8 @@ class AppSettings {
     this.knowledgePointTypes = const [],
     this.customMirror = '',
     this.autoAdvanceAfterAnswer = true,
+    this.kbVectorEnabled = true,
+    this.embeddingModel = defaultEmbeddingModel,
   });
 
   bool get isConfigured => apiKey.isNotEmpty;
@@ -176,6 +194,9 @@ class AppSettings {
       'custom_mirror': customMirror,
       // v1.42 做题节奏：答完自动切下一题
       'auto_advance_after_answer': autoAdvanceAfterAnswer ? '1' : '0',
+      // v1.43 知识库向量检索：开关 + 模型（不是凭据，随备份携带）
+      'kb_vector_enabled': kbVectorEnabled ? '1' : '0',
+      'embedding_model': embeddingModel,
     };
   }
 
@@ -210,6 +231,11 @@ class AppSettings {
       customMirror: map['custom_mirror'] ?? '',
       // v1.42：老备份没有这个键 → 默认开启（保持旧版自动跳题节奏）
       autoAdvanceAfterAnswer: map['auto_advance_after_answer'] != '0',
+      // v1.43：老备份没有向量开关 → 默认开启（不支持时会自动回退 BM25）
+      kbVectorEnabled: map['kb_vector_enabled'] != '0',
+      embeddingModel: (map['embedding_model'] ?? '').trim().isEmpty
+          ? defaultEmbeddingModel
+          : map['embedding_model']!.trim(),
     );
   }
 
@@ -248,6 +274,8 @@ class AppSettings {
     List<String>? knowledgePointTypes,
     String? customMirror,
     bool? autoAdvanceAfterAnswer,
+    bool? kbVectorEnabled,
+    String? embeddingModel,
   }) {
     return AppSettings(
       apiKey: apiKey ?? this.apiKey,
@@ -267,6 +295,8 @@ class AppSettings {
       customMirror: customMirror ?? this.customMirror,
       autoAdvanceAfterAnswer:
           autoAdvanceAfterAnswer ?? this.autoAdvanceAfterAnswer,
+      kbVectorEnabled: kbVectorEnabled ?? this.kbVectorEnabled,
+      embeddingModel: embeddingModel ?? this.embeddingModel,
     );
   }
 }

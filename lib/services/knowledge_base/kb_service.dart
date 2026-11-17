@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../../models/kb_chunk.dart';
 import '../../models/kb_document.dart';
+import '../../models/kb_embedding.dart';
 import '../../models/knowledge_base.dart';
 import '../database_service.dart';
 import '../doc_parser_service.dart';
 import '../mineru_service.dart';
 import '../pdf_import_service.dart';
 import 'kb_chunker.dart';
+import 'kb_embedding_service.dart';
 import 'kb_retriever.dart';
 
 /// 知识库服务（v13 · 本地 RAG）。
@@ -23,6 +26,27 @@ class KbService {
 
   // 检索器缓存（按 kbId），知识库变更时失效，避免每次检索都重建 BM25 索引
   final Map<int, KbRetriever> _retrievers = {};
+
+  // 向量索引缓存（key = `kbId::model`）：换模型自然命中新的 key，旧索引不会被误用
+  final Map<String, KbVectorIndex> _vectorIndexes = {};
+
+  /// 正在后台补齐向量的知识库：防止每次检索都重复发一轮 Embedding 请求。
+  final Set<int> _backfilling = {};
+
+  /// 向量化配置（由 AppState 在设置加载 / 保存后注入）。
+  KbEmbeddingConfig? _embeddingConfig;
+
+  /// 当前是否真的走向量检索（开关 + Key + 供应商都满足）。
+  bool get vectorSearchActive => _embeddingConfig?.usable ?? false;
+
+  /// AppState 每次设置变化时调用；停用/换模型时清掉向量缓存。
+  void configure(KbEmbeddingConfig? config) {
+    final old = _embeddingConfig;
+    _embeddingConfig = config;
+    if (old?.model != config?.model || old?.enabled != config?.enabled) {
+      _vectorIndexes.clear();
+    }
+  }
 
   // ======================== 知识库 CRUD ========================
 
@@ -48,6 +72,7 @@ class KbService {
 
   Future<void> deleteKnowledgeBase(int kbId) async {
     _retrievers.remove(kbId);
+    _clearVectorCache(kbId);
     await _db.deleteKnowledgeBase(kbId);
   }
 
@@ -60,14 +85,14 @@ class KbService {
     if (ids.isEmpty) return;
     for (final id in ids) {
       _retrievers.remove(id);
+      _clearVectorCache(id);
     }
     await _db.deleteKnowledgeBases(ids);
   }
 
   // ======================== 文档导入 ========================
 
-  Future<List<KbDocument>> listDocuments(int kbId) =>
-      _db.getKbDocuments(kbId);
+  Future<List<KbDocument>> listDocuments(int kbId) => _db.getKbDocuments(kbId);
 
   /// 导入一个文档：解析 → 切块 → 落库。返回文档 id。
   /// [name] 为空时取文件名。
@@ -102,12 +127,17 @@ class KbService {
         .toList();
     await _db.insertKbChunks(chunks);
     _retrievers.remove(kbId);
+    _clearVectorCache(kbId);
+    // v1.43：向量化必须**异步**——导入不能被 Embedding 请求拖慢；
+    // 失败（未配置 / 断网）只记日志，检索仍走 BM25。
+    unawaited(indexDocumentEmbeddings(kbId, docId));
     return docId;
   }
 
   Future<void> deleteDocument(int docId) async {
     await _db.deleteKbDocument(docId);
     _retrievers.clear(); // 文档级删除难以定位 kbId，简单清空缓存
+    _vectorIndexes.clear();
   }
 
   /// 重命名文档（v1.30.2）。
@@ -130,13 +160,19 @@ class KbService {
           where: 'id = ?', whereArgs: [docId]);
       await txn.update('kb_chunks', {'kb_id': toKbId},
           where: 'doc_id = ?', whereArgs: [docId]);
+      await txn.update('kb_embeddings', {'kb_id': toKbId},
+          where: 'chunk_id IN (SELECT id FROM kb_chunks WHERE doc_id = ?)',
+          whereArgs: [docId]);
     });
     _retrievers.remove(fromKbId);
     _retrievers.remove(toKbId);
+    _clearVectorCache(fromKbId);
+    _clearVectorCache(toKbId);
   }
 
   /// 编辑文档全文（重新切块）。供「导入后可更改调整」需求使用。
-  Future<void> updateDocumentContent(int kbId, int docId, String content) async {
+  Future<void> updateDocumentContent(
+      int kbId, int docId, String content) async {
     final now = DateTime.now().toIso8601String();
     final chunks = KbChunker.splitText(content)
         .asMap()
@@ -153,6 +189,9 @@ class KbService {
     await db.transaction((txn) async {
       await txn.update('kb_documents', {'content': content},
           where: 'id = ?', whereArgs: [docId]);
+      await txn.delete('kb_embeddings',
+          where: 'chunk_id IN (SELECT id FROM kb_chunks WHERE doc_id = ?)',
+          whereArgs: [docId]);
       await txn.delete('kb_chunks', where: 'doc_id = ?', whereArgs: [docId]);
       final batch = txn.batch();
       for (final c in chunks) {
@@ -161,11 +200,36 @@ class KbService {
       await batch.commit(noResult: true);
     });
     _retrievers.remove(kbId);
+    _clearVectorCache(kbId);
+    // 正文变了，旧向量作废：异步重建
+    unawaited(indexDocumentEmbeddings(kbId, docId));
   }
 
   // ======================== 检索 ========================
 
+  /// 检索知识库：开启向量化且已有向量时用余弦相似度，否则回退 BM25。
+  ///
+  /// 关键取舍：
+  /// - **查询向量失败**（弱网 / Key 失效）→ 静默回退 BM25，不打断 AI 回答；
+  /// - **还没有向量**（老库 / 刚打开开关）→ 本次先 BM25，同时后台补齐向量，
+  ///   下一次检索自动切到语义检索；
+  /// - 向量检索取 Top K 的余弦相似度结果（Top 3~5 与调用方 topK 一致）。
   Future<List<KbHit>> search(int kbId, String query, {int topK = 5}) async {
+    final config = _embeddingConfig;
+    if (config != null && config.usable && query.trim().isNotEmpty) {
+      final index = await _vectorIndexFor(kbId, config.model);
+      if (index == null || index.isEmpty) {
+        // 后台补齐（不 await）：这次先用 BM25，不让首问等待几十次请求
+        _scheduleBackfill(kbId);
+      } else {
+        final queryVector =
+            await KbEmbeddingService.instance.embedQuery(query, config);
+        if (queryVector != null) {
+          final hits = index.search(queryVector, topK: topK);
+          if (hits.isNotEmpty) return hits;
+        }
+      }
+    }
     final retriever = _retrievers[kbId] ?? await _buildRetriever(kbId);
     return retriever.search(query, topK: topK);
   }
@@ -177,7 +241,138 @@ class KbService {
     return retriever;
   }
 
-  void invalidate(int kbId) => _retrievers.remove(kbId);
+  /// 取（并缓存）某个知识库的向量索引；没有向量返回 null。
+  Future<KbVectorIndex?> _vectorIndexFor(int kbId, String model) async {
+    final key = '$kbId::$model';
+    final cached = _vectorIndexes[key];
+    if (cached != null) return cached;
+    final embeddings = await _db.getKbEmbeddings(kbId, model: model);
+    if (embeddings.isEmpty) return null;
+    final chunks = await _db.getKbChunks(kbId);
+    final byId = <int, KbChunk>{
+      for (final c in chunks)
+        if (c.id != null) c.id!: c,
+    };
+    final pairs = <KbChunk>[];
+    final vectors = <List<double>>[];
+    for (final e in embeddings) {
+      final chunk = byId[e.chunkId];
+      if (chunk == null) continue;
+      if (e.vector.isEmpty || e.vector.length != e.dim) continue;
+      pairs.add(chunk);
+      vectors.add(e.vector);
+    }
+    if (pairs.isEmpty) return null;
+    final index = KbVectorIndex(chunks: pairs, vectors: vectors);
+    _vectorIndexes[key] = index;
+    return index;
+  }
+
+  /// 为某个文档补齐向量（导入 / 正文编辑后调用；异步执行）。
+  ///
+  /// 返回成功写入的块数；未开启向量化 / 请求失败返回 0。
+  Future<int> indexDocumentEmbeddings(int kbId, int docId,
+      {bool force = false}) async {
+    final config = _embeddingConfig;
+    if (config == null || !config.usable) return 0;
+    final chunks = await _db.getKbChunksByDoc(docId);
+    if (chunks.isEmpty) return 0;
+    final existing = force
+        ? const <int>{}
+        : (await _db.getKbEmbeddings(kbId, model: config.model))
+            .map((e) => e.chunkId)
+            .toSet();
+    final pending =
+        chunks.where((c) => c.id != null && !existing.contains(c.id)).toList();
+    return _embedChunks(kbId, pending, config);
+  }
+
+  /// 后台补齐某个库的向量；同一个库同时只跑一轮（失败也会释放标记）。
+  void _scheduleBackfill(int kbId) {
+    if (_backfilling.contains(kbId)) return;
+    _backfilling.add(kbId);
+    unawaited(() async {
+      try {
+        await ensureEmbeddings(kbId);
+      } finally {
+        _backfilling.remove(kbId);
+      }
+    }());
+  }
+
+  /// 为某个知识库补齐所有缺失向量（老库首次检索 / 打开开关后的回填）。
+  Future<int> ensureEmbeddings(int kbId) async {
+    final config = _embeddingConfig;
+    if (config == null || !config.usable) return 0;
+    final pending = await _db.getKbChunksMissingEmbedding(kbId, config.model);
+    return _embedChunks(kbId, pending, config);
+  }
+
+  /// 为所有知识库补齐向量（设置里打开开关时后台触发）。
+  Future<int> ensureAllEmbeddings() async {
+    final config = _embeddingConfig;
+    if (config == null || !config.usable) return 0;
+    var total = 0;
+    for (final kb in await _db.getAllKnowledgeBases()) {
+      final id = kb.id;
+      if (id == null) continue;
+      total += await ensureEmbeddings(id);
+    }
+    return total;
+  }
+
+  Future<int> _embedChunks(
+      int kbId, List<KbChunk> chunks, KbEmbeddingConfig config) async {
+    if (chunks.isEmpty) return 0;
+    var written = 0;
+    // 双阈值分批：条数 ≤16、总字符 ≤6000。中文 1000 字的块 16 条会超过
+    // text-embedding-3-small 的 8191 token 上限，按字符数收口更稳。
+    var start = 0;
+    while (start < chunks.length) {
+      var end = start;
+      var chars = 0;
+      while (end < chunks.length &&
+          end - start < KbEmbeddingService.defaultBatchSize) {
+        final len = chunks[end].text.length;
+        if (end > start && chars + len > 6000) break;
+        chars += len;
+        end++;
+      }
+      final batch = chunks.sublist(start, end);
+      start = end;
+      final vectors = await KbEmbeddingService.instance
+          .embedAll(batch.map((c) => c.text).toList(), config);
+      if (vectors == null || vectors.length != batch.length) break;
+      final now = DateTime.now().toIso8601String();
+      final items = <KbEmbedding>[];
+      for (var j = 0; j < batch.length; j++) {
+        final id = batch[j].id;
+        final vector = vectors[j];
+        if (id == null || vector.isEmpty) continue;
+        items.add(KbEmbedding(
+          chunkId: id,
+          kbId: kbId,
+          model: config.model,
+          dim: vector.length,
+          vector: vector,
+          createdAt: now,
+        ));
+      }
+      await _db.upsertKbEmbeddings(items);
+      written += items.length;
+    }
+    if (written > 0) _clearVectorCache(kbId);
+    return written;
+  }
+
+  void _clearVectorCache(int kbId) {
+    _vectorIndexes.removeWhere((key, _) => key.startsWith('$kbId::'));
+  }
+
+  void invalidate(int kbId) {
+    _retrievers.remove(kbId);
+    _clearVectorCache(kbId);
+  }
 
   // ======================== 解析 ========================
 

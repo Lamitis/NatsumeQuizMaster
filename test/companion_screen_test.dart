@@ -113,7 +113,8 @@ void main() {
     // 用户这句已上屏
     expect(find.text('夸夸我'), findsWidgets);
     // 兜底回复里带真实数字（0 题也要说实话，而不是空夸）
-    expect(find.textContaining('从 0 到 1'), findsOneWidget);
+    // v1.43：bot 气泡改为 Markdown 富文本渲染，需要 findRichText 才匹配
+    expect(find.textContaining('从 0 到 1', findRichText: true), findsOneWidget);
     // 未配置 AI 的说明必须出现，避免用户以为在跟模型对话
     expect(find.textContaining('未配置 AI 接口'), findsOneWidget);
     // 每天第一次互动 +3

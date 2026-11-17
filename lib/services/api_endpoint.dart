@@ -14,8 +14,7 @@ class ApiEndpoint {
   const ApiEndpoint._();
 
   /// 兜底端点（与 AppSettings.defaultApiEndpoint 保持一致）
-  static const String fallback =
-      'https://api.deepseek.com/v1/chat/completions';
+  static const String fallback = 'https://api.deepseek.com/v1/chat/completions';
 
   /// 归一化为 chat/completions 端点。
   ///
@@ -59,7 +58,8 @@ class ApiEndpoint {
 
   /// 是否以「基址段」结尾（版本号 / openai / compatible-mode 等）
   static bool _endsWithBaseSegment(String lowerPath) {
-    if (RegExp(r'/v\d+[a-z]*$').hasMatch(lowerPath)) return true; // /v1 /v2 /v1beta
+    if (RegExp(r'/v\d+[a-z]*$').hasMatch(lowerPath))
+      return true; // /v1 /v2 /v1beta
     return lowerPath.endsWith('/openai') ||
         lowerPath.endsWith('/compatible-mode') ||
         lowerPath.endsWith('/openai-compatible');
@@ -120,6 +120,23 @@ class ApiEndpoint {
       p = p.substring(0, p.length - suffix.length);
     }
     return chat.replace(path: '$p/models');
+  }
+
+  /// 由 chat 端点推导「Embeddings」端点（OpenAI 兼容的 `POST /embeddings`）。
+  ///
+  /// 例：`https://api.openai.com/v1/chat/completions`
+  ///   → `https://api.openai.com/v1/embeddings`
+  ///
+  /// 知识库向量化（v1.43）与对话共用同一份接口地址 / Key，用户不需要
+  /// 再单独配一套地址；不支持的供应商由 `KbEmbeddingService` 回退 BM25。
+  static Uri embeddingsUrl(String rawEndpoint) {
+    final chat = resolve(rawEndpoint);
+    var p = chat.path;
+    const suffix = '/chat/completions';
+    if (p.endsWith(suffix)) {
+      p = p.substring(0, p.length - suffix.length);
+    }
+    return chat.replace(path: '$p/embeddings');
   }
 
   /// 余额查询地址：官方 DeepSeek 用专用接口，其余供应商按通用路径尝试

@@ -11,9 +11,11 @@ import '../services/ai_service.dart';
 import '../services/app_state.dart';
 import '../services/companion/companion_service.dart';
 import '../services/theme_service.dart';
+import '../utils/companion_text.dart';
 import '../utils/design_tokens.dart';
 import '../utils/responsive.dart';
 import '../utils/typewriter.dart';
+import '../widgets/ai_response_widget.dart';
 import '../widgets/companion/companion_avatar_view.dart';
 import '../widgets/kit/natsume_kit.dart';
 import 'companion_settings_screen.dart';
@@ -134,7 +136,10 @@ class _CompanionScreenState extends State<CompanionScreen> {
     typer.cancel();
     final message = _typingMessage;
     final reply = _typingReply;
-    if (message != null && reply != null) message.text = reply;
+    if (message != null && reply != null) {
+      message.text = reply;
+      message.typing = false;
+    }
     _typewriter = null;
     _typingMessage = null;
     _typingReply = null;
@@ -154,7 +159,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
 
     final app = context.read<AppState>();
     final service = CompanionService.instance;
-    final botMessage = _ChatMessage.bot('');
+    final botMessage = _ChatMessage.bot('')..typing = true;
     setState(() {
       _messages
         ..add(_ChatMessage.user(text))
@@ -174,6 +179,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
         _typewriter = null;
         _typingMessage = null;
         _typingReply = null;
+        botMessage.typing = false;
+        if (mounted) setState(() {});
       },
     );
     _typewriter = typer;
@@ -196,11 +203,11 @@ class _CompanionScreenState extends State<CompanionScreen> {
         : app.aiService;
     final configured =
         settings.hasOwnApi || (app.settings.isConfigured && ai != null);
-    var reply = service.fallbackReply(
+    var reply = cleanCompanionMarkdown(service.fallbackReply(
       text,
       _snapshot,
       nickname: app.settings.nickname,
-    );
+    ));
 
     if (configured) {
       try {
@@ -216,7 +223,8 @@ class _CompanionScreenState extends State<CompanionScreen> {
             kbBlock: kbBlock,
           ),
         )) {
-          acc = chunk;
+          // v1.43：流式阶段就剥掉最外层 ```markdown 围栏，避免源码闪一下
+          acc = cleanCompanionMarkdown(chunk);
           if (!mounted) return;
           typer.feedCumulative(acc);
         }
@@ -225,7 +233,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
             setState(() => _notice = 'AI 这次没有给出内容，先用固定文案陪你');
           }
         } else {
-          reply = acc.trim();
+          reply = cleanCompanionMarkdown(acc);
         }
       } catch (_) {
         if (mounted) setState(() => _notice = 'AI 暂时连不上，先用固定文案陪你');
@@ -239,6 +247,7 @@ class _CompanionScreenState extends State<CompanionScreen> {
     if (!mounted) return;
     setState(() {
       botMessage.fromKb = kbUsed;
+      botMessage.typing = false;
       _replying = false;
       _mood = _moodFor(text);
     });
@@ -249,7 +258,10 @@ class _CompanionScreenState extends State<CompanionScreen> {
     } else {
       // 中途失败改用固定文案：直接替换，避免两段文字拼接
       typer.cancel();
-      setState(() => botMessage.text = reply);
+      setState(() {
+        botMessage.text = reply;
+        botMessage.typing = false;
+      });
     }
     _scrollToEnd();
     // 焦点留在输入框：连续追问不用再点一下
@@ -518,6 +530,10 @@ class _ChatMessage {
   final bool fromUser;
   String text;
 
+  /// 流式打字机还在跑：气泡先用纯文本预览，结束后再切 Markdown 渲染
+  /// （避免每一帧都解析一次 Markdown，也让中途不暴露 `**` / `###`）。
+  bool typing = false;
+
   /// 这条回复用到了知识库资料（v1.33：页面上标出来，用户才知道「凭据」）
   bool fromKb = false;
 }
@@ -552,13 +568,7 @@ class _Bubble extends StatelessWidget {
         border: Border.all(color: ac.border, width: NatsumeLine.width),
       ),
       child: SingleChildScrollView(
-        child: Text(
-          message.text,
-          style: NatsumeType.bodyStyle.copyWith(
-            color: isUser ? ac.textPrimary : ac.textSecondary,
-            height: 1.6,
-          ),
-        ),
+        child: _bubbleContent(ac, isUser),
       ),
     );
 
@@ -585,6 +595,37 @@ class _Bubble extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  /// v1.43：bot 消息用 Markdown 渲染（`**加粗**` / `### 标题` 不再以源码出现）。
+  ///
+  /// 流式打字机阶段先用「去标记的纯文本预览」：每帧解析 Markdown 代价高，
+  /// 中途看到 `**` 也很像源码；打字结束（`typing == false`）再切富文本。
+  Widget _bubbleContent(AppThemeColors ac, bool isUser) {
+    if (isUser) {
+      return Text(
+        message.text,
+        style: NatsumeType.bodyStyle.copyWith(
+          color: ac.textPrimary,
+          height: 1.6,
+        ),
+      );
+    }
+    if (message.typing) {
+      final preview = companionTypingPreview(message.text);
+      return Text(
+        preview.isEmpty ? '…' : preview,
+        style: NatsumeType.bodyStyle.copyWith(
+          color: ac.textSecondary,
+          height: 1.6,
+        ),
+      );
+    }
+    return AiResponseWidget(
+      text: message.text.trim().isEmpty ? '…' : message.text,
+      fontSize: NatsumeType.body,
+      color: ac.textSecondary,
     );
   }
 }

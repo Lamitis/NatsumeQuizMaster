@@ -10,6 +10,57 @@ class KbHit {
   const KbHit(this.chunk, this.score);
 }
 
+class KbVectorIndex {
+  final List<KbChunk> chunks;
+
+  /// 与 [chunks] 一一对应的向量；维度不一致的条目在检索时跳过。
+  final List<List<double>> vectors;
+
+  const KbVectorIndex({required this.chunks, required this.vectors});
+
+  bool get isEmpty => chunks.isEmpty || vectors.isEmpty;
+
+  int get length => chunks.length;
+
+  /// 余弦相似度；零向量 / 维度不一致返回 null（调用方跳过该块）。
+  static double? cosineSimilarity(List<double> a, List<double> b) {
+    if (a.length != b.length || a.isEmpty) return null;
+    var dot = 0.0;
+    var na = 0.0;
+    var nb = 0.0;
+    for (var i = 0; i < a.length; i++) {
+      dot += a[i] * b[i];
+      na += a[i] * a[i];
+      nb += b[i] * b[i];
+    }
+    if (na <= 0 || nb <= 0) return null;
+    return dot / (sqrt(na) * sqrt(nb));
+  }
+
+  /// 向量检索：按余弦相似度取 Top K。
+  ///
+  /// [minScore] 默认 0：只过滤掉负相关（完全不相关）的块；embedding 的
+  /// 相似度通常是 0.6~0.9，不能像 BM25 那样要求正分才有意义。
+  List<KbHit> search(List<double> query, {int topK = 5, double minScore = 0}) {
+    if (isEmpty || query.isEmpty) return const [];
+    final scored = <KbHit>[];
+    for (var i = 0; i < chunks.length && i < vectors.length; i++) {
+      final score = cosineSimilarity(query, vectors[i]);
+      if (score == null || score < minScore) continue;
+      scored.add(KbHit(chunks[i], score));
+    }
+    scored.sort((a, b) {
+      final cmp = b.score.compareTo(a.score);
+      if (cmp != 0) return cmp;
+      // 分数并列时按块 id / 位置稳定排序，结果可复现
+      final ai = a.chunk.id ?? a.chunk.position;
+      final bi = b.chunk.id ?? b.chunk.position;
+      return ai.compareTo(bi);
+    });
+    return scored.take(topK).toList();
+  }
+}
+
 /// 知识库检索器（v13 · 全本地、零二进制依赖）。
 ///
 /// 默认用 **BM25**（关键词稀疏检索）：纯 Dart 实现，离线可用，不需要本地

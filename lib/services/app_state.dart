@@ -40,6 +40,7 @@ import 'plugins/plugin_prompt_service.dart';
 import 'net/smart_http_client.dart';
 import 'companion/companion_service.dart';
 import 'knowledge_base/grounding_service.dart';
+import 'knowledge_base/kb_embedding_service.dart';
 import 'knowledge_base/kb_retriever.dart';
 import 'knowledge_base/kb_service.dart';
 import '../models/companion_settings.dart';
@@ -1092,6 +1093,8 @@ class AppState extends ChangeNotifier {
     _cancelAnalysisStream();
     _aiService?.dispose();
     _aiService = AIService(_settings, client: _aiClientOverride);
+    // v1.43：把向量化配置同步给知识库检索（开关 / Key / 模型 / 供应商）
+    KbService.instance.configure(KbEmbeddingConfig.fromSettings(_settings));
   }
 
   AIService? get aiService => _aiService;
@@ -1175,6 +1178,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> updateSettings(AppSettings newSettings) async {
+    final wasKbVector = _settings.kbVectorEnabled;
+    final oldEmbeddingModel = _settings.embeddingModel;
     _settings = newSettings;
     // v1.0.2 七项改进：双写——DB 加密副本（备份可移植）+ Android 安全存储
     await _db.setSetting('api_key', KeyCrypto.encrypt(newSettings.apiKey));
@@ -1208,7 +1213,16 @@ class AppState extends ChangeNotifier {
     // v1.42 做题节奏：答完自动切下一题（默认开，随备份携带）
     await _db.setSetting('auto_advance_after_answer',
         newSettings.autoAdvanceAfterAnswer ? '1' : '0');
+    // v1.43 知识库向量检索：开关 + Embedding 模型（随备份携带）
+    await _db.setSetting(
+        'kb_vector_enabled', newSettings.kbVectorEnabled ? '1' : '0');
+    await _db.setSetting('embedding_model', newSettings.embeddingModel);
     _initAIService();
+    // 打开开关 / 换模型：老向量视为缺失，后台补齐，不阻塞保存
+    if ((!wasKbVector && newSettings.kbVectorEnabled) ||
+        oldEmbeddingModel != newSettings.embeddingModel) {
+      unawaited(KbService.instance.ensureAllEmbeddings());
+    }
     notifyListeners();
   }
 

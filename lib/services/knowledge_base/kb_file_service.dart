@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -10,8 +11,9 @@ import '../../models/knowledge_base.dart';
 import '../../utils/natsume_personality.dart';
 import '../database_service.dart';
 import 'kb_chunker.dart';
+import 'kb_service.dart';
 
-/// 知识库包导出结果（`.natsume-kb`：一个 zip 里装多个知识库）。
+/// 知识库包导出结果（`.zip`：一个 zip 里装多个知识库）。
 class KbBundleExportResult {
   /// 生成好的包路径；没有可导出内容时为 null
   final String? path;
@@ -63,11 +65,21 @@ class KbFileService {
 
   static const String formatMarker = 'natsume-knowledge-base';
 
-  /// 多知识库包（`.natsume-kb`，本质是 zip）的清单格式标记
-  static const String bundleFormatMarker = 'natsume-kb-bundle';
+  /// 知识库包清单的格式标记（v1.43）。
+  ///
+  /// v1.43 起包后缀统一为 `.zip`（系统文件管理器 / 微信 / QQ 才认得出是文件），
+  /// 因此不能再靠后缀区分「知识库包 / 世界包」——改成读包内清单的 `format`：
+  /// `natsume-kb` = 知识库包，`natsume-world` = 世界 / 分类包。
+  static const String bundleFormatMarker = 'natsume-kb';
 
-  /// 多知识库包的推荐扩展名
-  static const String bundleExtension = '.natsume-kb';
+  /// v1.42 及更早的知识库包标记（旧包仍可导入）
+  static const String legacyBundleFormatMarker = 'natsume-kb-bundle';
+
+  /// 多知识库包的后缀：本质是 zip，强制 `.zip` 以便分享 / 系统识别。
+  static const String bundleExtension = '.zip';
+
+  /// 旧版知识库包后缀（仍接受导入）
+  static const String legacyBundleExtension = '.natsume-kb';
 
   /// 包内清单文件名
   static const String bundleManifestName = 'kb.json';
@@ -279,6 +291,9 @@ class KbFileService {
           .toList();
       await _db.insertKbChunks(chunks);
     }
+    // v1.43：从文件导入的知识库同样异步补向量（未开启 / 不支持时返回 0）。
+    // 不 await：导入结果先返回，向量化在后台跑。
+    unawaited(KbService.instance.ensureEmbeddings(kbId));
     return (kbId, null);
   }
 
@@ -330,13 +345,31 @@ class KbFileService {
   // `kb/<id>.json`（每个成员都是标准 [formatMarker] 文件），所以
   // 「导入知识库」既能吃单文件，也能吃整包。
 
-  /// 这个路径是不是一个知识库包（zip / `.natsume-kb`）。
+  /// 这个路径是不是「知识库包」：只认 zip 内部 `kb.json` 的 format 标记。
   ///
-  /// 判定「先看扩展名、再看 zip 魔数」：用户从聊天软件里收到的包可能没有
-  /// 扩展名（`xxx (1)`），但有 `PK` 头就说明是 zip。
+  /// v1.43：后缀统一成 `.zip` 后，同一后缀可能装知识库包 / 世界包 / 普通压缩包，
+  /// 仅凭后缀会误判。这里解压读清单（包很小，代价可接受）：
+  /// - `format` = `natsume-kb`（新）/ `natsume-kb-bundle`（旧）→ true；
+  /// - 其他（包括 world 包）→ false。
   static Future<bool> isBundleFile(String path) async {
-    final lower = path.toLowerCase();
-    if (lower.endsWith(bundleExtension) || lower.endsWith('.zip')) return true;
+    final data = await _readZipJson(path, bundleManifestName);
+    if (data == null) return false;
+    final format = data['format'];
+    return format == bundleFormatMarker || format == legacyBundleFormatMarker;
+  }
+
+  /// 这个 zip 是不是「世界 / 分类导出包」（`world.json` + format=natsume-world）。
+  ///
+  /// v1.42：知识库页的「导出分类」产物是 `.natsume-world.zip`，用户很自然
+  /// 会拿「导入知识库」去还原它。这里先认出来，交给 `WorldService.importWorld`
+  /// 处理，而不是报「缺少 kb.json 清单」。
+  static Future<bool> isWorldFile(String path) async {
+    final data = await _readZipJson(path, 'world.json');
+    return data != null && data['format'] == 'natsume-world';
+  }
+
+  /// 仅按 zip 魔数判断「是不是压缩包」（不判断包类型）。
+  static Future<bool> isZipFile(String path) async {
     final file = File(path);
     if (!await file.exists()) return false;
     try {
@@ -352,30 +385,27 @@ class KbFileService {
     }
   }
 
-  /// 这个 zip 是不是「世界 / 分类导出包」（`world.json` + format=natsume-world）。
-  ///
-  /// v1.42：知识库页的「导出分类」产物是 `.natsume-world.zip`，用户很自然
-  /// 会拿「导入知识库」去还原它。这里先认出来，交给 `WorldService.importWorld`
-  /// 处理，而不是报「缺少 kb.json 清单」。
-  static Future<bool> isWorldFile(String path) async {
+  /// 读取 zip 内某个 JSON 文件；不存在 / 不是 zip / 解析失败一律返回 null。
+  static Future<Map<String, dynamic>?> _readZipJson(
+      String path, String entryName) async {
     final file = File(path);
-    if (!await file.exists()) return false;
+    if (!await file.exists()) return null;
     final Archive archive;
     try {
       archive = ZipDecoder().decodeBytes(await file.readAsBytes());
     } catch (_) {
-      return false;
+      return null;
     }
     for (final f in archive) {
-      if (!f.isFile || f.name != 'world.json') continue;
+      if (!f.isFile || f.name != entryName) continue;
       try {
-        final data = jsonDecode(utf8.decode(f.content as List<int>));
-        return data is Map && data['format'] == 'natsume-world';
+        final decoded = jsonDecode(utf8.decode(f.content as List<int>));
+        if (decoded is Map) return Map<String, dynamic>.from(decoded);
       } catch (_) {
-        return false;
+        return null;
       }
     }
-    return false;
+    return null;
   }
 
   /// 把多个知识库打成一个 `.natsume-kb` 包。
@@ -417,7 +447,9 @@ class KbFileService {
       final manifest = {
         'format': bundleFormatMarker,
         'version': '1',
+        'type': 'knowledge_bases',
         'creator': NatsumePersonality.creatorMark,
+        'exported_at': DateTime.now().toIso8601String(),
         'count': entries.length,
         'knowledge_bases': entries,
       };
@@ -488,7 +520,9 @@ class KbFileService {
       } catch (e) {
         return KbBundleImportResult(error: '知识库包清单不是合法 JSON：$e');
       }
-      if (manifest is! Map || manifest['format'] != bundleFormatMarker) {
+      if (manifest is! Map ||
+          (manifest['format'] != bundleFormatMarker &&
+              manifest['format'] != legacyBundleFormatMarker)) {
         return const KbBundleImportResult(
             error: '不是NatsumeQuizMaster知识库包（缺少 format 标记）');
       }

@@ -13,6 +13,7 @@ import '../models/answer_record.dart';
 import '../models/knowledge_base.dart';
 import '../models/kb_document.dart';
 import '../models/kb_chunk.dart';
+import '../models/kb_embedding.dart';
 import '../models/note.dart';
 import '../models/plugin.dart';
 import '../models/schedule_item.dart';
@@ -64,7 +65,7 @@ class DatabaseService {
 
   /// 当前 schema 版本（唯一来源：`openDatabase(version:)` 与备份版本闸门共用，
   /// 避免「建库涨到 v15 但备份校验还卡在 v14」这种自拒备份的老坑）
-  static const int schemaVersion = 18;
+  static const int schemaVersion = 19;
 
   /// 测试用：覆盖数据库文件路径（多测试文件并行时按文件隔离，防互相清库）
   static String? overrideDbPath;
@@ -348,6 +349,10 @@ class DatabaseService {
       // v18 知识库分类：知识库与题库共用 bank_categories 分类树
       await _upgradeToV18(db);
     }
+    if (oldVersion < 19) {
+      // v19 知识库向量检索：文本块的 embedding 单独建表（不影响 BM25）
+      await _createKbEmbeddingsTable(db);
+    }
   }
 
   /// v18 迁移：给 `knowledge_bases` 补 `category_id`（可空 = 未分类）。
@@ -585,6 +590,28 @@ class DatabaseService {
     await db
         .execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_bases_uid '
             'ON knowledge_bases(uid)');
+    await _createKbEmbeddingsTable(db);
+  }
+
+  /// 知识库向量表（v19，v1.43）。
+  ///
+  /// 与 `kb_chunks` 一对一，`chunk_id` 作主键；向量用 Float32+base64 存在
+  /// TEXT 列（见 [KbEmbedding]）。单独建表而不是给 `kb_chunks` 加列：
+  /// BM25 检索不需要读向量，分表能避免每次全量加载文本块时白白搬几 MB。
+  Future<void> _createKbEmbeddingsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS kb_embeddings (
+        chunk_id INTEGER PRIMARY KEY,
+        kb_id INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        dim INTEGER NOT NULL,
+        vector TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (chunk_id) REFERENCES kb_chunks(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_kb_embeddings_kb '
+        'ON kb_embeddings(kb_id)');
   }
 
   /// 题目配图表（v12）。图片随题存取、随题级联删除；
@@ -3666,6 +3693,7 @@ class DatabaseService {
   Future<void> deleteKnowledgeBase(int kbId) async {
     final db = await database;
     await db.transaction((txn) async {
+      await txn.delete('kb_embeddings', where: 'kb_id = ?', whereArgs: [kbId]);
       await txn.delete('kb_chunks',
           where: 'doc_id IN (SELECT id FROM kb_documents WHERE kb_id = ?)',
           whereArgs: [kbId]);
@@ -3674,13 +3702,15 @@ class DatabaseService {
     });
   }
 
-  /// 批量删除知识库（v1.39.3）：单事务清理 chunks → documents → bases。
+  /// 批量删除知识库（v1.39.3）：单事务清理 embeddings → chunks → documents → bases。
   Future<void> deleteKnowledgeBases(List<int> kbIds) async {
     final ids = kbIds.toSet().toList();
     if (ids.isEmpty) return;
     final db = await database;
     final marks = List.filled(ids.length, '?').join(',');
     await db.transaction((txn) async {
+      await txn.delete('kb_embeddings',
+          where: 'kb_id IN ($marks)', whereArgs: ids);
       await txn.delete('kb_chunks',
           where:
               'doc_id IN (SELECT id FROM kb_documents WHERE kb_id IN ($marks))',
@@ -3723,6 +3753,9 @@ class DatabaseService {
   Future<void> deleteKbDocument(int docId) async {
     final db = await database;
     await db.transaction((txn) async {
+      await txn.delete('kb_embeddings',
+          where: 'chunk_id IN (SELECT id FROM kb_chunks WHERE doc_id = ?)',
+          whereArgs: [docId]);
       await txn.delete('kb_chunks', where: 'doc_id = ?', whereArgs: [docId]);
       await txn.delete('kb_documents', where: 'id = ?', whereArgs: [docId]);
     });
@@ -3745,6 +3778,53 @@ class DatabaseService {
     final maps = await db.query('kb_chunks',
         where: 'kb_id = ?', whereArgs: [kbId], orderBy: 'id');
     return maps.map((m) => KbChunk.fromMap(m)).toList();
+  }
+
+  /// 某个文档的文本块（导入 / 编辑后按文档做向量化用）。
+  Future<List<KbChunk>> getKbChunksByDoc(int docId) async {
+    final db = await database;
+    final maps = await db.query('kb_chunks',
+        where: 'doc_id = ?', whereArgs: [docId], orderBy: 'position');
+    return maps.map((m) => KbChunk.fromMap(m)).toList();
+  }
+
+  /// 写入 / 覆盖向量（同一 chunk 重复写入直接替换）。
+  Future<void> upsertKbEmbeddings(List<KbEmbedding> items) async {
+    if (items.isEmpty) return;
+    final db = await database;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final e in items) {
+        batch.insert('kb_embeddings', e.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  /// 读取知识库的向量；[model] 非空时只取该模型的（换模型后旧向量视为缺失）。
+  Future<List<KbEmbedding>> getKbEmbeddings(int kbId, {String? model}) async {
+    final db = await database;
+    final maps = await db.query(
+      'kb_embeddings',
+      where: model == null ? 'kb_id = ?' : 'kb_id = ? AND model = ?',
+      whereArgs: model == null ? [kbId] : [kbId, model],
+      orderBy: 'chunk_id',
+    );
+    return maps.map(KbEmbedding.fromMap).toList();
+  }
+
+  /// 还没有指定模型向量的文本块（用于增量补齐 / 重建索引）。
+  Future<List<KbChunk>> getKbChunksMissingEmbedding(
+      int kbId, String model) async {
+    final db = await database;
+    final rows = await db.rawQuery('''
+      SELECT c.* FROM kb_chunks c
+      LEFT JOIN kb_embeddings e ON e.chunk_id = c.id AND e.model = ?
+      WHERE c.kb_id = ? AND e.chunk_id IS NULL
+      ORDER BY c.id
+    ''', [model, kbId]);
+    return rows.map((m) => KbChunk.fromMap(m)).toList();
   }
 
   // ======================== 插件 / 世界 CRUD（v13） ========================
