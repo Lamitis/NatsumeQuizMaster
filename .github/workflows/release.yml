@@ -42,13 +42,15 @@ name: Release
 #   结论：日常发版仍推荐 tools/publish_release.ps1（本地一条龙，多一道 CHANGELOG
 #   小节核对与 APK 签名核验）；需要无本地环境发版时，到 Actions 页面手动运行本
 #   workflow，tag 留空即按 pubspec 版本发布。
+# 注：这里的 description 会原样显示在 Actions 的 Run workflow 弹窗里（GitHub 按
+# 纯文本粗体渲染，不认 Markdown），所以只写「填什么」，实现细节留在注释里。
+# 历史坑：workflow_dispatch 的 GITHUB_REF_NAME 是分支名（main）而非 tag，
+# 旧实现拿它比对 pubspec 版本导致手动发版必红——解析逻辑见 verify 步骤。
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: >-
-          要发布的 tag（如 v1.44.0）。留空则取 pubspec.yaml 的版本自动拼 v<版本>。
-          手动运行时的 GITHUB_REF_NAME 是**分支名**（main），不是 tag，别指望它。
+        description: '留空即按 pubspec.yaml 的版本发布（如 v1.44.0）'
         required: false
         default: ''
 
