@@ -1,17 +1,37 @@
-# Miscellaneous
+# ─────────────────────────────────────────────────────────────
+# NatsumeQuizMaster · .gitignore
+#
+# 原则：**只提交「人写的东西」**——源码、测试、脚本、文档、字体与插件资产。
+# 一切可再生成的（构建产物、缓存、安装包、截图预览、编辑器临时文件）都不入库。
+# 判据：删掉它，`flutter pub get && flutter build` 能否原样重建？能 → 不该入库。
+# ─────────────────────────────────────────────────────────────
+
+# ── 编辑器 / 系统临时文件 ──────────────────────────────────────
 *.class
 *.log
 *.pyc
+*.tmp
 *.swp
+swp.*
+*~
+*.orig
+*.rej
+~$*
 .DS_Store
+Thumbs.db
 .atom/
 .buildlog/
 .history
 .svn/
-swp.*
 migrate_working_dir/
+New Text Document.txt
 
-# IntelliJ related
+# 备份文件：改了源码顺手留的 .bak / .old 副本（如 pdf_import_service.dart.bak）
+*.bak
+*.old
+*.save
+
+# ── IntelliJ / Android Studio ────────────────────────────────
 *.iml
 *.ipr
 *.iws
@@ -22,47 +42,77 @@ migrate_working_dir/
 # is commented out by default.
 #.vscode/
 
-# Flutter/Dart/Pub related
+# ── Flutter / Dart / Pub ─────────────────────────────────────
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
+.flutter-devtools/
 .packages
 .pub-cache/
 .pub/
 /build/
+coverage/
+# 本地依赖覆盖（pubspec_overrides 只服务本机调试，不应影响他人构建）
+**/pubspec_overrides.yaml
 
-# Symbolication related
+# 符号化 / 混淆产物
 app.*.symbols
-
-# Obfuscation related
 app.*.map.json
 
-# Android Studio will place build artifacts here
+# ── Android 构建产物与机器相关配置 ───────────────────────────
+/android/.gradle/
+/android/build/
+/android/app/build/
 /android/app/debug
 /android/app/profile
 /android/app/release
+# local.properties 里是**本机** SDK 路径，换台机器就错
+/android/local.properties
 
-# 构建产物与安装包一律不入库，统一通过 GitHub Releases 分发
-# （二进制进 git 会永久膨胀历史，且受单文件 100MB 限制）
-/dist/
-
-.qoder/
-.fvm/
+# ── Windows 桌面端生成物 ─────────────────────────────────────
+# 只忽略 ephemeral/（几 GB 的 dll/pdb 中间件）。
+# 注意：windows/flutter/generated_plugin_registrant.cc/.h 与 generated_plugins.cmake
+# **是有意入库的**——本项目用 tools/patch_windows_plugin_deps.ps1 在构建后修补它们，
+# 一旦忽略就会出现「本地被补丁改过、但 git 看不见」的隐性偏差。
 /windows/flutter/ephemeral/
 
-# 安全加固：密钥/证书永不入库
+# ── 构建产物与安装包一律不入库 ───────────────────────────────
+# 统一通过 GitHub Releases 分发：二进制进 git 会永久膨胀历史，
+# 且受单文件 100MB 限制（一个 Windows 包就能把仓库撑爆）。
+/dist/
+/out/
+*.exe
+*.msi
+*.apk
+*.aab
+*.ipa
+*.appx
+*.msix
+*.dmg
+
+# ── 本项目工具链产生的预览 / 中间产物 ────────────────────────
+# tools/icon_generate.ps1、make_win_icon.ps1 生成的图标预览拼图
+.iconprev/
+# 图标生成中间件（母版 .ico 在 assets/plugins/official/companion/masters/ 里，那是资产）
+/icon_preview/
+*.isl.tmp
+
+# ── 安全加固：密钥 / 证书永不入库 ────────────────────────────
 android/key.properties
 **/*.jks
 **/*.keystore
+*.pem
+*.p12
+*.pfx
 
-# 环境变量与密钥（.env 等）
+# ── 环境变量与密钥（.env 等）────────────────────────────────
 .env
 .env.*
 *.local.env
 
-# 本地数据库与缓存（不入库）
+# ── 本地数据库与缓存（不入库）──────────────────────────────
 *.db
 *.db-wal
 *.db-shm
@@ -70,4 +120,6 @@ android/key.properties
 *.sqlite-wal
 *.sqlite-shm
 
-New Text Document.txt
+# ── AI / 助手工具目录（不参与产品构建）──────────────────────
+.qoder/
+.fvm/

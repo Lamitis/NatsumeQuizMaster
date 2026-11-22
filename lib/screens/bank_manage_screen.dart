@@ -66,8 +66,12 @@ class _CategoryChoice {
 }
 
 class _BankManageScreenState extends State<BankManageScreen> {
-  /// 收起的分类 id（默认全展开）。纯 UI 状态，不落库。
-  final Set<int> _collapsed = {};
+  /// **展开**的分类 id（v1.44：默认全收起，纯 UI 状态，不落库）。
+  ///
+  /// 语义从「记录收起的」改成「记录展开的」——空集就是「全都收起」，正好是
+  /// 新默认。旧实现记录的是收起项，空集等于全展开：分类一多，进页面先被十几层
+  /// 树铺满一屏，用户想找的题库反而被推到看不见的地方。
+  final Set<int> _expanded = {};
 
   /// 题库排序方式（v1.35.5）：存档在 SharedPreferences，跨启动记住
   BankSortMode _sort = BankSortMode.createdDesc;
@@ -210,7 +214,8 @@ class _BankManageScreenState extends State<BankManageScreen> {
         ..clear()
         ..add(bankId);
       // 进入多选先把折叠展开：否则「全选」会选中看不见的题库
-      _collapsed.clear();
+      _expanded.addAll(
+          context.read<AppState>().categories.map((c) => c.id).whereType<int>());
     });
   }
 
@@ -412,7 +417,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
     void addCategory(int? parentId, int depth) {
       for (final c in childrenOf[parentId] ?? const <BankCategory>[]) {
         final t = tally(c.id!);
-        final expanded = !_collapsed.contains(c.id);
+        final expanded = _expanded.contains(c.id);
         rows.add(_CategoryRow(c, depth, t.banks, t.questions, expanded));
         if (!expanded) continue;
         for (final bank in banksOf[c.id] ?? const <QuestionBank>[]) {
@@ -456,7 +461,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
           expanded: row.expanded,
           onToggle: () => setState(() {
             final id = category.id!;
-            if (!_collapsed.remove(id)) _collapsed.add(id);
+            if (!_expanded.remove(id)) _expanded.add(id);
           }),
           onNewChild: () => _createCategory(appState, category.id),
           onRename: () => _renameCategory(appState, category),
@@ -567,7 +572,7 @@ class _BankManageScreenState extends State<BankManageScreen> {
     if (name == null) return;
     await appState.createBankCategory(name, parentId: parentId);
     // 新建子分类后把父分类展开，否则用户看不到刚建出来的东西
-    if (parentId != null) setState(() => _collapsed.remove(parentId));
+    if (parentId != null) setState(() => _expanded.add(parentId));
   }
 
   Future<void> _renameCategory(AppState appState, BankCategory category) async {

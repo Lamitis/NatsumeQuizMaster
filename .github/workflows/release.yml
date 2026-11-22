@@ -3,6 +3,10 @@
 # 放置位置：.github/workflows/release.yml
 #
 # 使用方式：在 Actions 页面手动运行本 workflow（workflow_dispatch）。
+#   · 可选输入 tag：要发布的 tag（如 v1.44.0）。**留空就取 pubspec.yaml 的版本**
+#     自动拼 v<版本>——手动触发时 GITHUB_REF_NAME 是分支名（main），不是 tag，
+#     v1.44 之前直接拿它比对，于是手动发版第一步必红。
+#   · 同一 tag 重复运行是安全的：Release 已存在时改为覆盖上传资产。
 # 流程：版本一致性校验 → 构建 Android（arm64 + 通用）→ 构建 Windows（便携版 + 安装版）
 #       → 汇总 SHA-256 → 创建 GitHub Release
 #
@@ -11,6 +15,9 @@
 #   ANDROID_KEYSTORE_PASSWORD keystore 密码
 #   ANDROID_KEY_ALIAS         密钥别名
 #   ANDROID_KEY_PASSWORD      密钥密码
+# → v1.44 起**没配也能跑**：`signing` job 检测到缺项时只打 warning 并跳过 Android
+#   构建（不再整条流水线变红），Windows 产物照常发布；补齐 Secrets 后重跑同一
+#   tag 即可把 APK 追加进同一个 Release。
 # 生成 base64（PowerShell）：
 #   [Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks"))
 #
@@ -25,18 +32,25 @@
 # ============================================================
 name: Release
 
-# 2026-10-10 改为手动触发（原来随 tag 自动跑）：
-#   这条通道目前还缺两个前提，未补齐时 tag 触发只会产出失败的红叉——
-#     ① Android 构建需要 4 个 Repository Secrets（ANDROID_KEYSTORE_BASE64 等），尚未配置；
-#     ② Windows 构建需要 runner 上有能被 CMake 识别的 Visual Studio
-#        （windows-latest 上实测报 "could not find any instance of Visual Studio"，回退到 VS 2019 名称）。
-#   另外 publish 用的是 gh release create：若本地已用 tools/publish_release.ps1 发过同名
-#   Release，这条通道再跑会因同名冲突而失败。
-#   结论：日常发版走 tools/publish_release.ps1（本地一条龙，同样做版本双向校验、
-#   CHANGELOG 小节核对与 APK 签名核验）；
-#   需要无本地环境发版时，先补齐上面两项，再到 Actions 页面手动运行本 workflow。
+# 2026-10-10 改为手动触发（原来随 tag 自动跑）；v1.44 把当时的两个前提处理掉了：
+#   ① Android 需要 4 个 Repository Secrets —— **不再阻塞**：缺项时 `signing` job
+#      打 warning 并跳过 Android 构建，Windows 产物照常发布（见该 job 注释）；
+#   ② Windows 构建曾被 windows-latest 上的 VS 认不到卡住 —— 镜像已钉 windows-2022，
+#      且 pdfrx / 通知插件的 C++ 报错由 tools/patch_pub_cache.dart 就地修补。
+#   另外 publish 以前用 gh release create，本地已发过同名 Release 时会因同名冲突失败；
+#   现在「已存在就覆盖上传资产」，同一 tag 重复运行安全。
+#   结论：日常发版仍推荐 tools/publish_release.ps1（本地一条龙，多一道 CHANGELOG
+#   小节核对与 APK 签名核验）；需要无本地环境发版时，到 Actions 页面手动运行本
+#   workflow，tag 留空即按 pubspec 版本发布。
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          要发布的 tag（如 v1.44.0）。留空则取 pubspec.yaml 的版本自动拼 v<版本>。
+          手动运行时的 GITHUB_REF_NAME 是**分支名**（main），不是 tag，别指望它。
+        required: false
+        default: ''
 
 permissions:
   contents: write   # 创建 Release 需要
@@ -53,27 +67,76 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
       build: ${{ steps.check.outputs.build }}
+      tag: ${{ steps.check.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
       - id: check
-        name: 校验 pubspec.yaml 与 tag
+        name: 解析并校验版本号
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
+          set -euo pipefail
           PUB=$(grep '^version:' pubspec.yaml | awk '{print $2}')
           PUB_NAME=${PUB%%+*}
           PUB_BUILD=${PUB##*+}
-          TAG=${GITHUB_REF_NAME#v}
-          echo "pubspec=$PUB_NAME (build $PUB_BUILD)  tag=$TAG"
+          REF="${GITHUB_REF_NAME}"
+
+          # v1.44 修复：本工作流只有 workflow_dispatch 触发，此时
+          # GITHUB_REF_NAME 是**分支名**（main）。旧实现直接拿它和 pubspec 的
+          # 版本比，于是「照文档在 Actions 页面手动运行」第一步必然报
+          # 「版本与 tag 不一致，已终止发布」——发版通道等于不可用。
+          # 取值优先级：手填 tag > ref 本身就是 vX.Y.Z > 回落 pubspec 版本。
+          if [ -n "${INPUT_TAG:-}" ]; then
+            TAG="${INPUT_TAG#v}"
+          elif printf '%s' "$REF" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            TAG="${REF#v}"
+          else
+            TAG="$PUB_NAME"
+            echo "::notice::触发来源不是 tag（$REF），按 pubspec 版本生成 tag v$PUB_NAME"
+          fi
+
+          echo "pubspec=$PUB_NAME (build $PUB_BUILD)  tag=v$TAG"
           if [ "$PUB_NAME" != "$TAG" ]; then
-            echo "::error::pubspec.yaml 版本（$PUB_NAME）与 tag（$TAG）不一致，已终止发布"
+            echo "::error::pubspec.yaml 版本（$PUB_NAME）与要发布的 tag（v$TAG）不一致，已终止发布"
             exit 1
           fi
           echo "version=$PUB_NAME" >> "$GITHUB_OUTPUT"
           echo "build=$PUB_BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  # ── 1. Android 构建 ──
+  # ── 0.5 签名是否齐备（v1.44） ────────────────────────────────
+  # 作用：把「Secrets 有没有配」变成一个 job 输出，供 build-android 做**作业级**
+  # 跳过。为什么不在 build-android 内部用步骤级 if：签名缺失时构建必然失败
+  # （release 变体找不到 key.properties），必须连构建一起跳过；而 job 级 if
+  # 不能读 secrets 上下文，只能由上游 job 算好再传下来。
+  signing:
+    name: 检查 Android 签名 Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+    steps:
+      - id: check
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SP: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KA: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "${KS:-}" ] && [ -n "${SP:-}" ] && [ -n "${KA:-}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "签名 Secrets 齐全，将构建签名 APK。"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::缺少 Android 签名 Secrets（ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS），本次跳过 Android 构建；Windows 产物仍会发布。补齐后重跑同一 tag 即可追加 APK。"
+          fi
 
   # ── 1. Android 构建 ──
   build-android:
     name: 构建 Android
-    needs: verify
+    needs: [verify, signing]
+    # 签名不齐 → 整条 Android 构建跳过（不是失败）。旧实现在「注入签名配置」
+    # 步骤 exit 1，导致 publish 被 needs 拦住，连 Windows 产物都发不出去。
+    if: needs.signing.outputs.ready == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -492,6 +555,15 @@ jobs:
   publish:
     name: 创建 Release
     needs: [verify, build-android, build-windows]
+    # build-android 可能被**跳过**（签名 Secrets 不齐）。GitHub 默认会把
+    # 「needs 里有 skipped」的依赖方一起跳过，于是 Windows 产物也发不出去；
+    # 这里显式放行：只要 verify 与 build-windows 成功、Android 是成功或跳过，
+    # 就照常发布（缺 APK 时只是资产少一个）。
+    if: >-
+      always()
+      && needs.verify.result == 'success'
+      && needs.build-windows.result == 'success'
+      && (needs.build-android.result == 'success' || needs.build-android.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       # gh 需要仓库上下文（它靠 .git 里的 remote 判断要发到哪个仓库）：
@@ -508,7 +580,10 @@ jobs:
       - name: 生成 SHA256SUMS.txt
         run: |
           cd dist
-          sha256sum *.apk *.zip *.exe > SHA256SUMS.txt
+          # 缺 Android 产物（签名 Secrets 未配）时，`sha256sum *.apk` 会因
+          # 通配符无匹配而整步失败；用 find 只对**真实存在**的资产求校验值。
+          find . -maxdepth 1 -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.exe' \) \
+            -printf '%f\n' | sort | while IFS= read -r f; do sha256sum "$f"; done > SHA256SUMS.txt
           echo "=== 即将发布 ==="
           ls -lh
           echo "=== 校验值 ==="
@@ -529,10 +604,17 @@ jobs:
             echo ""
             echo "| 平台 | 文件 | 说明 |"
             echo "|---|---|---|"
-            echo "| Android（推荐） | \`${APP}-v${V}-android-arm64.apk\` | 2017 年后绝大多数手机 |"
-            echo "| Android（通用） | \`${APP}-v${V}-android-universal.apk\` | 含全部 CPU 架构，不确定机型时用 |"
-            echo "| Windows 安装版 | \`${APP}-v${V}-windows-setup.exe\` | Windows 10/11 64 位 |"
-            echo "| Windows 免安装 | \`${APP}-v${V}-windows-portable.zip\` | 解压即用 |"
+            # 只列**实际存在**的资产：没有 APK 时，表格里就不该出现下不了的文件名。
+            for f in *.apk *.zip *.exe; do
+              [ -f "$f" ] || continue
+              case "$f" in
+                *-android-arm64.apk) echo "| Android（推荐） | \`$f\` | 2017 年后绝大多数手机 |" ;;
+                *-android-universal.apk) echo "| Android（通用） | \`$f\` | 含全部 CPU 架构，不确定机型时用 |" ;;
+                *-windows-setup.exe) echo "| Windows 安装版 | \`$f\` | Windows 10/11 64 位 |" ;;
+                *-windows-portable.zip) echo "| Windows 免安装 | \`$f\` | 解压即用 |" ;;
+                *) echo "| 其他 | \`$f\` | |" ;;
+              esac
+            done
             echo ""
             echo "### 校验（SHA-256）"
             echo ""
@@ -547,11 +629,30 @@ jobs:
           } > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
 
-      - name: 创建 GitHub Release
+      - name: 创建 / 更新 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # v1.44：不再用 GITHUB_REF_NAME（手动触发时它是分支名），
+          # 用 verify 里解析出来的 tag。
+          TAG: v${{ needs.verify.outputs.tag }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --title "NatsumeQuizMaster ${GITHUB_REF_NAME}" \
-            --notes-file dist/RELEASE_NOTES.md \
-            dist/Natsume-*.apk dist/Natsume-*.zip dist/Natsume-*.exe dist/SHA256SUMS.txt
+          set -euo pipefail
+          mapfile -t assets < <(
+            find dist -maxdepth 1 -type f \( -name '*.apk' -o -name '*.zip' -o -name '*.exe' \) | sort
+            ls dist/SHA256SUMS.txt
+          )
+          echo "待发布资产："
+          printf '  %s\n' "${assets[@]}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 同一 tag 重跑（例如补好签名 Secrets 后再发一次）：
+            # 覆盖已有资产，而不是报「release already exists」整条红掉。
+            echo "Release $TAG 已存在，追加/覆盖资产"
+            gh release upload "$TAG" "${assets[@]}" --clobber
+          else
+            # --target 让 tag 指向本次构建的 commit（tag 不存在时由 gh 创建）
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "NatsumeQuizMaster $TAG" \
+              --notes-file dist/RELEASE_NOTES.md \
+              "${assets[@]}"
+          fi

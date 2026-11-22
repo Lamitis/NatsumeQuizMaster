@@ -14,6 +14,7 @@ import '../models/quiz_session.dart';
 import '../models/answer_record.dart';
 import '../models/follow_up_message.dart';
 import '../models/app_settings.dart';
+import '../models/ai_analysis_cache.dart';
 import 'database_service.dart';
 import 'device_service.dart';
 import '../utils/question_image_tokens.dart';
@@ -41,7 +42,6 @@ import 'net/smart_http_client.dart';
 import 'companion/companion_service.dart';
 import 'knowledge_base/grounding_service.dart';
 import 'knowledge_base/kb_embedding_service.dart';
-import 'knowledge_base/kb_retriever.dart';
 import 'knowledge_base/kb_service.dart';
 import '../models/companion_settings.dart';
 import 'secure_key_storage.dart';
@@ -1128,6 +1128,17 @@ class AppState extends ChangeNotifier {
     // 局域网同步设置（v11）
     final autoSync = (await _db.getSetting('auto_sync') ?? '0') == '1';
     final deviceName = await _db.getSetting('device_name') ?? '';
+    // v1.44 修复：以下四项以前**只写不读**（updateSettings 落了库，_loadSettings
+    // 却从来没人读回来），于是重启后一律回默认——这就是「回答详细程度总是变回
+    // 简洁」，以及做题节奏、向量开关「自己又打开了」的根因。
+    final analysisDetailName = await _db.getSetting('analysis_detail') ?? '';
+    final keywordHighlight =
+        (await _db.getSetting('keyword_highlight') ?? '1') == '1';
+    final autoAdvanceAfterAnswer =
+        (await _db.getSetting('auto_advance_after_answer') ?? '1') == '1';
+    final kbVectorEnabled =
+        (await _db.getSetting('kb_vector_enabled') ?? '1') == '1';
+    final embeddingModelRaw = await _db.getSetting('embedding_model') ?? '';
     // v13 多接口：AI 提供方
     final providerKindName = await _db.getSetting('provider_kind') ?? '';
     // v1.30.2 MinerU：扫描件识别增强（开关 + 凭据，凭据与 API Key 同口径加密）
@@ -1151,6 +1162,17 @@ class AppState extends ChangeNotifier {
       nickname: nickname,
       autoSync: autoSync,
       deviceName: deviceName,
+      // v1.44：老库没有该键时回到「简洁」，与旧版默认一致
+      analysisDetail: AnalysisDetail.values
+              .where((d) => d.name == analysisDetailName)
+              .firstOrNull ??
+          AnalysisDetail.brief,
+      keywordHighlight: keywordHighlight,
+      autoAdvanceAfterAnswer: autoAdvanceAfterAnswer,
+      kbVectorEnabled: kbVectorEnabled,
+      embeddingModel: embeddingModelRaw.trim().isEmpty
+          ? AppSettings.defaultEmbeddingModel
+          : embeddingModelRaw.trim(),
       providerKind: AiProviderKind.values
               .where((k) => k.name == providerKindName)
               .firstOrNull ??
@@ -1188,6 +1210,11 @@ class AppState extends ChangeNotifier {
     await _db.setSetting('model', newSettings.model);
     await _db.setSetting('sound_enabled', newSettings.soundEnabled ? '1' : '0');
     await _db.setSetting('nickname', newSettings.nickname);
+    // v1.44 修复：回答风格两项以前**根本没落库**（设置页改了、界面生效，
+    // 但库里没有这一行，重启即丢）。与 _loadSettings 的读取键名严格对应。
+    await _db.setSetting('analysis_detail', newSettings.analysisDetail.name);
+    await _db.setSetting(
+        'keyword_highlight', newSettings.keywordHighlight ? '1' : '0');
     // 局域网同步设置（v11）；设备名同步给 DeviceService（信标广播用）
     await _db.setSetting('auto_sync', newSettings.autoSync ? '1' : '0');
     await _db.setSetting('device_name', newSettings.deviceName);
@@ -2094,15 +2121,21 @@ class AppState extends ChangeNotifier {
       if (ids.isEmpty) return '';
       // 题干可能很长：检索只取前 300 字（关键词集中在题干与选项前半段）
       final probe = query.length > 300 ? query.substring(0, 300) : query;
-      final hits = <KbHit>[];
-      for (final id in ids) {
-        hits.addAll(await kbSvc.search(id, probe, topK: 4));
-      }
+      // v1.44：混合检索（向量语义 + BM25 关键词）取代「有向量就只用向量」。
+      // 纯向量会漏掉术语/数字的逐字命中；纯关键词又漏同义改写，解析引错资料
+      // 多半就出在这里。跨库检索只发一次查询向量（见 KbService）。
+      final hits = await kbSvc.searchAcrossKnowledgeBases(
+        ids,
+        probe,
+        topKPerKb: 4,
+      );
       if (hits.isEmpty) return '';
       hits.sort((a, b) => b.score.compareTo(a.score));
       final top = hits.first.score;
-      if (top <= 0) return '';
-      final cutoff = top * 0.4;
+      // 绝对下限：分太低说明根本没命中，宁可「没有资料」也不要塞错资料
+      if (top < GroundingService.minFusedScore) return '';
+      // 相对阈值：只留和最高分同量级的片段
+      final cutoff = top * 0.45;
       final picked = hits
           .where((h) => h.score >= cutoff)
           .take(GroundingService.softMaxHits)
@@ -2138,10 +2171,21 @@ class AppState extends ChangeNotifier {
     _currentAnalysis = null;
     _analysisGroundingBlock = null;
     _analysisGrounded = false;
-    await _loadAnalysis();
+    await _loadAnalysis(force: true);
   }
 
-  Future<void> _loadAnalysis() async {
+  /// 加载（或直接复用）当前题解析。
+  ///
+  /// v1.44「解析固定化」——产品语义改成：**已经生成过的解析就一直显示，
+  /// 除非用户手动点「重新生成解析」**。
+  ///
+  /// 旧行为有两个坑，都源于「带知识库约束时不写缓存」（见 `AIService`）：
+  /// 1. 二次进入题目必然重新请求一次（用户以为解析丢了）；
+  /// 2. 每次进入还要先把所有知识库检索一遍（手机上是「转圈 + 流量」双杀）。
+  ///
+  /// 所以这里在**任何检索之前**先查缓存：命中就立刻展示并返回，连
+  /// `_resolveGrounding` 都不跑。[force] 只由手动「重新生成解析」传入。
+  Future<void> _loadAnalysis({bool force = false}) async {
     if (_aiService == null || currentQuestion == null) return;
     final q = currentQuestion!;
 
@@ -2155,6 +2199,27 @@ class AppState extends ChangeNotifier {
       _analysisGrounded = false;
       notifyListeners();
       return;
+    }
+
+    // ① 缓存优先（v1.44）：一次 DB 读，不发请求、不做检索
+    if (!force && q.id != null) {
+      AiAnalysisCache? cached;
+      try {
+        cached = await _db.getCachedAnalysisEntry(q.id!);
+      } catch (e) {
+        DebugLogService.instance.log('AI', '解析缓存读取失败（按未命中处理）: $e');
+      }
+      if (cached != null) {
+        // 读缓存期间切题了：丢弃，交给新题的加载
+        if (currentQuestion?.id != q.id) return;
+        _currentAnalysis = cached.analysis;
+        _analysisGrounded = cached.grounded;
+        _analysisLoading = false;
+        // 资料块不落库：追问真正需要时再检索一次（见 sendFollowUp）
+        _analysisGroundingBlock = null;
+        notifyListeners();
+        return;
+      }
     }
 
     _analysisLoading = true;
@@ -2190,7 +2255,8 @@ class AppState extends ChangeNotifier {
     //   · 异常兜底：finally 复位 loading，防止加载圈永久卡死（沿用原逻辑）
     final questionId = q.id;
     final sub = _aiService!
-        .streamAnalysis(q, grounding: _analysisGroundingBlock)
+        .streamAnalysis(q,
+            grounding: _analysisGroundingBlock, forceRefresh: force)
         .listen(
       (accumulated) {
         // 注意：不要在这里写 onError/onDone —— 下面的 `asFuture()` 会**覆盖**
@@ -2274,15 +2340,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 重新生成解析（清除缓存）
+  /// 重新生成解析（**唯一**会无视缓存的入口，v1.44）。
+  ///
+  /// 旧实现先 `cacheAnalysis(id, '')` 清空缓存再生成：新请求一失败，用户就
+  /// 连原来那份解析都没了。现在改成直接强制刷新——生成成功才覆盖缓存，
+  /// 失败则旧内容原样保留。
   Future<void> regenerateAnalysis() async {
     if (_aiService == null || currentQuestion == null) return;
-    // 清除缓存，强制 AI 重新生成
-    if (currentQuestion!.id != null) {
-      await _db.cacheAnalysis(currentQuestion!.id!, '');
-    }
     _currentAnalysis = null;
-    await _loadAnalysis();
+    await _loadAnalysis(force: true);
   }
 
   /// 追问题目（聊天气泡式：用户消息与 AI 回复均入历史并持久化）
@@ -2293,6 +2359,12 @@ class AppState extends ChangeNotifier {
     _followUpLoading = true;
 
     final qId = q!.id!;
+    // v1.44：解析可能直接命中了缓存（那一刻没跑过知识库检索），所以资料块
+    // 在这里**按需补一次**——追问依然是「依据导入资料」的，不会退化成裸模型。
+    if (_settings.analysisGrounding && _analysisGroundingBlock == null) {
+      final grounding = await _resolveGrounding(q);
+      if (grounding.isNotEmpty) _analysisGroundingBlock = grounding;
+    }
     final userMsg = FollowUpMessage(role: 'user', content: question);
     _followUpHistory = [..._followUpHistory, userMsg];
     notifyListeners();

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import '../models/question.dart';
@@ -1011,13 +1012,17 @@ $kpRule
     return a.length <= 200 ? a : a.substring(0, 200);
   }
 
-  /// [grounding]：知识库约束块（非空时注入提示词、约束答案依据；因缓存键
-  /// 不含约束上下文，带 grounding 时不走缓存、不写缓存，保证不同知识库
-  /// 得到各自对应的答案）。
-  Future<String> getAnalysis(Question question, {String? grounding}) async {
+  /// [grounding]：知识库约束块（非空时注入提示词、约束答案依据）。
+  ///
+  /// v1.44 起**带约束的解析同样走缓存**（此前 `grounding != null` 直接跳过
+  /// 缓存，等于导入过知识库的用户每次点开解析都重新请求一遍）。缓存里记了
+  /// 生成条件（`AiAnalysisCache`），所以「依据知识库」的标、资料指纹都还在；
+  /// 只有 [forceRefresh]（用户手动点「重新生成解析」）才真的绕过缓存。
+  Future<String> getAnalysis(Question question,
+      {String? grounding, bool forceRefresh = false}) async {
     // 先查缓存。v1.0.2 设计审查修复：缓存读取失败降级直连 AI，
     // 不再让异常冒泡卡死 loading
-    if (grounding == null && question.id != null) {
+    if (!forceRefresh && question.id != null) {
       try {
         final cached = await _db.getCachedAnalysis(question.id!);
         if (cached != null && cached.isNotEmpty) {
@@ -1035,13 +1040,45 @@ $kpRule
   Future<String> _generateAndCacheAnalysis(Question question,
       {String? grounding}) async {
     final analysis = await _callAIForAnalysis(question, grounding: grounding);
-    if (grounding == null &&
-        question.id != null &&
-        analysis.isNotEmpty &&
-        !isAiError(analysis)) {
-      await _db.cacheAnalysis(question.id!, analysis);
-    }
+    await _cacheAnalysis(question, analysis: analysis, grounding: grounding);
     return analysis;
+  }
+
+  /// 写解析缓存（v1.44）。
+  ///
+  /// 与旧实现的差别只有两点，但都是「二次进入不再重新解析」的关键：
+  /// 1. **不再要求 `grounding == null`**——带知识库约束的解析也落盘；
+  /// 2. 顺带记下生成条件：是否接地、按哪一档详细程度、资料块指纹。
+  ///
+  /// 缓存写失败一律吞掉（磁盘满 / SQLITE_BUSY / 题行被删）：它不该被当成
+  /// 「生成失败」，否则会再发一次完整 AI 请求并覆盖用户已经看完的解析。
+  Future<void> _cacheAnalysis(Question question,
+      {required String analysis, String? grounding}) async {
+    final id = question.id;
+    if (id == null || analysis.isEmpty || isAiError(analysis)) return;
+    try {
+      final block = grounding ?? '';
+      await _db.cacheAnalysis(
+        id,
+        analysis,
+        grounded: block.isNotEmpty,
+        detail: _settings.analysisDetail.name,
+        // 无资料时留空，避免不同题的「无资料」看起来像同一份指纹
+        groundingSignature: block.isEmpty ? null : groundingSignature(block),
+      );
+    } catch (e) {
+      DebugLogService.instance.log('AI', '解析写缓存失败（不影响展示）: $e');
+    }
+  }
+
+  /// 资料块指纹（v1.44）：内容变则指纹变。
+  ///
+  /// 用途只是「这条缓存是基于哪份资料生成的」可追溯 + 界面提示，**不参与**
+  /// 是否复用缓存的判断（复用一律优先，重新生成只能由用户手动触发）。
+  static String groundingSignature(String grounding) {
+    if (grounding.isEmpty) return '';
+    final digest = sha256.convert(utf8.encode(grounding)).toString();
+    return digest.substring(0, 16);
   }
 
   // ════════════════════════════════════════════════════════════
@@ -1238,8 +1275,12 @@ $kpRule
   ///
   /// - 命中缓存：整段给出，**不流式**（已保存的内容没必要重新生成）
   /// - 流式失败：回退到一次性的 [getAnalysis] 路径，结果与改造前一致
-  Stream<String> streamAnalysis(Question question, {String? grounding}) async* {
-    if (grounding == null && question.id != null) {
+  ///
+  /// v1.44：缓存判定不再受 [grounding] 影响（带知识库资料的解析同样会被
+  /// 保存与复用），只有 [forceRefresh] 为 true 时才会真正重新请求。
+  Stream<String> streamAnalysis(Question question,
+      {String? grounding, bool forceRefresh = false}) async* {
+    if (!forceRefresh && question.id != null) {
       try {
         final cached = await _db.getCachedAnalysis(question.id!);
         if (cached != null && cached.isNotEmpty) {
@@ -1262,16 +1303,10 @@ $kpRule
         yield await _generateAndCacheAnalysis(question, grounding: grounding);
         return;
       }
-      // 写缓存**移出 try**：缓存写失败（磁盘满 / SQLITE_BUSY / 题行被删）不该
-      // 被当成「流式失败」，否则会再发一次完整 AI 请求、并用新文本覆盖用户
-      // 已经看完的解析（既多花钱又让内容前后不一致）。
-      if (grounding == null && question.id != null) {
-        try {
-          await _db.cacheAnalysis(question.id!, last);
-        } catch (e) {
-          DebugLogService.instance.log('AI', '解析写缓存失败（不影响展示）: $e');
-        }
-      }
+      // 写缓存失败由 _cacheAnalysis 自己吞掉：缓存写不进去（磁盘满 /
+      // SQLITE_BUSY / 题行被删）不该被当成「流式失败」，否则会再发一次完整
+      // AI 请求、并用新文本覆盖用户已经看完的解析（既多花钱又前后不一致）。
+      await _cacheAnalysis(question, analysis: last, grounding: grounding);
     } catch (e) {
       DebugLogService.instance.log('AI', '流式讲解失败，回退一次性请求: $e');
       yield await _generateAndCacheAnalysis(question, grounding: grounding);

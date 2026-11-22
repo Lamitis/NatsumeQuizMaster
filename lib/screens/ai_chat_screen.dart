@@ -460,7 +460,9 @@ class _ChatBubble extends StatelessWidget {
           ],
           ConstrainedBox(
             constraints: BoxConstraints(maxWidth: maxW),
-            child: bubble,
+            // v1.44：AI 的回答（解析上下文/追问）要能长按选中复制，
+            // 用户自己的提问同样可以选——两端一致，免得只有一半能复制。
+            child: SelectionArea(child: bubble),
           ),
         ],
       ),

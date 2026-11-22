@@ -162,7 +162,7 @@ void main() {
     expect((await db.getAllBanks()).single.categoryId, catId);
   });
 
-  testWidgets('题库管理页按分类树渲染，收起父分类时子项一起隐藏', (tester) async {
+  testWidgets('题库管理页分类树默认收起，点开才显示子项', (tester) async {
     // 真实 DB I/O 不能在 fake-async 里 await（会一直挂着），用 runAsync 建数据
     late AppState state;
     await tester.runAsync(() async {
@@ -179,19 +179,26 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
+    // v1.44：分类树**默认收起**——进页面只看得到根分类，
+    // 子分类与题库都先隐藏（分类一多时不再一屏铺满整棵树）。
     expect(find.text('内科'), findsOneWidget);
+    expect(find.text('心血管'), findsNothing);
+    expect(find.text('心衰题库'), findsNothing);
+
+    // 点分类行 = 展开整支；子分类本身仍是收起的，题库要再点一层
+    await tester.tap(find.text('内科'));
+    await tester.pumpAndSettle();
     expect(find.text('心血管'), findsOneWidget);
+    expect(find.text('心衰题库'), findsNothing);
+
+    await tester.tap(find.text('心血管'));
+    await tester.pumpAndSettle();
     expect(find.text('心衰题库'), findsOneWidget);
 
-    // 点分类行 = 收起整支
+    // 再点根分类收起：整支（含已展开的子层）一起隐藏
     await tester.tap(find.text('内科'));
     await tester.pumpAndSettle();
     expect(find.text('心血管'), findsNothing);
     expect(find.text('心衰题库'), findsNothing);
-
-    // 再点一次展开
-    await tester.tap(find.text('内科'));
-    await tester.pumpAndSettle();
-    expect(find.text('心血管'), findsOneWidget);
   });
 }

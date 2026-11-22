@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../ai_service.dart';
+import '../../models/kb_document.dart';
 import '../knowledge_base/kb_service.dart';
 
 /// 出题结果：写入题库的 JSON 文件路径 + 题数 + 过程日志。
@@ -26,11 +27,33 @@ class GeneratorResult {
   });
 }
 
+/// 出题可选的目标题型（v1.44：向用户暴露可选题型）。
+///
+/// 值与 `questions.question_type` 的存库取值严格一致，中文名只用于提示词与界面，
+/// 不做任何映射表转换——两边各写一套映射是这类功能最常见的错源。
+const List<({String id, String label})> kGeneratorQuestionTypes = [
+  (id: 'single_choice', label: '单选题'),
+  (id: 'multi_choice', label: '多选题'),
+  (id: 'true_false', label: '判断题'),
+  (id: 'fill_blank', label: '填空题'),
+  (id: 'ming_jie', label: '名词解释'),
+  (id: 'jian_da', label: '简答题'),
+  (id: 'jie_da', label: '解答题'),
+];
+
+/// 题型 id → 中文名（找不到就原样返回，绝不抛错）
+String generatorTypeLabel(String id) {
+  for (final t in kGeneratorQuestionTypes) {
+    if (t.id == id) return t.label;
+  }
+  return id;
+}
+
 /// 自动出题 Agent（v13 · 学 dsh）。
 ///
 /// 类比 dsh「headless 会话 + 工具白名单 + 沙箱工作目录」的模式：这里用一个
-/// OpenAI 兼容的工具调用循环，给模型两个只读/受限的工具——检索知识库、把
-/// 题目写入**自己的沙箱** JSON 文件。模型只能写它那一亩三分地的
+/// OpenAI 兼容的工具调用循环，给模型三个受限工具——检索知识库、读某篇文档、
+/// 把题目写入**自己的沙箱** JSON 文件。模型只能写它那一亩三分地的
 /// `questions.json`，写出的题库再由 `BankFileService` 导入入库（「AI 运行并
 /// 改写部分文件」即指它改写自己沙箱内的文件，而非任意文件）。
 class GeneratorAgent {
@@ -57,6 +80,12 @@ class GeneratorAgent {
     required int kbId,
     required int targetCount,
     required String bankName,
+    /// 只在选定的文档里出题（v1.44）。空/null = 整个知识库。
+    List<int>? documentIds,
+    /// 选中文档的名字（只用于提示词里写清楚范围，让模型别串台）
+    List<String> documentNames = const [],
+    /// 只出这些题型（v1.44）。空 = 交给模型自行搭配（旧行为）。
+    List<String> questionTypes = const [],
     void Function(String message)? onLog,
     Directory? sandboxDir,
   }) async {
@@ -80,13 +109,39 @@ class GeneratorAgent {
     }
     final bankFile = File('${sandbox.path}/questions.json');
 
+    // 出题范围（v1.44）：选定文件时只在这些文档里检索/阅读，并如实告诉模型
+    // 范围，否则它会拿整个知识库的资料给「只针对这一章」的题，答案就串台了。
+    final scopeIds = <int>{
+      for (final id in documentIds ?? const <int>[]) id,
+    };
+    final scopeNames = documentNames.where((n) => n.trim().isNotEmpty).toList();
+    final scopeText = scopeIds.isEmpty
+        ? '出题范围：整个知识库（可用资料为库里全部文档）。'
+        : '出题范围：**仅限**以下 ${scopeIds.length} 篇文档——'
+            '${scopeNames.isEmpty ? '（按文档 id 限定）' : scopeNames.join('、')}。\n'
+            '检索与阅读都必须限定在这些文档内，其他文档的内容一律不得使用。';
+    if (scopeIds.isNotEmpty) {
+      emit('出题范围：${scopeIds.length} 篇指定文档'
+          '${scopeNames.isEmpty ? '' : '（${scopeNames.join('、')}）'}');
+    }
+
+    // 题型指令（v1.44）：用户选了就只出这些题型，并给出数量分配口径
+    final typeText = questionTypes.isEmpty
+        ? '题型：自行搭配（以单选为主，可含多选/判断/填空），保证答案明确、可判分。'
+        : '题型：只出 ${questionTypes.map((t) => '$t（${generatorTypeLabel(t)}）').join('、')}；\n'
+            '各题型数量尽量均衡（共 $targetCount 道，按题型数平均分配，余数给排在前面的题型）。';
+
     final systemPrompt = '''
 你是一个严谨的题库生成助手。你的任务是基于用户的知识库，生成 $targetCount 道高质量的题目，题库名为「$bankName」。
 
+$scopeText
+$typeText
+
 工作流程：
 1. 先用 search_knowledge_base 检索知识库中与目标知识点相关的资料，确保题目内容准确、有据可查；
-2. 依据检索到的资料出题，只出资料覆盖的内容，不得编造资料中没有的知识；
-3. 用 write_question_bank 把**完整**的题目集写入 JSON。
+2. 需要通读某篇文档时用 read_document（返回该文档全文，过长会截断）；
+3. 依据检索到的资料出题，只出资料覆盖的内容，不得编造资料中没有的知识；
+4. 用 write_question_bank 把**完整**的题目集写入 JSON。
 
 调用 write_question_bank 之前，**必须**确保参数 json 是严格合法的 JSON（能被直接解析）：
 - 绝不可以使用空 JSON（`{}`、`[]`、`{"questions":[]}`）、省略号占位或任何非 JSON 文本；
@@ -100,18 +155,23 @@ class GeneratorAgent {
 - question_type 取值：single_choice / multi_choice / true_false / fill_blank / ming_jie / jian_da / jie_da
 - 单选/多选需 options 非空；多选 correct_answer 用逗号分隔（如 "A,C"）
 - 判断 true_false 的 correct_answer 为 "对" 或 "错"
+- 填空/名词解释/简答/解答不需要 options，correct_answer 写答案要点
 - 每个知识点出题数量应均衡，避免集中在同一处
 - analysis 应简要说明答案依据，便于复习
 ''';
 
-    final userPrompt =
-        '请基于知识库（kbId=$kbId）生成 $targetCount 道题，题库名为「$bankName」。'
+    final userPrompt = '请基于知识库（kbId=$kbId）生成 $targetCount 道题，题库名为「$bankName」。'
+        '${scopeIds.isEmpty ? '' : '只在指定的 ${scopeIds.length} 篇文档范围内出题。'}'
+        '${questionTypes.isEmpty ? '' : '题型限定：${questionTypes.map(generatorTypeLabel).join('、')}。'}'
         '完成后用 write_question_bank 分批写入 JSON（每次不超过 $suggestedBatch 道）。';
 
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': systemPrompt},
       {'role': 'user', 'content': userPrompt},
     ];
+
+    // 出题范围内的文档（读一次，工具循环里反复用；read_document 直接从这里取全文）
+    final scopeDocs = await _scopeDocs(kbId, scopeIds);
 
     var hardError = false;
     for (var round = 0; round <= maxRetryRounds && !hardError; round++) {
@@ -152,7 +212,11 @@ class GeneratorAgent {
         for (final c in toolCalls) {
           final name = c['name']?.toString() ?? '';
           final result = await _executeTool(name, c['arguments']?.toString(),
-              kbId: kbId, bankFile: bankFile, sandbox: sandbox);
+              kbId: kbId,
+              bankFile: bankFile,
+              sandbox: sandbox,
+              scopeDocIds: scopeIds,
+              scopeDocs: scopeDocs);
           emit('调用工具 $name → ${result.length > 60 ? '${result.substring(0, 60)}…' : result}');
           messages.add({
             'role': 'tool',
@@ -226,18 +290,85 @@ class GeneratorAgent {
     return 0;
   }
 
+  /// 出题范围内的文档列表（v1.44）：[scopeIds] 为空时取整个知识库。
+  Future<List<KbDocument>> _scopeDocs(int kbId, Set<int> scopeIds) async {
+    try {
+      final all = await kbService.listDocuments(kbId);
+      if (scopeIds.isEmpty) return all;
+      return all.where((d) => d.id != null && scopeIds.contains(d.id)).toList();
+    } catch (_) {
+      // 读不到文档列表不能让出题直接失败：按「没有文档上下文」继续，
+      // 检索工具仍能按 docIds 过滤。
+      return const [];
+    }
+  }
+
+  /// `read_document` 工具的实现（v1.44）。
+  ///
+  /// 为什么值得加这个工具：只靠 `search_knowledge_base` 时，模型往往要为
+  /// 一篇两三千字的讲义连发五六个不同关键词的检索，轮次预算（12 轮）里有一半
+  /// 花在「找资料」上，真正出题的轮次反而不够。限定到具体文件后，直接给全文
+  /// 更省也更准。返回内容超过 [maxChars] 就截断——不能把整本书塞进上下文。
+  static String _readDocument(String target, List<KbDocument> docs,
+      {int maxChars = 6000}) {
+    String listHint() =>
+        '可读文档：${[for (var i = 0; i < docs.length; i++) '${i + 1}.${docs[i].name}'].join('、')}';
+    if (docs.isEmpty) return '当前出题范围里没有可读文档。';
+    final t = target.trim();
+    if (t.isEmpty) return '请给出文档名或序号。${listHint()}';
+    KbDocument? picked;
+    final index = int.tryParse(t);
+    if (index != null && index >= 1 && index <= docs.length) {
+      picked = docs[index - 1];
+    } else {
+      final lower = t.toLowerCase();
+      for (final d in docs) {
+        final name = d.name.toLowerCase();
+        if (name.contains(lower) || lower.contains(name)) {
+          picked = d;
+          break;
+        }
+      }
+    }
+    if (picked == null) return '没有找到「$target」。${listHint()}';
+    var body = picked.content.trim();
+    if (body.isEmpty) return '「${picked.name}」正文为空，无法用作出题依据。';
+    final truncated = body.length > maxChars;
+    if (truncated) body = body.substring(0, maxChars);
+    return '【${picked.name}】${truncated ? '（正文较长，以下为前 $maxChars 字）\n' : '\n'}$body';
+  }
+
   static const List<Map<String, dynamic>> _tools = [
     {
       'type': 'function',
       'function': {
         'name': 'search_knowledge_base',
-        'description': '在用户知识库中检索与某个知识点相关的资料片段，用于确保题目内容准确。',
+        'description': '在用户知识库中检索与某个知识点相关的资料片段，用于确保题目内容准确。'
+            '若用户限定了出题范围，检索会自动只在范围内进行。',
         'parameters': {
           'type': 'object',
           'properties': {
             'query': {'type': 'string', 'description': '检索关键词或知识点'},
           },
           'required': ['query'],
+        },
+      },
+    },
+    {
+      'type': 'function',
+      'function': {
+        'name': 'read_document',
+        'description': '通读一篇文档的正文（过长会截断）。用于需要完整上下文才能出好题的情况，'
+            '比反复检索更省轮次。只能读用户在本次出题范围内选定的文档。',
+        'parameters': {
+          'type': 'object',
+          'properties': {
+            'document': {
+              'type': 'string',
+              'description': '文档名（可用部分匹配），或文档列表里的序号（从 1 开始）',
+            },
+          },
+          'required': ['document'],
         },
       },
     },
@@ -374,20 +505,30 @@ class GeneratorAgent {
   Future<String> _executeTool(String name, String? arguments,
       {required int kbId,
       required File bankFile,
-      required Directory sandbox}) async {
+      required Directory sandbox,
+      Set<int> scopeDocIds = const {},
+      List<KbDocument> scopeDocs = const []}) async {
     final args = decodeToolArguments(arguments);
 
     switch (name) {
       case 'search_knowledge_base':
         final query = (args['query'] ?? '').toString();
         if (query.isEmpty) return '查询为空，请提供检索关键词';
-        final hits = await kbService.search(kbId, query, topK: 4);
+        // v1.44：混合检索（语义 + 关键词），并限定在选定的文档范围内
+        final hits = await kbService.searchHybrid(
+          kbId,
+          query,
+          topK: 4,
+          docIds: scopeDocIds.isEmpty ? null : scopeDocIds,
+        );
         if (hits.isEmpty) return '未检索到相关资料，请更换关键词';
         return hits
             .asMap()
             .entries
             .map((e) => '【资料${e.key + 1}】${e.value.chunk.text}')
             .join('\n\n');
+      case 'read_document':
+        return _readDocument((args['document'] ?? '').toString(), scopeDocs);
       case 'write_question_bank':
         final json = (args['json'] ?? '').toString().trim();
         // 空内容不再抛错：把它当成「模型这一步没给对」，让它在同一轮里重试

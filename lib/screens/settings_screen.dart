@@ -2370,43 +2370,16 @@ class _SettingsScreenState extends State<SettingsScreen>
                         child: Padding(
                           padding: const EdgeInsets.all(12),
                           child: Column(children: [
-                            ...AppTheme.values.map((t) {
-                              final label = ThemeService.labelOf(t);
-                              // v1.0.2 UI 审查修复：主题选择行加三色预览
-                              // （导航/背景/强调），降低切换决策成本
-                              final previews = ThemeService.previewColorsOf(t);
-                              return RadioListTile<AppTheme>(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                title: Row(
-                                  children: [
-                                    ...previews.map((c) => Padding(
-                                          padding:
-                                              const EdgeInsets.only(right: 4),
-                                          child: Container(
-                                            width: 14,
-                                            height: 14,
-                                            decoration: BoxDecoration(
-                                              color: c,
-                                              shape: BoxShape.circle,
-                                              border: Border.all(
-                                                  color: ac.textPrimary
-                                                      .withOpacity(0.15),
-                                                  width: 0.8),
-                                            ),
-                                          ),
-                                        )),
-                                    const SizedBox(width: 6),
-                                    Text(label,
-                                        style: const TextStyle(
-                                            fontSize: NatsumeType.body)),
-                                  ],
-                                ),
-                                value: t,
-                                groupValue: themeService.current,
-                                onChanged: (v) => themeService.switchTo(v!),
-                              );
-                            }),
+                            for (final t in AppTheme.values)
+                              _SelectionRow(
+                                selected: themeService.current == t,
+                                title: ThemeService.labelOf(t),
+                                // v1.44 UI 统一：三色预览从三个独立圆点改成
+                                // 一条色带，行尾只留一个对勾，替掉 RadioListTile
+                                // 那个空心圆——此前一行里最多能出现四个圈。
+                                swatches: ThemeService.previewColorsOf(t),
+                                onTap: () => themeService.switchTo(t),
+                              ),
                           ]),
                         ),
                       ),
@@ -2435,16 +2408,11 @@ class _SettingsScreenState extends State<SettingsScreen>
                               (ThemeMode.light, '浅色'),
                               (ThemeMode.dark, '深色'),
                             ])
-                              RadioListTile<ThemeMode>(
-                                dense: true,
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(label,
-                                    style: const TextStyle(
-                                        fontSize: NatsumeType.body)),
-                                value: mode,
-                                groupValue: themeService.themeMode,
-                                onChanged: (v) =>
-                                    themeService.switchThemeMode(v!),
+                              _SelectionRow(
+                                selected: themeService.themeMode == mode,
+                                title: label,
+                                onTap: () =>
+                                    themeService.switchThemeMode(mode),
                               ),
                           ]),
                         ),
@@ -3860,6 +3828,80 @@ class _HelpItem extends StatelessWidget {
                     height: 1.4)),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 单选项行（v1.44 UI 统一）：整行可点，行尾**只用一个对勾**表示选中。
+///
+/// 以前这类选项用的是 `RadioListTile`：每行末尾挂一个空心圆，主题那几行前面
+/// 还各叠三个配色圆点（导航/背景/强调），一行里最多能出现四个圈，视觉很碎，
+/// 也和页面里其它「选中即高亮」的控件风格不一致。
+///
+/// 现在统一成：左侧可选的色带预览 + 标题（选中变强调色加粗）+ 右侧对勾，
+/// 未选中时右侧留白不画圈。主题外观与深色模式共用它，两处观感完全一致。
+class _SelectionRow extends StatelessWidget {
+  const _SelectionRow({
+    required this.selected,
+    required this.title,
+    required this.onTap,
+    this.swatches = const [],
+  });
+
+  final bool selected;
+  final String title;
+  final VoidCallback onTap;
+
+  /// 色带预览（主题行用三色：导航/背景/强调）
+  final List<Color> swatches;
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(NatsumeRadius.small),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 10),
+          child: Row(
+            children: [
+              if (swatches.isNotEmpty) ...[
+                // 三色合成一条圆角色带：比三个独立圆点更整齐，也更好比对
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(3),
+                  child: Row(
+                    children: [
+                      for (final c in swatches)
+                        Container(width: 8, height: 18, color: c),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: NatsumeType.body,
+                    color: selected ? ac.accent : ac.textPrimary,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 未选中不画圈：留同宽空位，保证各行文字左对齐不跳动
+              SizedBox(
+                width: 18,
+                child: selected
+                    ? Icon(Icons.check_rounded, size: 18, color: ac.accent)
+                    : null,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 import '../models/question.dart';
 import '../models/question_image.dart';
 import '../models/question_bank.dart';
+import '../models/ai_analysis_cache.dart';
 import '../models/bank_category.dart';
 import '../models/quiz_session.dart';
 import '../models/answer_record.dart';
@@ -65,7 +66,7 @@ class DatabaseService {
 
   /// 当前 schema 版本（唯一来源：`openDatabase(version:)` 与备份版本闸门共用，
   /// 避免「建库涨到 v15 但备份校验还卡在 v14」这种自拒备份的老坑）
-  static const int schemaVersion = 19;
+  static const int schemaVersion = 20;
 
   /// 测试用：覆盖数据库文件路径（多测试文件并行时按文件隔离，防互相清库）
   static String? overrideDbPath;
@@ -352,6 +353,38 @@ class DatabaseService {
     if (oldVersion < 19) {
       // v19 知识库向量检索：文本块的 embedding 单独建表（不影响 BM25）
       await _createKbEmbeddingsTable(db);
+    }
+    if (oldVersion < 20) {
+      // v20 解析固定化：ai_cache 补「生成来源」元数据（v1.44）
+      await _upgradeToV20(db);
+    }
+  }
+
+  /// v20 迁移：`ai_cache` 补三列，让「已生成的解析」可以被信任地长期复用。
+  ///
+  /// 为什么必须记元数据：v1.43 之前只有「没有知识库约束」的解析才写缓存
+  /// （见 `AIService.streamAnalysis` 的 `grounding == null` 判断），导入过
+  /// 知识库的用户每次点开解析都会重新请求一遍——这正是「二次进入又要解析」。
+  /// 现在带约束的解析也落缓存，于是必须记下「它是在什么条件下生成的」：
+  /// - `grounded`：是否注入过知识库资料（界面据此打「依据知识库」标）；
+  /// - `detail`：生成时的回答详细程度（换档后仍可显示旧文本，只是提示可重新生成）；
+  /// - `grounding_sig`：资料块指纹（知识库内容变了才需要重新生成）。
+  Future<void> _upgradeToV20(Database db) async {
+    final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='ai_cache'");
+    if (rows.isEmpty) return;
+    final cols = (await db.rawQuery('PRAGMA table_info(ai_cache)'))
+        .map((r) => r['name'] as String)
+        .toSet();
+    if (!cols.contains('grounded')) {
+      await db.execute(
+          'ALTER TABLE ai_cache ADD COLUMN grounded INTEGER NOT NULL DEFAULT 0');
+    }
+    if (!cols.contains('detail')) {
+      await db.execute('ALTER TABLE ai_cache ADD COLUMN detail TEXT');
+    }
+    if (!cols.contains('grounding_sig')) {
+      await db.execute('ALTER TABLE ai_cache ADD COLUMN grounding_sig TEXT');
     }
   }
 
@@ -831,6 +864,9 @@ class DatabaseService {
         question_id INTEGER NOT NULL UNIQUE,
         analysis TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        grounded INTEGER NOT NULL DEFAULT 0,
+        detail TEXT,
+        grounding_sig TEXT,
         FOREIGN KEY (question_id) REFERENCES questions(id) ON DELETE CASCADE
       )
     ''');
@@ -2054,7 +2090,44 @@ class DatabaseService {
     return maps.first['analysis'] as String;
   }
 
-  Future<void> cacheAnalysis(int questionId, String analysis) async {
+  /// 读取带元数据的缓存行（v1.44）。没有缓存 / 内容为空返回 null。
+  ///
+  /// 与 [getCachedAnalysis] 的区别只在于**多带回来三件事**：这条解析是不是
+  /// 注入过知识库资料、按哪一档详细程度生成、资料指纹是什么。界面要靠这些
+  /// 决定是否打「依据知识库」标、是否提示可以重新生成。
+  Future<AiAnalysisCache?> getCachedAnalysisEntry(int questionId) async {
+    final db = await database;
+    final maps = await db
+        .query('ai_cache', where: 'question_id = ?', whereArgs: [questionId]);
+    if (maps.isEmpty) return null;
+    final row = maps.first;
+    final analysis = row['analysis'] as String?;
+    if (analysis == null || analysis.isEmpty) return null;
+    return AiAnalysisCache(
+      questionId: questionId,
+      analysis: analysis,
+      grounded: (row['grounded'] as int? ?? 0) == 1,
+      detail: row['detail'] as String?,
+      groundingSignature: row['grounding_sig'] as String?,
+      createdAt: row['created_at'] as String?,
+    );
+  }
+
+  /// 写入解析缓存（v1.44 起带元数据）。
+  ///
+  /// [analysis] 传空串表示**清除**缓存（「重新生成解析」走这条路径），
+  /// 位置参数顺序保持不变，老调用点无需改动。
+  ///
+  /// 说明：v1.44 之前只有「没有知识库约束」的解析才写缓存，导致导入过知识库
+  /// 的用户二次进入题目必然重新请求。现在带约束的解析同样落盘，元数据用于
+  /// 说明它的生成条件——而不是用它去判断「能不能复用」，复用一律优先。
+  Future<void> cacheAnalysis(
+    int questionId,
+    String analysis, {
+    bool grounded = false,
+    String? detail,
+    String? groundingSignature,
+  }) async {
     final db = await database;
     await db.insert(
       'ai_cache',
@@ -2062,6 +2135,9 @@ class DatabaseService {
         'question_id': questionId,
         'analysis': analysis,
         'created_at': DateTime.now().toIso8601String(),
+        'grounded': grounded ? 1 : 0,
+        'detail': detail,
+        'grounding_sig': groundingSignature,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );

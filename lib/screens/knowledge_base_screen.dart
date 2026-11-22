@@ -9,6 +9,7 @@ import '../models/bank_category.dart';
 import '../models/list_sort.dart';
 import '../services/database_service.dart';
 import '../services/knowledge_base/kb_file_service.dart';
+import '../services/knowledge_base/kb_health.dart';
 import '../services/knowledge_base/kb_service.dart';
 import '../services/list_sort_service.dart';
 import '../services/plugins/world_service.dart';
@@ -132,6 +133,12 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
                     tooltip: '导出分类',
                     icon: const Icon(Icons.folder_zip_outlined),
                     onPressed: _exportCategory,
+                  ),
+                  // v1.44 检索自检：把「向量检索靠不靠得住」摊成可测的数字
+                  IconButton(
+                    tooltip: '检索自检',
+                    icon: const Icon(Icons.health_and_safety_outlined),
+                    onPressed: _openDiagnostics,
                   ),
                   // 排序（v1.35.5）
                   PopupMenuButton<KbSortMode>(
@@ -915,6 +922,238 @@ class _KnowledgeBaseScreenState extends State<KnowledgeBaseScreen> {
           TextButton(
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('删除')),
+        ],
+      ),
+    );
+  }
+
+  /// 检索自检（v1.44）：把「向量检索到底靠不靠得住」变成可测的数字。
+  ///
+  /// 用户问的是「已经加了向量搜索，但它可靠吗」，这个问题不能靠猜测回答：
+  /// 面板里给出文档数/块数/向量覆盖率/平均块长/检索耗时，并且可以对任意一句话
+  /// 做一次试检索，把「靠语义命中」和「靠关键词命中」分开列出来。
+  Future<void> _openDiagnostics() async {
+    final kbId = _selectedKbId;
+    if (kbId == null) {
+      _snack('先在上面选中一个知识库，再点检索自检');
+      return;
+    }
+    var kbName = '知识库';
+    for (final b in _bases) {
+      if (b.id == kbId) {
+        kbName = b.name;
+        break;
+      }
+    }
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => _KbDiagnosticsSheet(kbId: kbId, kbName: kbName),
+    );
+  }
+}
+
+/// 检索自检面板（v1.44）。
+class _KbDiagnosticsSheet extends StatefulWidget {
+  const _KbDiagnosticsSheet({required this.kbId, required this.kbName});
+
+  final int kbId;
+  final String kbName;
+
+  @override
+  State<_KbDiagnosticsSheet> createState() => _KbDiagnosticsSheetState();
+}
+
+class _KbDiagnosticsSheetState extends State<_KbDiagnosticsSheet> {
+  final TextEditingController _probe = TextEditingController();
+  KbHealthReport? _report;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _probe.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load({bool withProbe = false}) async {
+    setState(() => _loading = true);
+    KbHealthReport report;
+    try {
+      report = await KbService.instance.diagnose(
+        widget.kbId,
+        sampleQuery: withProbe ? _probe.text.trim() : null,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('自检失败：$e')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _report = report;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ac = AppThemeColors.of(context);
+    final r = _report;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: NatsumeSpace.md,
+          right: NatsumeSpace.md,
+          top: NatsumeSpace.sm,
+          bottom: MediaQuery.of(context).viewInsets.bottom + NatsumeSpace.md,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('检索自检 · ${widget.kbName}',
+                  style: NatsumeType.h2Style.copyWith(color: ac.textPrimary)),
+              const SizedBox(height: NatsumeSpace.xxs),
+              Text('看的是「检索能不能命中、命中靠不靠谱」，不改动任何数据。',
+                  style: NatsumeType.captionStyle
+                      .copyWith(color: ac.textSecondary)),
+              const SizedBox(height: NatsumeSpace.md),
+              if (_loading)
+                const Center(child: Padding(
+                  padding: EdgeInsets.all(NatsumeSpace.md),
+                  child: CircularProgressIndicator(),
+                ))
+              else if (r != null) ...[
+                _statGrid(r, ac),
+                const SizedBox(height: NatsumeSpace.md),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _probe,
+                        decoration: const InputDecoration(
+                          isDense: true,
+                          hintText: '输入一句话做试检索，例如「休克 血压下降」',
+                          border: OutlineInputBorder(),
+                        ),
+                        onSubmitted: (_) => _load(withProbe: true),
+                      ),
+                    ),
+                    const SizedBox(width: NatsumeSpace.xs),
+                    NatsumeButton(
+                      label: '试检索',
+                      dense: true,
+                      kind: NatsumeButtonKind.secondary,
+                      onPressed: () => _load(withProbe: true),
+                    ),
+                  ],
+                ),
+                if (r.probeQuery != null) ...[
+                  const SizedBox(height: NatsumeSpace.sm),
+                  _probeResult(r, ac),
+                ],
+                const SizedBox(height: NatsumeSpace.md),
+                Text('建议', style: NatsumeType.h3Style.copyWith(color: ac.textPrimary)),
+                const SizedBox(height: NatsumeSpace.xs),
+                for (final line in r.advice)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: NatsumeSpace.xxs),
+                    child: Text('· $line',
+                        style: NatsumeType.captionStyle
+                            .copyWith(color: ac.textSecondary, height: 1.5)),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _statGrid(KbHealthReport r, AppThemeColors ac) {
+    final items = <(String, String)>[
+      ('文档', '${r.documentCount} 篇'),
+      ('文本块', '${r.chunkCount} 块'),
+      ('向量覆盖', '${(r.embeddingCoverage * 100).toStringAsFixed(0)}%'
+          '（${r.embeddedChunkCount}/${r.chunkCount}）'),
+      ('平均块长', '${r.averageChunkChars.toStringAsFixed(0)} 字'),
+      ('检索方式', r.vectorEnabled && r.hasAnyVector ? '向量 + 关键词混合' : '仅关键词'),
+      if (r.probeMilliseconds != null) ('试检索耗时', '${r.probeMilliseconds} ms'),
+    ];
+    return NatsumeSurface(
+      tone: NatsumeTone.alt,
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      child: Column(
+        children: [
+          for (final (label, value) in items)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(label,
+                        style: NatsumeType.captionStyle
+                            .copyWith(color: ac.textTertiary)),
+                  ),
+                  Text(value,
+                      style: NatsumeType.captionStyle.copyWith(
+                          color: ac.textPrimary,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _probeResult(KbHealthReport r, AppThemeColors ac) {
+    if (r.hybridHits.isEmpty) {
+      return Text('没有命中任何资料。',
+          style: NatsumeType.captionStyle.copyWith(color: ac.danger));
+    }
+    return NatsumeSurface(
+      tone: NatsumeTone.alt,
+      padding: const EdgeInsets.all(NatsumeSpace.sm),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('命中 ${r.hybridHits.length} 条'
+              '（语义 ${r.hybridVectorMatched} / 关键词 ${r.hybridKeywordMatched}）',
+              style: NatsumeType.captionStyle.copyWith(color: ac.textSecondary)),
+          const SizedBox(height: NatsumeSpace.xxs),
+          for (final h in r.hybridHits.take(3))
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${h.score.toStringAsFixed(2)} · '
+                    '${h.matchedByVector && h.matchedByKeyword ? '语义+关键词' : h.matchedByVector ? '语义' : '关键词'}',
+                    style: NatsumeType.microStyle.copyWith(color: ac.accent),
+                  ),
+                  Text(
+                    h.chunk.text.length > 80
+                        ? '${h.chunk.text.substring(0, 80)}…'
+                        : h.chunk.text,
+                    style: NatsumeType.captionStyle
+                        .copyWith(color: ac.textSecondary, height: 1.4),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

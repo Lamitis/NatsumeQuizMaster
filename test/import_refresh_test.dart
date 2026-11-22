@@ -97,6 +97,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('病理学'), findsOneWidget, reason: '分类树的根节点也应随刷新出现');
+    // v1.44：分类树默认收起，导入的题库挂在分类下，先展开分类再断言。
+    // 这里验证的仍然是「刷新后立刻可见，不用重启」——只是多了一步展开。
+    await tester.tap(find.text('病理学'));
+    await tester.pumpAndSettle();
     expect(find.text('导入后的新题库'), findsOneWidget,
         reason: '刷新后必须立刻显示新导入的题库，不能要求用户重启');
   });

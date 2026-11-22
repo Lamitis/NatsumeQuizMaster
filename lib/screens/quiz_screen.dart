@@ -1739,6 +1739,20 @@ class _QuizScreenState extends State<QuizScreen> {
     );
   }
 
+  /// 复制解析全文（v1.44）。
+  ///
+  /// 复制的是**原始文本**（含 `**加粗**` 等标记），而不是渲染后的可见文字：
+  /// 粘到笔记 / Markdown 编辑器里结构还在；粘到纯文本场景里最多多出几个星号，
+  /// 比「把 LaTeX 公式拍平成乱码」划算得多。
+  Future<void> _copyAnalysis(String text) async {
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('解析已复制'),
+      duration: Duration(seconds: 2),
+    ));
+  }
+
   Widget _buildAnalysisArea(
       AppState appState, Question question, AppThemeColors ac) {
     final lastRecord = appState.lastAnswerRecord;
@@ -1797,15 +1811,33 @@ class _QuizScreenState extends State<QuizScreen> {
                       height: 16,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: ac.accent)),
+                // v1.44：解析是一段会被用户拿去抄进笔记/发给同学的文字，
+                // 必须能一键复制（长按选中也支持，见下方 SelectionArea）。
+                if (appState.currentAnalysis != null &&
+                    appState.currentAnalysis!.isNotEmpty)
+                  IconButton(
+                    tooltip: '复制解析',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints:
+                        const BoxConstraints(minWidth: 32, minHeight: 32),
+                    icon: Icon(Icons.copy_rounded, color: ac.textSecondary),
+                    onPressed: () => _copyAnalysis(appState.currentAnalysis!),
+                  ),
               ],
             ),
             const SizedBox(height: 10),
             if (appState.currentAnalysis != null)
-              // v12 配图：解析里的图随文本段内联（文本仍走原 markdown 渲染）
-              NatsumeRichQuestionText(
-                text: appState.currentAnalysis!,
-                images: appState.currentQuestion?.images ?? const [],
-                textBuilder: (context, t) => AiResponseWidget(text: t),
+              // v12 配图：解析里的图随文本段内联（文本仍走原 markdown 渲染）。
+              // v1.44：整块套一层 SelectionArea，长按可选中/拖选后复制；
+              // 图片段仍是可点开的 GestureDetector，不会被选中层吃掉点击。
+              SelectionArea(
+                child: NatsumeRichQuestionText(
+                  text: appState.currentAnalysis!,
+                  images: appState.currentQuestion?.images ?? const [],
+                  textBuilder: (context, t) => AiResponseWidget(text: t),
+                ),
               )
             else if (appState.analysisLoading)
               Text('正在翻阅脑海中的知识库...',

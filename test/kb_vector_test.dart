@@ -79,7 +79,9 @@ void main() {
   });
 
   test('空索引 / 空查询返回空列表', () {
-    const index = KbVectorIndex(chunks: [], vectors: []);
+    // v1.44：KbVectorIndex 的公开构造已改为工厂（内部把 double 向量转成
+    // float32 存，省一半内存），因此空索引用常量 [KbVectorIndex.empty]。
+    const index = KbVectorIndex.empty;
     expect(index.search(<double>[1, 0]), isEmpty);
     final filled = KbVectorIndex(
       chunks: [chunk(1, 'A')],
